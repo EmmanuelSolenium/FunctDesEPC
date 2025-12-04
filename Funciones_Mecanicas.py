@@ -60,3 +60,72 @@ def suma_vectores(magnitudes, angulos_relativos_deg):
     return magnitud_total
 
 """ print(suma_vectores([1,1,1],[0,90,-90])) """
+
+def vano_regulacion(vanos_m, desniveles_m, usar_k_truxa=True):
+    """
+    Calcula el vano ideal de regulación de un cantón según el método de Truxá.
+
+    Parámetros
+    ----------
+    vanos_m : array-like
+        Longitud horizontal de cada vano (a_i), en metros.
+    desniveles_m : array-like o None
+        Desnivel de cada vano (b_i), en metros.
+        Si es None, se supone bi = 0 para todos los vanos (cantón nivelado).
+    usar_k_truxa : bool, opcional (default = True)
+        Si True, aplica el factor de Truxá k.
+        Si False, asume k = 1 (equivalente a ignorar el desnivel en el vano ideal).
+
+    Returns
+    -------
+    ar : float
+        Longitud del vano ideal de regulación (m).
+    k : float
+        Factor de Truxá utilizado (k = 1 para vanos nivelados).
+    """
+
+    # Convertir a arrays
+    a = np.asarray(vanos_m, dtype=float)
+
+    if a.ndim != 1:
+        raise ValueError("vanos_m debe ser un vector 1D (lista o array de vanos).")
+
+    if desniveles_m is None:
+        b = np.zeros_like(a)
+    else:
+        b = np.asarray(desniveles_m, dtype=float)
+        if b.shape != a.shape:
+            raise ValueError("vanos_m y desniveles_m deben tener la misma longitud.")
+
+    # Longitud real de cada vano (á_i)
+    a_real = np.sqrt(a**2 + b**2)
+
+    # Vano equivalente base (caso nivelado)
+    suma_a3 = np.sum(a**3)
+    suma_a = np.sum(a)
+
+    if suma_a <= 0:
+        raise ValueError("La suma de los vanos debe ser mayor que cero.")
+
+    ar_base = np.sqrt(suma_a3 / suma_a)
+
+    if usar_k_truxa:
+        # Factor de Truxá k (forma reconstruida a partir de formularios típicos)
+        # Propiedades:
+        #  - adimensional
+        #  - si a_real == a  => k = 1
+        num = np.sum(a_real**3) * np.sum(a**2)
+        den = np.sum(a**3) * np.sum(a * a_real)
+
+        if den <= 0:
+            raise ValueError("Datos de vanos/desniveles inválidos (denominador de k <= 0).")
+
+        k = np.sqrt(num / den)
+    else:
+        k = 1.0
+
+    # Vano ideal de regulación
+    ar = k * ar_base
+    return ar
+
+print(vano_regulacion([21,22,24,45,23],[1,0,2,3,0.5]))
