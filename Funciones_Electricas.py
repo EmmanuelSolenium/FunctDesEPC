@@ -228,7 +228,7 @@ def Bandeja_Calc(
     # Salida simple (por defecto)
     # -------------------------------------
     if not detallado:
-        return area_total_mm2, num_capas, peso_total_kg_m, cumple_carga
+        return area_total_mm2
 
     # -------------------------------------
     # Salida detallada (diccionario)
@@ -254,3 +254,7 @@ e = Bandeja_Calc(
     detallado=True
 )
 print(e)
+
+
+
+
