@@ -375,5 +375,18 @@ def df_tabla_afinia_vertical(tabla_dict):
 
 TABLA_AFINIA_CAP_VERTICAL_DF = df_tabla_afinia_vertical(TABLA_AFINIA_CAP_VERTICAL_RETENIDAS)
 
-print(TABLA_AFINIA_CAP_VERTICAL_DF)
+""" print(TABLA_AFINIA_CAP_VERTICAL_DF) """
 
+df_cables_acero_galvanizado = pd.DataFrame({
+    "Denominación": ["3/8''", "1/2''"],
+    "Sección Transversal Total (mm²)": [51.1, 96.5],
+    "Nº Alambres": [7, 7],
+    "Diámetro nominal del alambre (mm)": [3.05, 4.19],
+    "Diámetro nominal del cable (mm)": [9.52, 12.7],
+    "Peso (daN/m)": [0.399, 0.755],
+    "Carga de Rotura (daN)": [6840, 11960],
+    "Módulo de Elasticidad (daN/mm²)": [18130, 18130],
+    "Coeficiente de dilatación lineal (°C⁻¹)": [11.5e-6, 11.5e-6]
+})
+
+print(df_cables_acero_galvanizado)
