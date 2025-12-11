@@ -329,4 +329,4 @@ def extraer_datos_poste(cadena):
 
     return altura, carga_daN
 
-print(extraer_datos_poste("PH 12/1050 kg-f"))
+""" print(extraer_datos_poste("PH 12/1050 kg-f")) """
