@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
-
+import re 
+import math 
 def kgf_a_daN(F_kgf, g=9.8066500):
     """
     Convierte kilogramo-fuerza (kgf) a decanewton (daN).
@@ -378,3 +379,32 @@ def construir_c2t1(tabla1, tabla2, c1t1, c2t1, c1t2, c2t2):
     tabla1[c2t1] = resultados
     return tabla1
 
+
+def convertir_texto_kgf_a_daN(texto: str) -> str:
+    """
+    Convierte expresiones del tipo 'PH ##/#### kg-f' a 'PH ##/XXX daN'.
+
+    - Extrae el valor numérico después del slash (/)
+    - Convierte de kgf a daN
+    - Redondea hacia arriba a la unidad más cercana
+    - Reemplaza 'kg-f' por 'daN'
+    """
+
+    patron = r"(.*?/)(\d+)(\s*kg-f)"
+
+    match = re.search(patron, texto)
+    if not match:
+        raise ValueError(f"Formato no reconocido: {texto}")
+
+    prefijo = match.group(1)        # 'PH 12/'
+    valor_kgf = float(match.group(2))
+    
+    valor_daN = kgf_a_daN(valor_kgf)
+    valor_daN_red = round(valor_daN)
+
+    return f"{prefijo}{valor_daN_red} daN"
+
+""" texto = "PH 12/1350 kg-f"
+resultado = convertir_texto_kgf_a_daN(texto)
+
+print(resultado) """
