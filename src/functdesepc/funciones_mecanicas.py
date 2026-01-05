@@ -391,9 +391,7 @@ def construir_c2t1_vano(tabla1, tabla2, c1t1, c2t1, c1t2, c2t2):
     Reglas:
     - Se ignoran NaN, '-' y 0.
     - Si no hay valores válidos, se asigna NaN.
-    - Si hay uno o más valores válidos distintos, se asigna el PRIMERO
-      según el orden original de tabla2.
-    - NO se lanza error por conflicto.
+    - Si hay uno o más valores válidos distintos, se asigna el VALOR MÁXIMO.
     """
 
     resultados = []
@@ -411,13 +409,11 @@ def construir_c2t1_vano(tabla1, tabla2, c1t1, c2t1, c1t2, c2t2):
         if valores_validos.empty:
             resultados.append(pd.NA)
         else:
-            # toma el primer valor válido según el orden original
-            resultados.append(valores_validos.iloc[0])
+            # toma el valor máximo válido
+            resultados.append(valores_validos.max())
 
     tabla1[c2t1] = resultados
     return tabla1
-
-
 
 def convertir_texto_kgf_a_daN(texto: str) -> str:
     """
