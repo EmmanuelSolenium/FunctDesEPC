@@ -379,6 +379,45 @@ def construir_c2t1(tabla1, tabla2, c1t1, c2t1, c1t2, c2t2):
     tabla1[c2t1] = resultados
     return tabla1
 
+def construir_c2t1_vano(tabla1, tabla2, c1t1, c2t1, c1t2, c2t2):
+    """
+    Construye o actualiza una columna existente en tabla1 a partir de la relación
+    entre tabla1 y tabla2.
+
+    Para cada valor de la columna c1t1 en tabla1, se buscan las filas
+    correspondientes en tabla2 donde c1t2 coincide. A partir de la columna c2t2
+    se determina un valor válido, ignorando NaN, '-' y ceros.
+
+    Reglas:
+    - Se ignoran NaN, '-' y 0.
+    - Si no hay valores válidos, se asigna NaN.
+    - Si hay uno o más valores válidos distintos, se asigna el PRIMERO
+      según el orden original de tabla2.
+    - NO se lanza error por conflicto.
+    """
+
+    resultados = []
+
+    for valor in tabla1[c1t1]:
+        valores_c2t2 = tabla2.loc[tabla2[c1t2] == valor, c2t2]
+
+        valores_validos = (
+            valores_c2t2
+            .replace(0, pd.NA)
+            .replace("-", pd.NA)
+            .dropna()
+        )
+
+        if valores_validos.empty:
+            resultados.append(pd.NA)
+        else:
+            # toma el primer valor válido según el orden original
+            resultados.append(valores_validos.iloc[0])
+
+    tabla1[c2t1] = resultados
+    return tabla1
+
+
 
 def convertir_texto_kgf_a_daN(texto: str) -> str:
     """
