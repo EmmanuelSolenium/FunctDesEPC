@@ -38,8 +38,8 @@ def Reg_V(P_kw, V, fases, R_ohm_km, X_ohm_km, longitud_m, fp=1.0, detallado=Fals
 
 
 # ----------------- PRUEBA -----------------
-A = Reg_V(300, 800, 3, 0.141, 0.128, 150)
-print(A)
+""" A = Reg_V(300, 800, 3, 0.141, 0.128, 150)
+print(A) """
 
 
 
@@ -96,9 +96,9 @@ def Llenado_Tub(diametro_interno_pulg, diametros_mm, cantidades, detallado=False
 
 
 # ----------------- PRUEBA -----------------
-b = Llenado_Tub(4, [22.2504, 9.97], [3, 1])
+""" b = Llenado_Tub(4, [22.2504, 9.97], [3, 1])
 print(b)
-
+ """
 
 
 def Reg_Vdc(V_mppt, I_mppt, num_paneles, R_ohm_km, longitud_m, detallado=False):
@@ -124,8 +124,8 @@ def Reg_Vdc(V_mppt, I_mppt, num_paneles, R_ohm_km, longitud_m, detallado=False):
 
 
 # ----------------- PRUEBA -----------------
-c = Reg_Vdc(43.22, 13.42, 28, 5.09, 150)
-print(c)
+""" c = Reg_Vdc(43.22, 13.42, 28, 5.09, 150)
+print(c) """
 
 
 
@@ -166,9 +166,9 @@ def Perdidas_AC(P_kw, V, fases, R_ohm_km, longitud_m, fp=1.0, detallado=False):
     }
 
 
-# ----------------- PRUEBA -----------------
+""" # ----------------- PRUEBA -----------------
 d = Perdidas_AC(300, 800, 3, 0.141, 150)
-print(d)
+print(d) """
 
 
 def Bandeja_Calc(
@@ -245,7 +245,7 @@ def Bandeja_Calc(
 
 # ----------------- PRUEBA -----------------
 
-e = Bandeja_Calc(
+""" e = Bandeja_Calc(
     ancho_util_mm=300,
     diametros_mm=[26, 9.97],
     cantidades=[9, 3],
@@ -253,7 +253,7 @@ e = Bandeja_Calc(
     capacidad_carga_kg_m=74,
     detallado=True
 )
-print(e)
+print(e) """
 
 
 

@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
-
+import re 
+import math 
 def kgf_a_daN(F_kgf, g=9.8066500):
     """
     Convierte kilogramo-fuerza (kgf) a decanewton (daN).
@@ -322,11 +323,125 @@ def extraer_datos_poste(cadena):
         raise ValueError(f"Formato no válido: {cadena}")
 
     altura = int(match.group(1))
+    altura_libre = altura-2
+    altura_esfuerzo = altura_libre-0.2
     carga_kgf = int(match.group(2))
 
     # Convertir a daN usando la función proporcionada
-    carga_daN = kgf_a_daN(carga_kgf)
+    carga_daN = round(kgf_a_daN(carga_kgf))
 
-    return altura, carga_daN
+    return altura, carga_daN, altura_libre, altura_esfuerzo
 
 print(extraer_datos_poste("PH 12/1050 kg-f"))
+
+def construir_c2t1(tabla1, tabla2, c1t1, c2t1, c1t2, c2t2):
+    """
+    Construye o actualiza una columna existente en tabla1 a partir de la relación
+    entre tabla1 y tabla2.
+
+    Para cada valor de la columna c1t1 en tabla1, se buscan las filas
+    correspondientes en tabla2 donde c1t2 coincide. A partir de la columna c2t2
+    se determina un valor único válido, ignorando NaN y ceros.
+
+    Reglas:
+    - Si todos los valores válidos de c2t2 son iguales, se asigna ese valor.
+    - Si hay valores NaN, - o 0 mezclados con un único valor válido, se asigna
+      dicho valor.
+    - Si existen dos o más valores válidos distintos, se lanza un error.
+
+    La función modifica directamente tabla1 sobrescribiendo la columna c2t1
+    y retorna el DataFrame resultante.
+    """
+
+    resultados = []
+
+    for valor in tabla1[c1t1]:
+        valores_c2t2 = tabla2.loc[tabla2[c1t2] == valor, c2t2]
+
+        valores_validos = (
+            valores_c2t2
+            .replace(0, pd.NA)
+            .replace("-", pd.NA)
+            .dropna()
+            .unique()
+        )
+
+        if len(valores_validos) == 0:
+            resultados.append(pd.NA)
+
+        elif len(valores_validos) == 1:
+            resultados.append(valores_validos[0])
+
+        else:
+            raise ValueError(
+                f"Conflicto para '{valor}': "
+                f"valores distintos en '{c2t2}': {list(valores_validos)}"
+            )
+
+    tabla1[c2t1] = resultados
+    return tabla1
+
+def construir_c2t1_vano(tabla1, tabla2, c1t1, c2t1, c1t2, c2t2):
+    """
+    Construye o actualiza una columna existente en tabla1 a partir de la relación
+    entre tabla1 y tabla2.
+
+    Para cada valor de la columna c1t1 en tabla1, se buscan las filas
+    correspondientes en tabla2 donde c1t2 coincide. A partir de la columna c2t2
+    se determina un valor válido, ignorando NaN, '-' y ceros.
+
+    Reglas:
+    - Se ignoran NaN, '-' y 0.
+    - Si no hay valores válidos, se asigna NaN.
+    - Si hay uno o más valores válidos distintos, se asigna el VALOR MÁXIMO.
+    """
+
+    resultados = []
+
+    for valor in tabla1[c1t1]:
+        valores_c2t2 = tabla2.loc[tabla2[c1t2] == valor, c2t2]
+
+        valores_validos = (
+            valores_c2t2
+            .replace(0, pd.NA)
+            .replace("-", pd.NA)
+            .dropna()
+        )
+
+        if valores_validos.empty:
+            resultados.append(pd.NA)
+        else:
+            # toma el valor máximo válido
+            resultados.append(valores_validos.max())
+
+    tabla1[c2t1] = resultados
+    return tabla1
+
+def convertir_texto_kgf_a_daN(texto: str) -> str:
+    """
+    Convierte expresiones del tipo 'PH ##/#### kg-f' a 'PH ##/XXX daN'.
+
+    - Extrae el valor numérico después del slash (/)
+    - Convierte de kgf a daN
+    - Redondea hacia arriba a la unidad más cercana
+    - Reemplaza 'kg-f' por 'daN'
+    """
+
+    patron = r"(.*?/)(\d+)(\s*kg-f)"
+
+    match = re.search(patron, texto)
+    if not match:
+        raise ValueError(f"Formato no reconocido: {texto}")
+
+    prefijo = match.group(1)        # 'PH 12/'
+    valor_kgf = float(match.group(2))
+    
+    valor_daN = kgf_a_daN(valor_kgf)
+    valor_daN_red = round(valor_daN)
+
+    return f"{prefijo}{valor_daN_red} daN"
+
+""" texto = "PH 12/1350 kg-f"
+resultado = convertir_texto_kgf_a_daN(texto)
+
+print(resultado) """
