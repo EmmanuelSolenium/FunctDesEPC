@@ -298,19 +298,18 @@ import re
 
 def extraer_datos_poste(cadena):
     """
-    Extrae la altura del poste y la carga de rotura (convertida a daN)
+    Extrae la altura del poste y la carga de rotura
     desde un string con formato: "PH ##/#### kg-f".
     
     Parámetros
     ----------
     cadena : str
         Texto con el formato del poste: "PH ##/#### kg-f"
-    kgf_to_daN : function
-        Función previamente creada que convierte kgf a daN.
+
     
     Retorna
     -------
-    (altura, carga_daN)
+    (altura, carga, altura libre, altura del esfuerzo)
         altura : int     → en metros
         carga_daN : float → capacidad en daN
     """
@@ -325,12 +324,11 @@ def extraer_datos_poste(cadena):
     altura = int(match.group(1))
     altura_libre = altura-2
     altura_esfuerzo = altura_libre-0.2
-    carga_kgf = int(match.group(2))
+    carga = int(match.group(2))
 
-    # Convertir a daN usando la función proporcionada
-    carga_daN = round(kgf_a_daN(carga_kgf))
+    
 
-    return altura, carga_daN, altura_libre, altura_esfuerzo
+    return altura, carga, altura_libre, altura_esfuerzo
 
 print(extraer_datos_poste("PH 12/1050 kg-f"))
 
