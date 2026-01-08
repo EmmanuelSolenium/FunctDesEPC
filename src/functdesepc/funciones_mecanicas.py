@@ -332,34 +332,52 @@ def extraer_datos_poste(cadena):
 
 print(extraer_datos_poste("PH 12/1050 kg-f"))
 
-def construir_c2t1(tabla1, tabla2, c1t1, c2t1, c1t2, c2t2):
+
+def construir_c2t1(
+    tabla1,
+    c1t1,
+    c2t1,
+    c1t2,
+    c2t2
+):
     """
-    Construye o actualiza una columna existente en tabla1 a partir de la relación
-    entre tabla1 y tabla2.
+    Construye o actualiza la columna `c2t1` en tabla1 a partir de listas externas.
 
-    Para cada valor de la columna c1t1 en tabla1, se buscan las filas
-    correspondientes en tabla2 donde c1t2 coincide. A partir de la columna c2t2
-    se determina un valor único válido, ignorando NaN y ceros.
+    Parámetros
+    ----------
+    tabla1 : pd.DataFrame
+        DataFrame que será modificado.
+    c1t1 : list
+        Lista con los valores clave de tabla1 (una por fila).
+    c2t1 : str
+        Nombre de la columna existente en tabla1 que será sobrescrita.
+    c1t2 : list
+        Lista de valores clave de referencia (puede tener repetidos).
+    c2t2 : list
+        Lista de valores asociados a c1t2.
 
-    Reglas:
-    - Si todos los valores válidos de c2t2 son iguales, se asigna ese valor.
-    - Si hay valores NaN, - o 0 mezclados con un único valor válido, se asigna
-      dicho valor.
-    - Si existen dos o más valores válidos distintos, se lanza un error.
+    Reglas
+    ------
+    - Para cada valor en c1t1 se buscan coincidencias en c1t2.
+    - Se toman los valores correspondientes de c2t2.
+    - Se ignoran NaN, "-", y 0.
+    - Si queda un único valor válido, se asigna.
+    - Si no hay valores válidos, se asigna NaN.
+    - Si hay más de un valor válido distinto, se lanza error.
 
-    La función modifica directamente tabla1 sobrescribiendo la columna c2t1
-    y retorna el DataFrame resultante.
+    La función modifica tabla1 in-place y no retorna nada.
     """
 
     resultados = []
 
-    for valor in tabla1[c1t1]:
-        valores_c2t2 = tabla2.loc[tabla2[c1t2] == valor, c2t2]
+    for valor in c1t1:
+        valores_asociados = [
+            v2 for v1, v2 in zip(c1t2, c2t2) if v1 == valor
+        ]
 
         valores_validos = (
-            valores_c2t2
-            .replace(0, pd.NA)
-            .replace("-", pd.NA)
+            pd.Series(valores_asociados)
+            .replace([0, "-", ""], pd.NA)
             .dropna()
             .unique()
         )
@@ -372,48 +390,65 @@ def construir_c2t1(tabla1, tabla2, c1t1, c2t1, c1t2, c2t2):
 
         else:
             raise ValueError(
-                f"Conflicto para '{valor}': "
-                f"valores distintos en '{c2t2}': {list(valores_validos)}"
+                f"Conflicto para '{valor}': valores distintos {list(valores_validos)}"
             )
 
     tabla1[c2t1] = resultados
-    return tabla1
 
-def construir_c2t1_vano(tabla1, tabla2, c1t1, c2t1, c1t2, c2t2):
+def construir_c2t1_vano(
+    tabla1,
+    c1t1,
+    c2t1,
+    c1t2,
+    c2t2
+):
     """
-    Construye o actualiza una columna existente en tabla1 a partir de la relación
-    entre tabla1 y tabla2.
+    Construye o actualiza la columna `c2t1` en tabla1 a partir de listas externas,
+    tomando el valor máximo válido cuando existan múltiples coincidencias.
 
-    Para cada valor de la columna c1t1 en tabla1, se buscan las filas
-    correspondientes en tabla2 donde c1t2 coincide. A partir de la columna c2t2
-    se determina un valor válido, ignorando NaN, '-' y ceros.
+    Parámetros
+    ----------
+    tabla1 : pd.DataFrame
+        DataFrame que será modificado.
+    c1t1 : list
+        Lista de valores clave de tabla1 (una por fila).
+    c2t1 : str
+        Nombre de la columna existente en tabla1 que será sobrescrita.
+    c1t2 : list
+        Lista de valores clave de referencia (puede contener repetidos).
+    c2t2 : list
+        Lista de valores asociados a c1t2.
 
-    Reglas:
-    - Se ignoran NaN, '-' y 0.
-    - Si no hay valores válidos, se asigna NaN.
-    - Si hay uno o más valores válidos distintos, se asigna el VALOR MÁXIMO.
+    Reglas
+    ------
+    - Para cada valor de c1t1 se buscan coincidencias en c1t2.
+    - Se toman los valores correspondientes de c2t2.
+    - Se ignoran NaN, '-', cadenas vacías y 0.
+    - Si no hay valores válidos → NaN.
+    - Si hay uno o más valores válidos → se asigna el VALOR MÁXIMO.
+
+    La función modifica tabla1 in-place y no retorna nada.
     """
 
     resultados = []
 
-    for valor in tabla1[c1t1]:
-        valores_c2t2 = tabla2.loc[tabla2[c1t2] == valor, c2t2]
+    for valor in c1t1:
+        valores_asociados = [
+            v2 for v1, v2 in zip(c1t2, c2t2) if v1 == valor
+        ]
 
         valores_validos = (
-            valores_c2t2
-            .replace(0, pd.NA)
-            .replace("-", pd.NA)
+            pd.Series(valores_asociados)
+            .replace([0, "-", ""], pd.NA)
             .dropna()
         )
 
         if valores_validos.empty:
             resultados.append(pd.NA)
         else:
-            # toma el valor máximo válido
             resultados.append(valores_validos.max())
 
     tabla1[c2t1] = resultados
-    return tabla1
 
 def convertir_texto_kgf_a_daN(texto: str) -> str:
     """
