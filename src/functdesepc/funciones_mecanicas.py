@@ -330,53 +330,43 @@ def extraer_datos_poste(cadena):
 
     return altura, carga, altura_libre, altura_esfuerzo
 
-print(extraer_datos_poste("PH 12/1050 kg-f"))
+""" print(extraer_datos_poste("PH 12/1050 kg-f")) """
 
 
 def construir_c2t1(
-    tabla1,
-    c1t1,
-    c2t1,
-    c1t2,
-    c2t2
+    tabla1: pd.DataFrame,
+    c1t1: pd.Series,
+    c2t1: str,
+    c1t2: pd.Series,
+    c2t2: pd.Series
 ):
     """
-    Construye o actualiza la columna `c2t1` en tabla1 a partir de listas externas.
+    Construye o actualiza la columna `c2t1` en tabla1 a partir de Series externas.
 
-    Parámetros
-    ----------
-    tabla1 : pd.DataFrame
-        DataFrame que será modificado.
-    c1t1 : list
-        Lista con los valores clave de tabla1 (una por fila).
-    c2t1 : str
-        Nombre de la columna existente en tabla1 que será sobrescrita.
-    c1t2 : list
-        Lista de valores clave de referencia (puede tener repetidos).
-    c2t2 : list
-        Lista de valores asociados a c1t2.
-
-    Reglas
-    ------
+    Reglas:
     - Para cada valor en c1t1 se buscan coincidencias en c1t2.
     - Se toman los valores correspondientes de c2t2.
-    - Se ignoran NaN, "-", y 0.
+    - Se ignoran NaN, "-", cadenas vacías y 0.
     - Si queda un único valor válido, se asigna.
     - Si no hay valores válidos, se asigna NaN.
     - Si hay más de un valor válido distinto, se lanza error.
 
-    La función modifica tabla1 in-place y no retorna nada.
+    La función modifica tabla1 in-place y retorna el DataFrame.
     """
+
+    if len(c1t2) != len(c2t2):
+        raise ValueError("c1t2 y c2t2 deben tener la misma longitud")
+
+    ref = pd.DataFrame({
+        "key": c1t2,
+        "value": c2t2
+    })
 
     resultados = []
 
     for valor in c1t1:
-        valores_asociados = [
-            v2 for v1, v2 in zip(c1t2, c2t2) if v1 == valor
-        ]
-
         valores_validos = (
-            pd.Series(valores_asociados)
+            ref.loc[ref["key"] == valor, "value"]
             .replace([0, "-", ""], pd.NA)
             .dropna()
             .unique()
@@ -384,71 +374,58 @@ def construir_c2t1(
 
         if len(valores_validos) == 0:
             resultados.append(pd.NA)
-
         elif len(valores_validos) == 1:
             resultados.append(valores_validos[0])
-
         else:
             raise ValueError(
                 f"Conflicto para '{valor}': valores distintos {list(valores_validos)}"
             )
 
     tabla1[c2t1] = resultados
+    return tabla1
 
 def construir_c2t1_vano(
-    tabla1,
-    c1t1,
-    c2t1,
-    c1t2,
-    c2t2
+    tabla1: pd.DataFrame,
+    c1t1: pd.Series,
+    c2t1: str,
+    c1t2: pd.Series,
+    c2t2: pd.Series
 ):
     """
-    Construye o actualiza la columna `c2t1` en tabla1 a partir de listas externas,
-    tomando el valor máximo válido cuando existan múltiples coincidencias.
+    Construye o actualiza la columna `c2t1` en tabla1 tomando el valor máximo válido.
 
-    Parámetros
-    ----------
-    tabla1 : pd.DataFrame
-        DataFrame que será modificado.
-    c1t1 : list
-        Lista de valores clave de tabla1 (una por fila).
-    c2t1 : str
-        Nombre de la columna existente en tabla1 que será sobrescrita.
-    c1t2 : list
-        Lista de valores clave de referencia (puede contener repetidos).
-    c2t2 : list
-        Lista de valores asociados a c1t2.
-
-    Reglas
-    ------
-    - Para cada valor de c1t1 se buscan coincidencias en c1t2.
-    - Se toman los valores correspondientes de c2t2.
+    Reglas:
     - Se ignoran NaN, '-', cadenas vacías y 0.
     - Si no hay valores válidos → NaN.
     - Si hay uno o más valores válidos → se asigna el VALOR MÁXIMO.
 
-    La función modifica tabla1 in-place y no retorna nada.
+    La función modifica tabla1 in-place y retorna el DataFrame.
     """
+
+    if len(c1t2) != len(c2t2):
+        raise ValueError("c1t2 y c2t2 deben tener la misma longitud")
+
+    ref = pd.DataFrame({
+        "key": c1t2,
+        "value": c2t2
+    })
 
     resultados = []
 
     for valor in c1t1:
-        valores_asociados = [
-            v2 for v1, v2 in zip(c1t2, c2t2) if v1 == valor
-        ]
-
         valores_validos = (
-            pd.Series(valores_asociados)
+            ref.loc[ref["key"] == valor, "value"]
             .replace([0, "-", ""], pd.NA)
             .dropna()
         )
 
-        if valores_validos.empty:
-            resultados.append(pd.NA)
-        else:
-            resultados.append(valores_validos.max())
+        resultados.append(
+            pd.NA if valores_validos.empty else valores_validos.max()
+        )
 
     tabla1[c2t1] = resultados
+    return tabla1
+
 
 def convertir_texto_kgf_a_daN(texto: str) -> str:
     """
