@@ -560,6 +560,12 @@ def calcular_ftvc(
     El resultado queda alineado con el orden de `o_postes` y se escribe
     como una nueva columna en `tabla`.
     """
+    l_postes = pd.Series(l_postes)
+    angulo_b = pd.Series(angulo_b, index=l_postes.index)
+    f_viento_at = pd.Series(f_viento_at, index=l_postes.index)
+    f_viento_ad = pd.Series(f_viento_ad, index=l_postes.index)
+    tiro_at = pd.Series(tiro_at, index=l_postes.index)
+    tiro_ad = pd.Series(tiro_ad, index=l_postes.index)
 
     resultados = []
 
