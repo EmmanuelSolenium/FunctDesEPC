@@ -455,3 +455,27 @@ def convertir_texto_kgf_a_daN(texto: str) -> str:
 resultado = convertir_texto_kgf_a_daN(texto)
 
 print(resultado) """
+
+def limpiar_saltos_linea_columnas(df):
+    """
+    Reemplaza saltos de línea '\\n' por espacios simples en los nombres
+    de columnas, incluyendo MultiIndex.
+    """
+
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = pd.MultiIndex.from_tuples(
+            tuple(
+                str(level).replace("\n", " ").strip()
+                for level in col
+            )
+            for col in df.columns
+        )
+    else:
+        df.columns = (
+            df.columns
+            .astype(str)
+            .str.replace("\n", " ", regex=False)
+            .str.strip()
+        )
+
+    return df
