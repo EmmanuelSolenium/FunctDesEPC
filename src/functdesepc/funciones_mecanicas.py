@@ -540,73 +540,92 @@ def extraer_series_por_indice(
 
     return series_validas
 
-def esfuerzo_viento_conductores(
-    mec: pd.DataFrame,
-    postes: pd.Series,
-    angulo_b: pd.Series,
-    fuerzas_viento: list[pd.Series],
-    tiros: list[pd.Series],
-    nombre_columna_salida: str = "Ev_conductores"
-) -> pd.DataFrame:
+import numpy as np
+import pandas as pd
+
+def calcular_ftvc(
+    tabla,
+    o_postes,
+    l_postes,
+    angulo_b,
+    f_viento_at,
+    f_viento_ad,
+    tiro_at,
+    tiro_ad,
+    nombre_columna="FTVC"
+):
     """
-    Calcula el esfuerzo por viento sobre conductores en postes.
+    Calcula el esfuerzo por viento sobre conductores (FTVC) por poste.
 
-    Caso implementado:
-    - Poste sin derivaciones (aparece una sola vez).
-
-    Parámetros
-    ----------
-    mec : pd.DataFrame
-        DataFrame que será modificado.
-    postes : pd.Series
-        Serie con el nombre del poste por fila (puede tener repeticiones).
-    angulo_b : pd.Series
-        Serie con el ángulo b en grados.
-    fuerzas_viento : list[pd.Series]
-        Series con fuerzas de viento sobre conductores (kg-f).
-    tiros : list[pd.Series]
-        Series con tiros sobre conductores (kg-f).
-    nombre_columna_salida : str
-        Nombre de la columna a crear en mec.
-
-    Retorna
-    -------
-    pd.DataFrame
-        DataFrame mec con la columna agregada.
+    El resultado queda alineado con el orden de `o_postes` y se escribe
+    como una nueva columna en `tabla`.
     """
-
-    # Conteo de repeticiones por poste
-    repeticiones = postes.value_counts()
 
     resultados = []
 
-    for i in range(len(mec)):
-        poste = postes.iloc[i]
-        n_rep = repeticiones[poste]
+    for poste in o_postes:
+        mask = l_postes == poste
 
-        # ángulo en radianes
-        b_rad = np.deg2rad(angulo_b.iloc[i])
-        sen_b_2 = np.sin(b_rad / 2)
-
-        # Caso 1: sin derivaciones
-        if n_rep == 1:
-            fv = sum(
-                s.iloc[i]
-                for s in fuerzas_viento
-                if pd.notna(s.iloc[i])
-            )
-
-            ft = sum(
-                s.iloc[i] * sen_b_2
-                for s in tiros
-                if pd.notna(s.iloc[i])
-            )
-
-            resultados.append(fv + ft)
-
-        else:
-            # Placeholder para futuros casos
+        if not mask.any():
             resultados.append(pd.NA)
+            continue
 
-    mec[nombre_columna_salida] = resultados
-    return mec
+        # Extraer datos del poste
+        b = np.deg2rad(angulo_b[mask].astype(float))
+        fv_at = f_viento_at[mask].astype(float)
+        fv_ad = f_viento_ad[mask].astype(float)
+        ta = tiro_at[mask].astype(float)
+        td = tiro_ad[mask].astype(float)
+
+        n = mask.sum()
+
+        # ======================
+        # CASO 1: sin derivaciones
+        # ======================
+        if n == 1:
+            ftvc = (
+                fv_at.iloc[0] +
+                fv_ad.iloc[0] +
+                ta.iloc[0] * np.sin(b.iloc[0] / 2) +
+                td.iloc[0] * np.sin(b.iloc[0] / 2)
+            )
+            resultados.append(ftvc)
+            continue
+
+        # ======================
+        # CASO 2: con derivaciones
+        # ======================
+
+        # Normalización viento
+        fv_at = fv_at / np.cos(b / 2)
+        fv_ad = fv_ad / np.cos(b / 2)
+
+        # Identificación de p1
+        tiene_at_y_ad = (~ta.isna() & (ta != 0)) & (~td.isna() & (td != 0))
+
+        if tiene_at_y_ad.sum() > 1:
+            raise ValueError(
+                f"Poste {poste}: más de una derivación con tiro atrás y adelante"
+            )
+
+        if tiene_at_y_ad.sum() == 1:
+            idx_p1 = tiene_at_y_ad.idxmax()
+        else:
+            idx_p1 = ta.index[0]
+
+        b_p1 = b.loc[idx_p1]
+
+        # Eje transversal
+        suma = 0.0
+
+        # Viento
+        suma += fv_at.sum()
+        suma += (fv_ad * np.cos(b)).sum()
+
+        # Tiros
+        suma += (td * np.sin(b)).sum()
+
+        resultados.append(suma)
+
+    tabla[nombre_columna] = resultados
+    return tabla
