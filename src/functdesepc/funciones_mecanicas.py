@@ -540,8 +540,15 @@ def extraer_series_por_indice(
 
     return series_validas
 
-import numpy as np
-import pandas as pd
+def sumar_lista_series(lista):
+    """
+    Suma fila a fila una lista de pd.Series.
+    Retorna una pd.Series o None si la lista está vacía.
+    """
+    if not lista:
+        return None
+    df = pd.concat(lista, axis=1)
+    return df.replace("-", np.nan).astype(float).sum(axis=1)
 
 def calcular_ftvc(
     tabla,
@@ -555,83 +562,94 @@ def calcular_ftvc(
     nombre_columna="FTVC"
 ):
     """
-    Calcula el esfuerzo por viento sobre conductores (FTVC) por poste.
-
-    El resultado queda alineado con el orden de `o_postes` y se escribe
-    como una nueva columna en `tabla`.
+    Calcula el esfuerzo transversal por viento sobre conductores en postes.
     """
-    l_postes = pd.Series(l_postes)
-    angulo_b = pd.Series(angulo_b, index=l_postes.index)
-    f_viento_at = pd.Series(f_viento_at, index=l_postes.index)
-    f_viento_ad = pd.Series(f_viento_ad, index=l_postes.index)
-    tiro_at = pd.Series(tiro_at, index=l_postes.index)
-    tiro_ad = pd.Series(tiro_ad, index=l_postes.index)
 
-    resultados = []
+    # --- Preparar fuerzas equivalentes ---
+    fv_at = sumar_lista_series(f_viento_at)
+    fv_ad = sumar_lista_series(f_viento_ad)
+    ta = sumar_lista_series(tiro_at)
+    td = sumar_lista_series(tiro_ad)
 
+    # Inicializar columna resultado
+    tabla[nombre_columna] = np.nan
+
+    # Iterar por poste ordenado (resultado final)
     for poste in o_postes:
+
         mask = l_postes == poste
+        n_rep = mask.sum()
 
-        if not mask.any():
-            resultados.append(pd.NA)
+        if n_rep == 0:
             continue
 
-        # Extraer datos del poste
         b = np.deg2rad(angulo_b[mask].astype(float))
-        fv_at = f_viento_at[mask].astype(float)
-        fv_ad = f_viento_ad[mask].astype(float)
-        ta = tiro_at[mask].astype(float)
-        td = tiro_ad[mask].astype(float)
 
-        n = mask.sum()
+        fv_at_p = fv_at[mask] if fv_at is not None else 0
+        fv_ad_p = fv_ad[mask] if fv_ad is not None else 0
+        ta_p = ta[mask] if ta is not None else 0
+        td_p = td[mask] if td is not None else 0
 
-        # ======================
-        # CASO 1: sin derivaciones
-        # ======================
-        if n == 1:
+        # =========================
+        # CASO 1: SIN DERIVACIONES
+        # =========================
+        if n_rep == 1:
+
+            sen_b2 = np.sin(b.iloc[0] / 2)
+
             ftvc = (
-                fv_at.iloc[0] +
-                fv_ad.iloc[0] +
-                ta.iloc[0] * np.sin(b.iloc[0] / 2) +
-                td.iloc[0] * np.sin(b.iloc[0] / 2)
+                fv_at_p.iloc[0]
+                + fv_ad_p.iloc[0]
+                + (ta_p.iloc[0] + td_p.iloc[0]) * sen_b2
             )
-            resultados.append(ftvc)
+
+            tabla.loc[tabla[o_postes.name] == poste, nombre_columna] = ftvc
             continue
 
-        # ======================
-        # CASO 2: con derivaciones
-        # ======================
+        # =========================
+        # CASO 2: CON DERIVACIONES
+        # =========================
 
-        # Normalización viento
-        fv_at = fv_at / np.cos(b / 2)
-        fv_ad = fv_ad / np.cos(b / 2)
+        # Corregir viento por cos(b/2)
+        cos_b2 = np.cos(b / 2)
+        fv_at_c = fv_at_p / cos_b2
+        fv_ad_c = fv_ad_p / cos_b2
 
-        # Identificación de p1
-        tiene_at_y_ad = (~ta.isna() & (ta != 0)) & (~td.isna() & (td != 0))
+        # Detectar candidato a eje longitudinal (p1)
+        both = ((ta_p > 0) & (td_p > 0)) | ((fv_at_p > 0) & (fv_ad_p > 0))
 
-        if tiene_at_y_ad.sum() > 1:
+        if both.sum() > 1:
             raise ValueError(
-                f"Poste {poste}: más de una derivación con tiro atrás y adelante"
+                f"Error en poste {poste}: más de una derivación tiene esfuerzos adelante y atrás."
             )
 
-        if tiene_at_y_ad.sum() == 1:
-            idx_p1 = tiene_at_y_ad.idxmax()
+        if both.sum() == 1:
+            idx_p1 = both.idxmax()
         else:
-            idx_p1 = ta.index[0]
+            idx_p1 = mask[mask].index[0]
 
-        b_p1 = b.loc[idx_p1]
+        # Ángulo de referencia
+        b_ref = np.deg2rad(angulo_b.loc[idx_p1])
 
-        # Eje transversal
-        suma = 0.0
-
-        # Viento
-        suma += fv_at.sum()
-        suma += (fv_ad * np.cos(b)).sum()
+        # --- Componentes transversales ---
 
         # Tiros
-        suma += (td * np.sin(b)).sum()
+        tiros_transv = (
+            ta_p * np.sin(b)
+        )
 
-        resultados.append(suma)
+        tiros_transv.loc[idx_p1] = 0  # tiro atrás de p1 no aporta
 
-    tabla[nombre_columna] = resultados
+        # Viento
+        viento_transv = (
+            fv_at_c * np.sin(np.pi / 2)
+            + fv_ad_c * np.cos(b)
+        )
+
+        # Suma total
+        ftvc = tiros_transv.sum() + viento_transv.sum()
+
+        tabla.loc[tabla[o_postes.name] == poste, nombre_columna] = ftvc
+
     return tabla
+
