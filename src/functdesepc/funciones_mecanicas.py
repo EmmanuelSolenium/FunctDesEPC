@@ -482,7 +482,6 @@ def limpiar_saltos_linea_columnas(df):
 
 
 
-import pandas as pd
 
 def extraer_series_por_indice(
     df: pd.DataFrame,
@@ -491,7 +490,14 @@ def extraer_series_por_indice(
 ) -> list[pd.Series]:
     """
     Extrae todas las Series de un DataFrame con columnas MultiIndex
-    cuyo nombre en un nivel dado coincide con `nombre`.
+    cuyo nombre en un nivel dado coincide con `nombre`, excluyendo
+    aquellas columnas que estén completamente vacías o inválidas.
+
+    Se consideran valores inválidos:
+    - NaN
+    - 0
+    - "-"
+    - cadenas vacías
 
     Parámetros
     ----------
@@ -505,20 +511,34 @@ def extraer_series_por_indice(
     Retorna
     -------
     list[pd.Series]
-        Lista de Series correspondientes a las columnas encontradas.
-        Si no hay coincidencias, retorna una lista vacía.
+        Lista de Series válidas encontradas.
     """
 
     if not isinstance(df.columns, pd.MultiIndex):
         raise TypeError("El DataFrame no tiene columnas MultiIndex")
 
-    columnas = [
-        col for col in df.columns
-        if col[nivel] == nombre
-    ]
+    series_validas = []
 
-    return [df[col] for col in columnas]
+    for col in df.columns:
+        if col[nivel] != nombre:
+            continue
 
+        serie = df[col]
+
+        # Normalización de valores inválidos
+        serie_limpia = (
+            serie
+            .replace([0, "-", ""], pd.NA)
+            .dropna()
+        )
+
+        # Si después de limpiar no queda nada, se ignora la columna
+        if serie_limpia.empty:
+            continue
+
+        series_validas.append(serie)
+
+    return series_validas
 
 def esfuerzo_viento_conductores(
     mec: pd.DataFrame,
