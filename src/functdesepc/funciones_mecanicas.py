@@ -479,3 +479,114 @@ def limpiar_saltos_linea_columnas(df):
         )
 
     return df
+
+
+
+import pandas as pd
+
+def extraer_series_por_indice(
+    df: pd.DataFrame,
+    nombre: str,
+    nivel: int = 1
+) -> list[pd.Series]:
+    """
+    Extrae todas las Series de un DataFrame con columnas MultiIndex
+    cuyo nombre en un nivel dado coincide con `nombre`.
+
+    Parámetros
+    ----------
+    df : pd.DataFrame
+        DataFrame con columnas MultiIndex.
+    nombre : str
+        Nombre a buscar en el nivel especificado.
+    nivel : int, default 1
+        Nivel del MultiIndex donde se realizará la búsqueda.
+
+    Retorna
+    -------
+    list[pd.Series]
+        Lista de Series correspondientes a las columnas encontradas.
+        Si no hay coincidencias, retorna una lista vacía.
+    """
+
+    if not isinstance(df.columns, pd.MultiIndex):
+        raise TypeError("El DataFrame no tiene columnas MultiIndex")
+
+    columnas = [
+        col for col in df.columns
+        if col[nivel] == nombre
+    ]
+
+    return [df[col] for col in columnas]
+
+
+def esfuerzo_viento_conductores(
+    mec: pd.DataFrame,
+    postes: pd.Series,
+    angulo_b: pd.Series,
+    fuerzas_viento: list[pd.Series],
+    tiros: list[pd.Series],
+    nombre_columna_salida: str = "Ev_conductores"
+) -> pd.DataFrame:
+    """
+    Calcula el esfuerzo por viento sobre conductores en postes.
+
+    Caso implementado:
+    - Poste sin derivaciones (aparece una sola vez).
+
+    Parámetros
+    ----------
+    mec : pd.DataFrame
+        DataFrame que será modificado.
+    postes : pd.Series
+        Serie con el nombre del poste por fila (puede tener repeticiones).
+    angulo_b : pd.Series
+        Serie con el ángulo b en grados.
+    fuerzas_viento : list[pd.Series]
+        Series con fuerzas de viento sobre conductores (kg-f).
+    tiros : list[pd.Series]
+        Series con tiros sobre conductores (kg-f).
+    nombre_columna_salida : str
+        Nombre de la columna a crear en mec.
+
+    Retorna
+    -------
+    pd.DataFrame
+        DataFrame mec con la columna agregada.
+    """
+
+    # Conteo de repeticiones por poste
+    repeticiones = postes.value_counts()
+
+    resultados = []
+
+    for i in range(len(mec)):
+        poste = postes.iloc[i]
+        n_rep = repeticiones[poste]
+
+        # ángulo en radianes
+        b_rad = np.deg2rad(angulo_b.iloc[i])
+        sen_b_2 = np.sin(b_rad / 2)
+
+        # Caso 1: sin derivaciones
+        if n_rep == 1:
+            fv = sum(
+                s.iloc[i]
+                for s in fuerzas_viento
+                if pd.notna(s.iloc[i])
+            )
+
+            ft = sum(
+                s.iloc[i] * sen_b_2
+                for s in tiros
+                if pd.notna(s.iloc[i])
+            )
+
+            resultados.append(fv + ft)
+
+        else:
+            # Placeholder para futuros casos
+            resultados.append(pd.NA)
+
+    mec[nombre_columna_salida] = resultados
+    return mec
