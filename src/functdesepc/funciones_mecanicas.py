@@ -747,7 +747,7 @@ def calcular_flmc(
             cos_delta_2 = np.cos(delta.iloc[0] / 2)
 
             flmc = (
-                (ta_p.iloc[0] + td_p.iloc[0]) * cos_delta_2
+                ta_p.iloc[0] + (td_p.iloc[0]) 
             )
 
             tabla.loc[tabla[o_postes.name] == poste, nombre_columna] = flmc
@@ -796,3 +796,65 @@ def calcular_flmc(
         tabla.loc[tabla[o_postes.name] == poste, nombre_columna] = flmc
 
     return tabla
+
+########################################################################
+
+
+tabla = pd.DataFrame({
+    "Numero de apoyo": ["P01", "P02", "P03", "P04"]
+})
+o_postes = tabla["Numero de apoyo"]
+l_postes = pd.Series([
+    "P01",
+    "P02",
+    "P02",  # derivación
+    "P03",
+    "P04"
+])
+angulo_b = pd.Series([
+    0,   # P01
+    20,   # P02 (vano principal)
+    30,   # P02 (derivación)
+    0,   # P03
+    0     # P04 (alineado)
+])
+f_viento_at = [
+    pd.Series([
+        20,  # P01
+        30,  # P02 principal
+        10,  # P02 derivación
+        20,  # P03
+        0    # P04
+    ])
+]
+f_viento_ad = [
+    pd.Series([
+        20,  # P01
+        30,  # P02 principal
+        0,  # P02 derivación
+        30,  # P03
+        0    # P04
+    ])
+]
+tiro_at = [
+    pd.Series([
+        40,  # P01
+        50,  # P02 principal
+        10,   # P02 derivación
+        30,  # P03
+        20   # P04
+    ])
+]
+tiro_ad = [
+    pd.Series([
+        40,  # P01
+        50,  # P02 principal
+        0,   # P02 derivación
+        30,  # P03
+        20   # P04
+    ])
+]
+
+tabla = calcular_flmc(tabla,o_postes,l_postes,angulo_b,f_viento_at,f_viento_ad,tiro_at,tiro_ad)
+tabla = calcular_ftvc(tabla,o_postes,l_postes,angulo_b,f_viento_at,f_viento_ad,tiro_at,tiro_ad)
+print(tabla)
