@@ -653,3 +653,26 @@ def calcular_ftvc(
 
     return tabla
 
+
+
+def deflexion_a_angulo(delta, grados=True):
+    """
+    Convierte un ángulo de deflexión en el ángulo real entre dos vanos.
+
+    Parámetros
+    ----------
+    delta : float, array-like o pandas Series
+        Ángulo de deflexión (entre la prolongación de un vano y el siguiente).
+    grados : bool, default=True
+        True si delta está en grados.
+        False si delta está en radianes.
+
+    Retorna
+    -------
+    float, array-like o pandas Series
+        Ángulo entre los dos vanos.
+    """
+    if grados:
+        return 180.0 - delta
+    else:
+        return np.pi - delta
