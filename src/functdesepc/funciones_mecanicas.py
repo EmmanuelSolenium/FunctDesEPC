@@ -557,25 +557,28 @@ def calcular_ftvc(
     tabla,
     o_postes,
     l_postes,
-    angulo_b,          # ángulo de DEFLEXIÓN (δ)
-    f_viento_at,
-    f_viento_ad,
-    tiro_at,
-    tiro_ad,
+    angulo_b,          # ángulo de DEFLEXIÓN (δ) en grados
+    f_viento_at,       # lista de series
+    f_viento_ad,       # lista de series
+    tiro_at,           # lista de series
+    tiro_ad,           # lista de series
     nombre_columna="FTVC"
 ):
     """
     Calcula el esfuerzo transversal por viento sobre conductores en postes.
 
     Notas geométricas:
-    - El ángulo de entrada angulo_b es el ángulo de deflexión δ.
-    - En el CASO 1 se trabaja sobre la bisectriz → se usa δ directamente.
-    - En el CASO 2 (derivaciones) se usa el ángulo entre vanos:
+    - angulo_b es el ángulo de deflexión δ.
+    - CASO 1: sin derivaciones → se usa la bisectriz (δ/2).
+    - CASO 2: con derivaciones → se usa el ángulo entre vanos:
           θ = π − δ
-      porque el eje de referencia es el del vano principal.
+      tomando como eje longitudinal el tiro atrás del vano de referencia.
     """
 
-    # --- Preparar fuerzas equivalentes ---
+    import numpy as np
+    import pandas as pd
+
+    # --- Sumar fuerzas equivalentes ---
     fv_at = sumar_lista_series(f_viento_at)
     fv_ad = sumar_lista_series(f_viento_ad)
     ta = sumar_lista_series(tiro_at)
@@ -596,17 +599,17 @@ def calcular_ftvc(
         # δ: ángulo de deflexión (rad)
         delta = np.deg2rad(angulo_b[mask].astype(float))
 
-        fv_at_p = fv_at[mask] if fv_at is not None else 0
-        fv_ad_p = fv_ad[mask] if fv_ad is not None else 0
-        ta_p = ta[mask] if ta is not None else 0
-        td_p = td[mask] if td is not None else 0
+        # Fuerzas por vano
+        fv_at_p = fv_at[mask] if fv_at is not None else pd.Series(0.0, index=delta.index)
+        fv_ad_p = fv_ad[mask] if fv_ad is not None else pd.Series(0.0, index=delta.index)
+        ta_p = ta[mask] if ta is not None else pd.Series(0.0, index=delta.index)
+        td_p = td[mask] if td is not None else pd.Series(0.0, index=delta.index)
 
         # =========================
         # CASO 1: SIN DERIVACIONES
         # =========================
         if n_rep == 1:
 
-            # Bisectriz del ángulo de deflexión
             sen_delta_2 = np.sin(delta.iloc[0] / 2)
 
             ftvc = (
@@ -625,43 +628,52 @@ def calcular_ftvc(
         # θ = ángulo entre vanos
         theta = np.pi - delta
 
-        # Normalización de viento (exportado respecto a bisectriz)
-        cos_delta_2 = np.cos(delta / 2)
-        fv_at_c = fv_at_p / cos_delta_2
-        fv_ad_c = fv_ad_p / cos_delta_2
+        # Definir vano de referencia p1 SOLO con tiros
+        both_tiro = (ta_p > 0) & (td_p > 0)
 
-        # Detectar poste de referencia p1
-        both = ((ta_p > 0) & (td_p > 0)) | ((fv_at_p > 0) & (fv_ad_p > 0))
-
-        if both.sum() > 1:
+        if both_tiro.sum() > 1:
             raise ValueError(
-                f"Error en poste {poste}: más de una derivación tiene esfuerzos adelante y atrás."
+                f"Error en poste {poste}: más de un vano tiene tiro adelante y atrás."
             )
 
-        if both.sum() == 1:
-            idx_p1 = both.idxmax()
+        if both_tiro.sum() == 1:
+            idx_p1 = both_tiro.idxmax()
         else:
-            idx_p1 = mask[mask].index[0]
+            idx_p1 = delta.index[0]
 
-        # θ de referencia
-        theta_ref = theta.loc[idx_p1]
+        ftvc = 0.0
 
-        # --- Componentes transversales ---
+        # Suma de componentes transversales
+        for idx in delta.index:
 
-        # Tiros (referidos al eje del vano p1)
-        tiros_transv = ta_p * np.sin(theta)
-        tiros_transv.loc[idx_p1] = 0  # tiro atrás de p1 no aporta
+            th = theta.loc[idx]
 
-        # Viento
-        # - viento atrás de p1: 90° → aporte completo
-        # - viento adelante: proyección cos(θ)
-        viento_transv = (
-            fv_at_c
-            + fv_ad_c * np.cos(theta)
-        )
+            # ---------- TIROS ----------
+            if ta_p.loc[idx] > 0 and td_p.loc[idx] > 0:
+                # Vano de referencia (p1)
+                # Eje alineado con tiro atrás → este no aporta
+                tiro_transv = td_p.loc[idx] * np.sin(th)
+            else:
+                tiro_val = ta_p.loc[idx] if ta_p.loc[idx] > 0 else td_p.loc[idx]
+                tiro_transv = tiro_val * np.sin(th)
 
-        # Suma total
-        ftvc = tiros_transv.sum() + viento_transv.sum()
+            # ---------- VIENTO ----------
+            if fv_at_p.loc[idx] > 0 and fv_ad_p.loc[idx] > 0:
+                # Normalización SOLO si ese vano tiene viento adelante y atrás
+                cos_delta_2 = np.cos(delta.loc[idx] / 2)
+                fv_at_n = fv_at_p.loc[idx] / cos_delta_2
+                fv_ad_n = fv_ad_p.loc[idx] / cos_delta_2
+
+                viento_transv = fv_at_n + fv_ad_n * abs(np.cos(th))
+            else:
+                viento_val = (
+                    fv_at_p.loc[idx]
+                    if fv_at_p.loc[idx] > 0
+                    else fv_ad_p.loc[idx]
+                )
+                viento_transv = viento_val * abs(np.cos(th))
+
+            ftvc += tiro_transv + viento_transv
 
         tabla.loc[tabla[o_postes.name] == poste, nombre_columna] = ftvc
 
