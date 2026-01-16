@@ -551,135 +551,6 @@ def sumar_lista_series(lista):
     return df.replace("-", np.nan).astype(float).sum(axis=1)
 
 
-import numpy as np
-
-def calcular_ftvc(
-    tabla,
-    o_postes,
-    l_postes,
-    angulo_b,          # ángulo de DEFLEXIÓN (δ) en grados
-    f_viento_at,       # lista de series
-    f_viento_ad,       # lista de series
-    tiro_at,           # lista de series
-    tiro_ad,           # lista de series
-    nombre_columna="FTVC"
-):
-    """
-    Calcula el esfuerzo transversal por viento sobre conductores en postes.
-
-    Notas geométricas:
-    - angulo_b es el ángulo de deflexión δ.
-    - CASO 1: sin derivaciones → se usa la bisectriz (δ/2).
-    - CASO 2: con derivaciones → se usa el ángulo entre vanos:
-          θ = π − δ
-      tomando como eje longitudinal el tiro atrás del vano de referencia.
-    """
-
-    import numpy as np
-    import pandas as pd
-
-    # --- Sumar fuerzas equivalentes ---
-    fv_at = sumar_lista_series(f_viento_at)
-    fv_ad = sumar_lista_series(f_viento_ad)
-    ta = sumar_lista_series(tiro_at)
-    td = sumar_lista_series(tiro_ad)
-
-    # Inicializar columna resultado
-    tabla[nombre_columna] = np.nan
-
-    # Iterar por poste ordenado (resultado final)
-    for poste in o_postes:
-
-        mask = l_postes == poste
-        n_rep = mask.sum()
-
-        if n_rep == 0:
-            continue
-
-        # δ: ángulo de deflexión (rad)
-        delta = np.deg2rad(angulo_b[mask].astype(float))
-
-        # Fuerzas por vano
-        fv_at_p = fv_at[mask] if fv_at is not None else pd.Series(0.0, index=delta.index)
-        fv_ad_p = fv_ad[mask] if fv_ad is not None else pd.Series(0.0, index=delta.index)
-        ta_p = ta[mask] if ta is not None else pd.Series(0.0, index=delta.index)
-        td_p = td[mask] if td is not None else pd.Series(0.0, index=delta.index)
-
-        # =========================
-        # CASO 1: SIN DERIVACIONES
-        # =========================
-        if n_rep == 1:
-
-            sen_delta_2 = np.sin(delta.iloc[0] / 2)
-
-            ftvc = (
-                fv_at_p.iloc[0]
-                + fv_ad_p.iloc[0]
-                + (ta_p.iloc[0] + td_p.iloc[0]) * sen_delta_2
-            )
-
-            tabla.loc[tabla[o_postes.name] == poste, nombre_columna] = ftvc
-            continue
-
-        # =========================
-        # CASO 2: CON DERIVACIONES
-        # =========================
-
-        # θ = ángulo entre vanos
-        theta = np.pi - delta
-
-        # Definir vano de referencia p1 SOLO con tiros
-        both_tiro = (ta_p > 0) & (td_p > 0)
-
-        if both_tiro.sum() > 1:
-            raise ValueError(
-                f"Error en poste {poste}: más de un vano tiene tiro adelante y atrás."
-            )
-
-        if both_tiro.sum() == 1:
-            idx_p1 = both_tiro.idxmax()
-        else:
-            idx_p1 = delta.index[0]
-
-        ftvc = 0.0
-
-        # Suma de componentes transversales
-        for idx in delta.index:
-
-            th = theta.loc[idx]
-
-            # ---------- TIROS ----------
-            if ta_p.loc[idx] > 0 and td_p.loc[idx] > 0:
-                # Vano de referencia (p1)
-                # Eje alineado con tiro atrás → este no aporta
-                tiro_transv = td_p.loc[idx] * np.sin(th)
-            else:
-                tiro_val = ta_p.loc[idx] if ta_p.loc[idx] > 0 else td_p.loc[idx]
-                tiro_transv = tiro_val * np.sin(th)
-
-            # ---------- VIENTO ----------
-            if fv_at_p.loc[idx] > 0 and fv_ad_p.loc[idx] > 0:
-                # Normalización SOLO si ese vano tiene viento adelante y atrás
-                cos_delta_2 = np.cos(delta.loc[idx] / 2)
-                fv_at_n = fv_at_p.loc[idx] / cos_delta_2
-                fv_ad_n = fv_ad_p.loc[idx] / cos_delta_2
-
-                viento_transv = fv_at_n + fv_ad_n * abs(np.cos(th))
-            else:
-                viento_val = (
-                    fv_at_p.loc[idx]
-                    if fv_at_p.loc[idx] > 0
-                    else fv_ad_p.loc[idx]
-                )
-                viento_transv = viento_val * abs(np.cos(th))
-
-            ftvc += tiro_transv + viento_transv
-
-        tabla.loc[tabla[o_postes.name] == poste, nombre_columna] = ftvc
-
-    return tabla
-
-
 
 def deflexion_a_angulo(delta, grados=True):
     """
@@ -704,112 +575,213 @@ def deflexion_a_angulo(delta, grados=True):
         return np.pi - delta
     
 
+import numpy as np
+import pandas as pd
 
-def calcular_flmc(
+
+def calcular_ftvc_flmc(
     tabla,
     o_postes,
     l_postes,
-    angulo_b,          # ángulo de DEFLEXIÓN (δ)
+    angulo_b,          # ángulo de DEFLEXIÓN δ (grados)
     f_viento_at,
     f_viento_ad,
     tiro_at,
     tiro_ad,
-    nombre_columna="FLMC"
+    col_ftvc="FTVC",
+    col_flmc="FLMC"
 ):
     """
-    Calcula el esfuerzo longitudinal mecánico combinado (FLMC)
-    sobre conductores en postes.
+    Calcula simultáneamente:
+    - FTVC: esfuerzo transversal por viento
+    - FLMC: esfuerzo longitudinal mecánico combinado
 
-    Es el complemento longitudinal de FTVC:
-    - sen <-> cos
-    - fuerzas anuladas pasan a ser completas y viceversa
+    Geometría:
+    - Caso 1 (sin derivaciones): eje = bisectriz del ángulo de deflexión
+    - Caso 2 (con derivaciones):
+        * Se calcula el vector resultante de tensiones
+        * Su dirección define el eje longitudinal real
+        * El viento se orienta ±90° respecto al vano,
+          eligiendo el caso más crítico (más cercano al vector resultante)
     """
 
-    # --- Preparar fuerzas equivalentes ---
     fv_at = sumar_lista_series(f_viento_at)
     fv_ad = sumar_lista_series(f_viento_ad)
     ta = sumar_lista_series(tiro_at)
     td = sumar_lista_series(tiro_ad)
 
-    # Inicializar columna resultado
-    tabla[nombre_columna] = np.nan
+    tabla[col_ftvc] = np.nan
+    tabla[col_flmc] = np.nan
 
-    # Iterar por poste ordenado
     for poste in o_postes:
 
         mask = l_postes == poste
         n_rep = mask.sum()
-
         if n_rep == 0:
             continue
 
-        # δ: ángulo de deflexión
         delta = np.deg2rad(angulo_b[mask].astype(float))
 
-        fv_at_p = fv_at[mask] if fv_at is not None else 0
-        fv_ad_p = fv_ad[mask] if fv_ad is not None else 0
-        ta_p = ta[mask] if ta is not None else 0
-        td_p = td[mask] if td is not None else 0
+        fv_at_p = fv_at[mask] if fv_at is not None else pd.Series(0, index=delta.index)
+        fv_ad_p = fv_ad[mask] if fv_ad is not None else pd.Series(0, index=delta.index)
+        ta_p = ta[mask] if ta is not None else pd.Series(0, index=delta.index)
+        td_p = td[mask] if td is not None else pd.Series(0, index=delta.index)
 
-        # =========================
+        # ============================================================
         # CASO 1: SIN DERIVACIONES
-        # =========================
+        # ============================================================
         if n_rep == 1:
 
-            cos_delta_2 = np.cos(delta.iloc[0] / 2)
+            d = delta.iloc[0]
+            sen_d2 = np.sin(d / 2)
+            cos_d2 = np.cos(d / 2)
+
+            # ---------------- FTVC ----------------
+            # El viento YA está en la bisectriz → NO se normaliza
+            ftvc = (
+                fv_at_p.iloc[0]
+                + fv_ad_p.iloc[0]
+                + (ta_p.iloc[0] + td_p.iloc[0]) * sen_d2
+            )
+
+            # ---------------- FLMC ----------------
+            # Normalizar SOLO si hay viento adelante y atrás
+            if fv_at_p.iloc[0] > 0 and fv_ad_p.iloc[0] > 0:
+                fv_at_c = fv_at_p.iloc[0] / cos_d2
+                fv_ad_c = fv_ad_p.iloc[0] / cos_d2
+            else:
+                fv_at_c = fv_at_p.iloc[0]
+                fv_ad_c = fv_ad_p.iloc[0]
 
             flmc = (
-                ta_p.iloc[0] + (td_p.iloc[0]) 
+                (td_p.iloc[0] - ta_p.iloc[0]) * cos_d2
+                + (fv_at_c - fv_ad_c) * sen_d2
             )
 
-            tabla.loc[tabla[o_postes.name] == poste, nombre_columna] = flmc
+            tabla.loc[tabla[o_postes.name] == poste, col_ftvc] = ftvc
+            tabla.loc[tabla[o_postes.name] == poste, col_flmc] = flmc
             continue
 
-        # =========================
+        # ============================================================
         # CASO 2: CON DERIVACIONES
-        # =========================
+        # ============================================================
 
-        # θ = ángulo entre vanos
-        theta = np.pi - delta
+        theta = np.pi - delta  # ángulo real entre vanos
 
-        # Normalización de viento (exportado respecto a bisectriz)
-        cos_delta_2 = np.cos(delta / 2)
-        fv_at_c = fv_at_p / cos_delta_2
-        fv_ad_c = fv_ad_p / cos_delta_2
+        # Normalización del viento SOLO si hay adelante y atrás
+        fv_at_c = fv_at_p.copy()
+        fv_ad_c = fv_ad_p.copy()
 
-        # Detectar p1
-        both = ((ta_p > 0) & (td_p > 0)) | ((fv_at_p > 0) & (fv_ad_p > 0))
+        for idx in delta.index:
+            if fv_at_p.loc[idx] > 0 and fv_ad_p.loc[idx] > 0:
+                fv_at_c.loc[idx] /= np.cos(delta.loc[idx] / 2)
+                fv_ad_c.loc[idx] /= np.cos(delta.loc[idx] / 2)
 
-        if both.sum() > 1:
-            raise ValueError(
-                f"Error en poste {poste}: más de una derivación tiene esfuerzos adelante y atrás."
-            )
+        # ------------------------------------------------------------
+        # 1) Vector resultante de tensiones
+        # ------------------------------------------------------------
+        T_res = np.array([0.0, 0.0])
 
-        if both.sum() == 1:
-            idx_p1 = both.idxmax()
+        for idx in delta.index:
+            th = theta.loc[idx]
+
+            if ta_p.loc[idx] > 0 and td_p.loc[idx] > 0:
+                # eje alineado con tiro atrás
+
+                tx  = ta_p.loc[idx]*np.cos(0) + td_p.loc[idx]*np.cos(th)
+                ty = ta_p.loc[idx]*np.sin(0) + td_p.loc[idx]*np.sin(th)
+                
+            else:
+                T = ta_p.loc[idx] if ta_p.loc[idx] > 0 else td_p.loc[idx]
+                tx = T*np.cos(th)
+                ty = T*np.sin(th)
+
+            T_res += np.array([
+                tx,
+                ty
+            ])
+
+        if np.linalg.norm(T_res) == 0:
+            e_L = np.array([1.0, 0.0])
         else:
-            idx_p1 = mask[mask].index[0]
+            e_L = T_res / np.linalg.norm(T_res)
 
-        # --- Componentes longitudinales ---
+        e_T = np.array([-e_L[1], e_L[0]])
 
-        # Tiros
-        tiros_long = ta_p * np.cos(theta)
-        tiros_long.loc[idx_p1] = ta_p.loc[idx_p1]  # tiro atrás p1 completo
+        # ------------------------------------------------------------
+        # 2) Proyección de fuerzas
+        # ------------------------------------------------------------
+        flmcv = 0.0
+        ftvcv = 0.0
 
-        # Viento
-        # - viento atrás p1: no aporta
-        # - viento adelante: sin(θ)
-        viento_long = fv_ad_c * np.sin(theta)
-        viento_long.loc[idx_p1] = 0
+        for idx in delta.index:
 
-        # Suma total
-        flmc = tiros_long.sum() + viento_long.sum()
+            th = theta.loc[idx]
 
-        tabla.loc[tabla[o_postes.name] == poste, nombre_columna] = flmc
+            # ---------- VIENTO ----------
+            if fv_at_c.loc[idx] > 0 and fv_ad_c.loc[idx] > 0:
+                
+                
+                
+                v1a = np.array([
+                    fv_at_c.loc[idx] * np.cos(th + np.pi / 2),
+                    fv_at_c.loc[idx] * np.sin(th + np.pi / 2)
+                ])
+                v2a = np.array([
+                    fv_at_c.loc[idx] * np.cos(th - np.pi / 2),
+                    fv_at_c.loc[idx] * np.sin(th - np.pi / 2)
+                ])
+                v1d = np.array([
+                    fv_ad_c.loc[idx] * np.cos(th + np.pi / 2),
+                    fv_ad_c.loc[idx] * np.sin(th + np.pi / 2)
+                ])            
+                v2d = np.array([
+                    fv_ad_c.loc[idx] * np.cos(th - np.pi / 2),
+                    fv_ad_c.loc[idx] * np.sin(th - np.pi / 2)
+                ])
+                Vveca = v1a if abs(np.dot(v1a, e_L)) >= abs(np.dot(v2a, e_L)) else v2a
+                Vvecd = v1d if abs(np.dot(v1d, e_L)) >= abs(np.dot(v2d, e_L)) else v2d
+                V_vec = Vveca + Vvecd
+            
+            else:
+                Fv = fv_at_c.loc[idx] if fv_at_c.loc[idx] > 0 else fv_ad_c.loc[idx]
+                v1 = np.array([
+                    Fv * np.cos(th + np.pi / 2),
+                    Fv * np.sin(th + np.pi / 2)
+                ])
+                v2 = np.array([
+                    Fv * np.cos(th - np.pi / 2),
+                    Fv * np.sin(th - np.pi / 2)
+                ])
+                # caso más crítico respecto al vector resultante de tensión
+                V_vec = v1 if abs(np.dot(v1, e_L)) >= abs(np.dot(v2, e_L)) else v2                        
+
+                # ---------- VIENTO ----------
+                Fv = fv_at_c.loc[idx] if fv_at_c.loc[idx] > 0 else fv_ad_c.loc[idx]
+
+                v1 = np.array([
+                    Fv * np.cos(th + np.pi / 2),
+                    Fv * np.sin(th + np.pi / 2)
+                ])
+                v2 = np.array([
+                    Fv * np.cos(th - np.pi / 2),
+                    Fv * np.sin(th - np.pi / 2)
+                ])
+
+                # caso más crítico respecto al vector resultante de tensión
+                V_vec = v1 if abs(np.dot(v1, e_L)) >= abs(np.dot(v2, e_L)) else v2
+
+            flmcv += np.dot(V_vec, e_L)
+            ftvcv += np.dot(V_vec, e_T)
+
+        flmc = flmcv +  np.dot(T_res, e_L)
+        ftvc = ftvcv +  np.dot(T_res, e_T)
+        tabla.loc[tabla[o_postes.name] == poste, col_flmc] = flmc
+        
+        tabla.loc[tabla[o_postes.name] == poste, col_ftvc] = ftvc
 
     return tabla
 
-########################################################################
 
 
 tabla = pd.DataFrame({
@@ -827,7 +799,7 @@ angulo_b = pd.Series([
     0,   # P01
     20,   # P02 (vano principal)
     30,   # P02 (derivación)
-    0,   # P03
+    45,   # P03
     0     # P04 (alineado)
 ])
 f_viento_at = [
@@ -867,6 +839,7 @@ tiro_ad = [
     ])
 ]
 
-tabla = calcular_flmc(tabla,o_postes,l_postes,angulo_b,f_viento_at,f_viento_ad,tiro_at,tiro_ad)
-tabla = calcular_ftvc(tabla,o_postes,l_postes,angulo_b,f_viento_at,f_viento_ad,tiro_at,tiro_ad)
+
+tabla = calcular_ftvc_flmc(tabla,o_postes,l_postes,angulo_b,f_viento_at,f_viento_ad,tiro_at,tiro_ad)
 print(tabla)
+
