@@ -753,7 +753,7 @@ def calcular_ftvc_flmc(
                     Fv * np.sin(th - np.pi / 2)
                 ])
                 # Dirección del viento tomando el vano atrás como base
-                V_vec = v1 if abs(np.dot(v1,[0,1])) >= abs(np.dot(v2, [0,1])) else v2                        
+                V_vec = v1 if np.dot(v1,[0,1]) >= 0 else v2                        
 
 
             flmcv += np.dot(V_vec, e_L)
@@ -825,12 +825,12 @@ tiro_ad = [
 ]
 
 
-""" tabla = calcular_ftvc_flmc(tabla,o_postes,l_postes,angulo_b,f_viento_at,f_viento_ad,tiro_at,tiro_ad)
+tabla = calcular_ftvc_flmc(tabla,o_postes,l_postes,angulo_b,f_viento_at,f_viento_ad,tiro_at,tiro_ad)
 print(tabla)
 
-tabla["F_check"] = np.sqrt(tabla["FTVC"]**2 + tabla["FLMC"]**2) """
+tabla["F_check"] = np.sqrt(tabla["FTVC"]**2 + tabla["FLMC"]**2)
 
-""" print(tabla)  """
+print(tabla) 
 
 fv_at = sumar_lista_series(f_viento_at)
 fv_ad = sumar_lista_series(f_viento_ad)
@@ -927,10 +927,8 @@ for poste in o_postes:
                     fv_at_c.loc[idx] * np.cos( np.pi / 2),
                     fv_at_c.loc[idx] * np.sin( np.pi / 2)
                 ])
-                v2a = np.array([
-                    fv_at_c.loc[idx] * np.cos( - np.pi / 2),
-                    fv_at_c.loc[idx] * np.sin( - np.pi / 2)
-                ])
+
+
                 v1d = np.array([
                     fv_ad_c.loc[idx] * np.cos(th + np.pi / 2),
                     fv_ad_c.loc[idx] * np.sin(th + np.pi / 2)
@@ -939,28 +937,18 @@ for poste in o_postes:
                     fv_ad_c.loc[idx] * np.cos(th - np.pi / 2),
                     fv_ad_c.loc[idx] * np.sin(th - np.pi / 2)
                 ])
-                Vveca = v1a if abs(np.dot(v1a, e_L)) >= abs(np.dot(v2a, e_L)) else v2a
-                Vvecd = v1d if abs(np.dot(v1d, e_L)) >= abs(np.dot(v2d, e_L)) else v2d
-                V_vec = Vveca + Vvecd
+                
+                Vvecd = v1d if np.dot(v1d, v1a) >= 0 else v2d
+                V_vec = v1a + Vvecd
+                print(V_vec)
+                
+
                 
                 
                 
             
             else:
                 Fv = fv_at_c.loc[idx] if fv_at_c.loc[idx] > 0 else fv_ad_c.loc[idx]
-                v1 = np.array([
-                    Fv * np.cos(th + np.pi / 2),
-                    Fv * np.sin(th + np.pi / 2)
-                ])
-                v2 = np.array([
-                    Fv * np.cos(th - np.pi / 2),
-                    Fv * np.sin(th - np.pi / 2)
-                ])
-                # caso más crítico respecto al vector resultante de tensión
-                V_vec = v1 if abs(np.dot(v1, e_L)) >= abs(np.dot(v2, e_L)) else v2                        
-
-                # ---------- VIENTO ----------
-                Fv = fv_at_c.loc[idx] if fv_at_c.loc[idx] > 0 else fv_ad_c.loc[idx]
 
                 v1 = np.array([
                     Fv * np.cos(th + np.pi / 2),
@@ -972,15 +960,16 @@ for poste in o_postes:
                 ])
 
                 # caso más crítico respecto al vector resultante de tensión
-                V_vec = v1 if abs(np.dot(v1, e_L)) >= abs(np.dot(v2, e_L)) else v2
-            #print(V_vec)
+                V_vec = v1 if np.dot(v1,[0,1]) >= 0 else v2
+                
+            
 
             flmcv += np.dot(V_vec, e_L)
             ftvcv += np.dot(V_vec, e_T)
-            #print(flmcv,ftvcv)
+            print(flmcv,ftvcv)
         flmc = flmcv +  np.dot(T_res, e_L)
         ftvc = ftvcv +  np.dot(T_res, e_T)
-        print(flmc,ftvc)       
+        print(flmc,ftvc,flmcv,ftvcv,T_res)       
 
 """
     flmc = flmcv +  np.dot(T_res, e_L)
