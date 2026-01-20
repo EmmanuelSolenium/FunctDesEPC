@@ -684,6 +684,7 @@ def calcular_ftvc_flmc(
 
         for idx in delta.index:
             th = theta.loc[idx]
+            dt = delta.loc[idx]
 
             if ta_p.loc[idx] > 0 and td_p.loc[idx] > 0:
                 # eje alineado con tiro atrás
@@ -693,26 +694,20 @@ def calcular_ftvc_flmc(
                 
             else:
                 T = ta_p.loc[idx] if ta_p.loc[idx] > 0 else td_p.loc[idx]
-                tx = T*np.cos(th)
-                ty = T*np.sin(th)
+                tx = T*np.cos(th) if dt > 0 else T*np.cos(dt)
+                ty = T*np.sin(th) if dt > 0 else T*np.cos(dt)
 
             T_res += np.array([
                 tx,
                 ty
             ])
 
-        if np.linalg.norm(T_res) == 0:
-            e_L = np.array([1.0, 0.0])
-        else:
-            e_L = T_res / np.linalg.norm(T_res)
 
-        e_T = np.array([-e_L[1], e_L[0]])
 
         # ------------------------------------------------------------
         # 2) Proyección de fuerzas
         # ------------------------------------------------------------
-        flmcv = 0.0
-        ftvcv = 0.0
+        V_vec = np.array([0.0, 0.0])
 
         for idx in delta.index:
 
@@ -738,7 +733,7 @@ def calcular_ftvc_flmc(
                 ])
                 
                 Vvecd = v1d if np.dot(v1d, v1a) >= 0 else v2d
-                V_vec = v1a + Vvecd
+                V_vect = v1a + Vvecd
                 
 
             
@@ -753,21 +748,26 @@ def calcular_ftvc_flmc(
                     Fv * np.sin(th - np.pi / 2)
                 ])
                 # Dirección del viento tomando el vano atrás como base
-                V_vec = v1 if np.dot(v1,[0,1]) >= 0 else v2                        
+                V_vect = v1 if np.dot(v1,[0,1]) >= 0 else v2   
+            V_vec += V_vect
+            print(T_res)        
+        if np.linalg.norm(V_vec) == 0:
+            e_L = np.array([1.0, 0.0])
+        else:
+            e_T = V_vec / np.linalg.norm(V_vec)
+
+        e_L = np.array([-e_T[1], e_T[0]])
 
 
-            flmcv += np.dot(V_vec, e_L)
-            ftvcv += np.dot(V_vec, e_T)
-
-        flmc = flmcv +  np.dot(T_res, e_L)
-        ftvc = ftvcv +  np.dot(T_res, e_T)
+        flmc = np.dot(V_vec, e_L) +  np.dot(T_res, e_L)
+        ftvc = np.dot(V_vec, e_T) +  np.dot(T_res, e_T)
         tabla.loc[tabla[o_postes.name] == poste, col_flmc] = flmc
         
         tabla.loc[tabla[o_postes.name] == poste, col_ftvc] = ftvc
 
     return tabla
 
-
+########### Prueba función ####################
 
 tabla = pd.DataFrame({
     "Numero de apoyo": ["P01", "P02", "P03", "P04"]
@@ -822,7 +822,7 @@ tiro_ad = [
         30,  # P03
         0   # P04
     ])
-]
+] 
 
 
 tabla = calcular_ftvc_flmc(tabla,o_postes,l_postes,angulo_b,f_viento_at,f_viento_ad,tiro_at,tiro_ad)
@@ -832,7 +832,7 @@ tabla["F_check"] = np.sqrt(tabla["FTVC"]**2 + tabla["FLMC"]**2)
 
 print(tabla) 
 
-fv_at = sumar_lista_series(f_viento_at)
+""" fv_at = sumar_lista_series(f_viento_at)
 fv_ad = sumar_lista_series(f_viento_ad)
 ta = sumar_lista_series(tiro_at)
 td = sumar_lista_series(tiro_ad)
@@ -969,7 +969,7 @@ for poste in o_postes:
             print(flmcv,ftvcv)
         flmc = flmcv +  np.dot(T_res, e_L)
         ftvc = ftvcv +  np.dot(T_res, e_T)
-        print(flmc,ftvc,flmcv,ftvcv,T_res)       
+        print(flmc,ftvc,flmcv,ftvcv,T_res)  """      
 
 """
     flmc = flmcv +  np.dot(T_res, e_L)
