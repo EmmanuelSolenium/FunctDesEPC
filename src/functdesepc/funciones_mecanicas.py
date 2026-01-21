@@ -928,8 +928,6 @@ def calcular_ftve(
 
     return mec
 
-import numpy as np
-import pandas as pd
 
 def calcular_flee(
     mec,
@@ -994,4 +992,47 @@ def calcular_flee(
 
     return mec
 
+
+
+def calcular_fve(
+    mec,
+    postes_reco,
+    PE=None,                 # peso del equipo por poste (daN)
+    col_poste="Numero de apoyo",
+    col_fve="FVE"
+):
+    """
+    Calcula la Fuerza Vertical por Equipos (FVE).
+
+    Definición:
+    - FVE = PE
+
+    Condiciones:
+    - Solo se aplica a postes con reconectador
+    - Postes sin reconectador → FVE = 0
+    - Valor por defecto (solo postes con reconectador):
+        * PE = 600 daN
+    """
+
+    # Inicializar columna
+    mec[col_fve] = 0.0
+
+    PE_def = 600.0  # daN
+
+    for idx, row in mec.iterrows():
+
+        poste = row[col_poste]
+
+        if poste not in postes_reco.values:
+            continue
+
+        # Peso del equipo
+        if PE is not None and poste in PE.index:
+            pe = PE.loc[poste]
+        else:
+            pe = PE_def
+
+        mec.at[idx, col_fve] = pe
+
+    return mec
 
