@@ -389,4 +389,30 @@ df_cables_acero_galvanizado = pd.DataFrame({
     "Coeficiente de dilatación lineal (°C⁻¹)": [11.5e-6, 11.5e-6]
 })
 
-print(df_cables_acero_galvanizado)
+""" print(df_cables_acero_galvanizado)  """
+
+
+import pandas as pd
+
+tabla_B2_4 = pd.DataFrame({
+    "Zona": ["A", "A", "B", "B", "C", "C"],
+    "Area": ["Rural", "Urbana", "Rural", "Urbana", "Rural", "Urbana"],
+    "Categoría Terreno": [
+        "Tipo I",
+        "Tipo IV",
+        "Tipo II",
+        "Tipo IV",
+        "Tipo II",
+        "Tipo IV"
+    ],
+    "q0 (daN / (m ^ 2))": [
+        42.55,
+        16.12,
+        25.18,
+        9.06,
+        16.12,
+        6.30
+    ]
+})
+
+print(tabla_B2_4)
