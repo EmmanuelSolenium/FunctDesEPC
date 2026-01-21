@@ -882,7 +882,7 @@ def calcular_ftve(
         )
 
     q0 = fila_q0.iloc[0]["q0 (daN / (m ^ 2))"]
-    print(q0)
+
 
     # ------------------------------------------------------------
     # Altura del reconectador
@@ -925,6 +925,72 @@ def calcular_ftve(
         ftve = q0 * Cxe * Gt.loc[idx] * Sxe.loc[idx]
         mec.loc[mask, col_salida] = ftve
         
+
+    return mec
+
+import numpy as np
+import pandas as pd
+
+def calcular_flee(
+    mec,
+    postes_reco,
+    LE=None,   # distancia centro reconectador – poste (m)
+    HE=None,   # altura del reconectador (m)
+    PE=None,   # peso del equipo (daN)
+    col_poste="Numero de apoyo",
+    col_flee="FLEE"
+):
+    """
+    Calcula la Fuerza Longitudinal Equivalente por Excentricidad del peso
+    del equipo (FLEE).
+
+    Fórmula:
+        FLEE = HE * LE * PE
+
+    Condiciones:
+    - Solo se calcula para postes con reconectador
+    - Postes sin reconectador → FLEE = 0
+    - Valores por defecto (solo para postes con reconectador):
+        * LE = 0.75 m
+        * HE = 5.0 m
+        * PE = 600 daN
+    """
+
+    # Inicializar columna
+    mec[col_flee] = 0.0
+
+    # Valores por defecto
+    LE_def = 0.75
+    HE_def = 5.0
+    PE_def = 600.0  # daN (solo postes con reconectador)
+
+    for idx, row in mec.iterrows():
+
+        poste = row[col_poste]
+
+        if poste not in postes_reco.values:
+            continue
+
+        # LE
+        if LE is not None and poste in LE.index:
+            le = LE.loc[poste]
+        else:
+            le = LE_def
+
+        # HE
+        if HE is not None and poste in HE.index:
+            he = HE.loc[poste]
+        else:
+            he = HE_def
+
+        # PE
+        if PE is not None and poste in PE.index:
+            pe = PE.loc[poste]
+        else:
+            pe = PE_def
+
+        # Cálculo FLEE
+        mec.at[idx, col_flee] = he * le * pe
 
     return mec
 
