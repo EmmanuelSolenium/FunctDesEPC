@@ -778,7 +778,7 @@ def calcular_ftvc_flmc(
 
 ########### Prueba función ####################
 
-tabla = pd.DataFrame({
+""" tabla = pd.DataFrame({
     "Numero de apoyo": ["P01", "P02", "P03", "P04"]
 })
 o_postes = tabla["Numero de apoyo"]
@@ -838,7 +838,92 @@ tabla = calcular_ftvc_flmc(tabla,o_postes,l_postes,angulo_b,f_viento_at,f_viento
 
 tabla["F_check"] = np.sqrt(tabla["FTVC"]**2 + tabla["FLMC"]**2)
 
-print(tabla) 
+print(tabla)  """
 
- 
+def calcular_ftve(
+    mec,
+    zona_viento,              # "A", "B" o "C"
+    area,                     # "Rural" o "Urbana"
+    tabla_B2_4,               # DataFrame
+    Sxe,                      # área frontal del reconectador (m²)
+    postes_reco,              # pd.Series con nombres de postes
+    altura_reconectador=None, # pd.Series opcional (m)
+    col_poste="Numero de apoyo",
+    col_salida="FTVE"
+):
+    """
+    Calcula la Fuerza Transversal por Viento sobre Equipo (FTVE)
+    y agrega la columna correspondiente al dataframe mec.
+
+    FTVE = q0 * Cxe * Gt * Sxe
+    """
+
+    # ------------------------------------------------------------
+    # Constante
+    # ------------------------------------------------------------
+    Cxe = 2.0
+
+    # ------------------------------------------------------------
+    # Inicializar columna
+    # ------------------------------------------------------------
+    mec[col_salida] = 0.0
+
+    # ------------------------------------------------------------
+    # Obtener q0 desde Tabla B2.4
+    # ------------------------------------------------------------
+    fila_q0 = tabla_B2_4[
+        (tabla_B2_4["Area"] == area) &
+        (tabla_B2_4["Zona"] == zona_viento)
+    ]
+
+    if fila_q0.empty:
+        raise ValueError(
+            f"No se encontró q0 para Zona={zona_viento}, Area={area}"
+        )
+
+    q0 = fila_q0.iloc[0]["q0 (daN / (m ^ 2))"]
+
+    # ------------------------------------------------------------
+    # Altura del reconectador
+    # ------------------------------------------------------------
+    if altura_reconectador is None:
+        he = pd.Series(
+            5.0,
+            index=postes_reco.index
+        )
+    else:
+        he = altura_reconectador.astype(float)
+
+    # ------------------------------------------------------------
+    # Calcular Gt según zona y área
+    # ------------------------------------------------------------
+    def calcular_gt(h):
+        if area == "Rural" and zona_viento == "A":
+            return -0.0002 * h**2 + 0.0232 * h + 1.4661
+
+        if area == "Rural" and zona_viento in ["B", "C"]:
+            return -0.0002 * h**2 + 0.0274 * h + 1.6820
+
+        if area == "Urbana":
+            return -0.0002 * h**2 + 0.0384 * h + 2.9284
+
+        raise ValueError("Combinación Zona/Área no válida")
+
+    Gt = he.apply(calcular_gt)
+
+    # ------------------------------------------------------------
+    # Calcular FTVE solo en postes con reconectador
+    # ------------------------------------------------------------
+    for idx, poste in postes_reco.items():
+
+        mask = mec[col_poste] == poste
+
+        if not mask.any():
+            continue
+
+        ftve = q0 * Cxe * Gt.loc[idx] * Sxe
+        mec.loc[mask, col_salida] = ftve
+
+    return mec
+
 
