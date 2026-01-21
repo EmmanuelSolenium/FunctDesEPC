@@ -911,7 +911,6 @@ def calcular_ftve(
         raise ValueError("Combinación Zona/Área no válida")
 
     Gt = he.apply(calcular_gt)
-    print(Gt)
 
     # ------------------------------------------------------------
     # Calcular FTVE solo en postes con reconectador
