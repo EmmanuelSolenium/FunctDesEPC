@@ -990,7 +990,7 @@ def calcular_flee(
             pe = PE_def
 
         # Cálculo FLEE
-        mec.at[idx, col_flee] = he * le * pe
+        mec.at[idx, col_flee] =  le * pe / he
 
     return mec
 
