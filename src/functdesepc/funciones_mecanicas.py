@@ -694,8 +694,9 @@ def calcular_ftvc_flmc(
                 
             else:
                 T = ta_p.loc[idx] if ta_p.loc[idx] > 0 else td_p.loc[idx]
-                tx = T*np.cos(th) if dt > 0 else T*np.cos(dt)
-                ty = T*np.sin(th) if dt > 0 else T*np.cos(dt)
+                tx = T*np.cos(th) if dt != 0 else T*np.cos(dt)
+                ty = T*np.sin(th) if dt != 0 else T*np.sin(dt)
+                
 
             T_res += np.array([
                 tx,
@@ -782,16 +783,16 @@ l_postes = pd.Series([
 ])
 angulo_b = pd.Series([
     0,   # P01
-    20,   # P02 (vano principal)
-    30,   # P02 (derivación)
+    0,   # P02 (vano principal)
+    11,   # P02 (derivación)
     45,   # P03
     0     # P04 (alineado)
 ])
 f_viento_at = [
     pd.Series([
         20,  # P01
-        30,  # P02 principal
-        10,  # P02 derivación
+        1,  # P02 principal
+        1,  # P02 derivación
         20,  # P03
         10    # P04
     ])
@@ -799,7 +800,7 @@ f_viento_at = [
 f_viento_ad = [
     pd.Series([
         20,  # P01
-        30,  # P02 principal
+        1,  # P02 principal
         0,  # P02 derivación
         30,  # P03
         0    # P04
@@ -809,7 +810,7 @@ tiro_at = [
     pd.Series([
         40,  # P01
         50,  # P02 principal
-        10,   # P02 derivación
+        50,   # P02 derivación
         30,  # P03
         20   # P04
     ])
@@ -817,7 +818,7 @@ tiro_at = [
 tiro_ad = [
     pd.Series([
         40,  # P01
-        50,  # P02 principal
+        0,  # P02 principal
         0,   # P02 derivación
         30,  # P03
         0   # P04
