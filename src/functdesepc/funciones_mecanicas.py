@@ -1036,3 +1036,38 @@ def calcular_fve(
 
     return mec
 
+
+
+def agregar_columna_suma_por_poste(
+    df,
+    col_poste,
+    col_valor,
+    col_salida
+):
+    """
+    Agrega una columna con la suma de valores por poste.
+
+    - Si un poste se repite, se suman los valores asociados
+    - Si no se repite, se conserva el valor original
+
+    Parámetros
+    ----------
+    df : pd.DataFrame
+        DataFrame de entrada
+    col_poste : str
+        Nombre de la columna identificadora del poste
+    col_valor : str
+        Columna cuyos valores se desean sumar
+    col_salida : str
+        Nombre de la nueva columna a crear
+    """
+
+    suma_por_poste = (
+        df
+        .groupby(col_poste)[col_valor]
+        .sum()
+    )
+
+    df[col_salida] = df[col_poste].map(suma_por_poste)
+
+    return df
