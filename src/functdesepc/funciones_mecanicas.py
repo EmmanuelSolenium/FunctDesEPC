@@ -759,7 +759,7 @@ def calcular_ftvc_flmc(
                 # Dirección del viento tomando el vano atrás como base
                 V_vect = v1 if np.dot(v1,[0,1]) >= 0 else v2   
             V_vec += V_vect
-            print(T_res)        
+                    
         if np.linalg.norm(V_vec) == 0:
             e_L = np.array([1.0, 0.0])
         else:
@@ -882,6 +882,7 @@ def calcular_ftve(
         )
 
     q0 = fila_q0.iloc[0]["q0 (daN / (m ^ 2))"]
+    print(q0)
 
     # ------------------------------------------------------------
     # Altura del reconectador
@@ -910,6 +911,7 @@ def calcular_ftve(
         raise ValueError("Combinación Zona/Área no válida")
 
     Gt = he.apply(calcular_gt)
+    print(Gt)
 
     # ------------------------------------------------------------
     # Calcular FTVE solo en postes con reconectador
@@ -923,6 +925,7 @@ def calcular_ftve(
 
         ftve = q0 * Cxe * Gt.loc[idx] * Sxe
         mec.loc[mask, col_salida] = ftve
+        print(ftve)
 
     return mec
 
