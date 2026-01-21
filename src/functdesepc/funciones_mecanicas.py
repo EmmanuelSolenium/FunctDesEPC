@@ -923,9 +923,9 @@ def calcular_ftve(
         if not mask.any():
             continue
 
-        ftve = q0 * Cxe * Gt.loc[idx] * Sxe
+        ftve = q0 * Cxe * Gt.loc[idx] * Sxe.loc[idx]
         mec.loc[mask, col_salida] = ftve
-        print(ftve)
+        
 
     return mec
 
