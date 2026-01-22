@@ -415,4 +415,4 @@ tabla_B2_4 = pd.DataFrame({
     ]
 })
 
-print(tabla_B2_4)
+""" print(tabla_B2_4) """

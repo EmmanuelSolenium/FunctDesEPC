@@ -1113,3 +1113,67 @@ def calcular_FTEC(
     )
 
     return mec
+
+
+
+
+def calcular_EVU(
+    mec,
+    postes,
+    altura_postes,
+    carga_rotura_poste,
+    tabla_capacidad,
+    Hn=None,
+    nombre_columna="E.V.U"
+):
+    """
+    Calcula el Esfuerzo Vertical Último (E.V.U) por poste.
+    """
+
+    mec[nombre_columna] = 0.0
+
+    # Columnas de referencia Hn
+    hn_offsets = {
+        "hN": 0.0,
+        "hN_0_4m": 0.4,
+        "hN_0_8m": 0.8,
+        "hN_3_3m": 3.3
+    }
+
+    for idx in postes.index:
+
+        poste = postes.loc[idx]
+        h_poste = float(altura_postes.loc[idx])
+        carga = float(carga_rotura_poste.loc[idx])
+
+        # Hn efectivo
+        if Hn is None:
+            hn_val = h_poste - 2.0
+        else:
+            hn_val = float(Hn.loc[idx])
+
+        # Buscar fila correspondiente en tabla
+        fila = tabla_capacidad[
+            (tabla_capacidad["altura_m"] == h_poste) &
+            (tabla_capacidad["carga_flexion_daN"] == carga)
+        ]
+
+        if fila.empty:
+            mec.loc[mec[postes.name] == poste, nombre_columna] = np.nan
+            continue
+
+        fila = fila.iloc[0]
+
+        # Selección de columna Hn más cercana
+        diferencias = {
+            col: abs(hn_val - (h_poste - off))
+            for col, off in hn_offsets.items()
+        }
+
+        col_sel = min(diferencias, key=diferencias.get)
+
+        EVU = fila[col_sel]
+
+        mec.loc[mec[postes.name] == poste, nombre_columna] = EVU
+
+    return mec
