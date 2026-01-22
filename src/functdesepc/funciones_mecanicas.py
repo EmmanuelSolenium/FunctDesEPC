@@ -1041,7 +1041,7 @@ def calcular_fve(
 import pandas as pd
 import numpy as np
 
-def agregar_columna_suma_desde_series(
+def agregar_columna_suma(
     df,
     col_poste_df,
     postes_rep,     # pd.Series con repeticiones
