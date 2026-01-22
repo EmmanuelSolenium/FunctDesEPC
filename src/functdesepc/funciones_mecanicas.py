@@ -37,7 +37,7 @@ def suma_vectores(magnitudes, angulos_relativos_deg):
     Parámetros:
         magnitudes (list or array): magnitudes de los vectores [m1, m2, ..., mn]
         angulos_relativos_deg (list or array): ángulos relativos respecto al primer vector (en grados)
-                                               Debe tener longitud n, donde el primer ángulo debe ser 0.
+        Debe tener longitud n, donde el primer ángulo debe ser 0.
 
     Retorna:
         tuple: (magnitud_total, suma_x, suma_y)
@@ -951,7 +951,7 @@ def calcular_flee(
     - Valores por defecto (solo para postes con reconectador):
         * LE = 0.75 m
         * HE = 5.0 m
-        * PE = 600 daN
+        * PE = 600 kg
     """
 
     # Inicializar columna
@@ -1056,3 +1056,60 @@ def agregar_columna_suma(
 
     return df
 
+import numpy as np
+import pandas as pd
+import re
+
+def calcular_FTEC(
+    mec,
+    armados,            # Serie SIN repetición
+    Fvc,                # Serie SIN repetición
+    altura_postes,      # Serie SIN repetición
+    d_cruceta=1.12,     # float o Serie
+    nombre_columna="FTEC"
+):
+    """
+    Calcula la Fuerza por Excentricidad del peso de los conductores (FTEC).
+
+    Solo aplica para postes con armado tipo bandera.
+    """
+
+    # ---------------------------------------------------------
+    # Preparar d_cruceta
+    # ---------------------------------------------------------
+    if isinstance(d_cruceta, pd.Series):
+        d = d_cruceta.reindex(mec.index).astype(float)
+    else:
+        d = pd.Series(d_cruceta, index=mec.index, dtype=float)
+
+    # ---------------------------------------------------------
+    # Identificación de armados tipo bandera
+    # patrón: 1##-#
+    # ---------------------------------------------------------
+    def es_bandera(codigo):
+        if pd.isna(codigo):
+            return False
+        m = re.search(r'(\d{3}-\d)$', str(codigo))
+        if not m:
+            return False
+        return m.group(1)[0] == "1"
+
+    bandera = armados.apply(es_bandera)
+
+    # ---------------------------------------------------------
+    # Inicializar columna
+    # ---------------------------------------------------------
+    mec[nombre_columna] = 0.0
+
+    # ---------------------------------------------------------
+    # Cálculo FTEC solo en postes bandera
+    # ---------------------------------------------------------
+    mask = bandera.values
+
+    mec.loc[mask, nombre_columna] = (
+        Fvc.loc[mask].astype(float)
+        * d.loc[mask]
+        / altura_postes.loc[mask].astype(float)
+    )
+
+    return mec
