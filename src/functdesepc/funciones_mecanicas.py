@@ -1038,36 +1038,50 @@ def calcular_fve(
 
 
 
-def agregar_columna_suma_por_poste(
+import pandas as pd
+import numpy as np
+
+def agregar_columna_suma_desde_series(
     df,
-    col_poste,
-    col_valor,
+    col_poste_df,
+    postes_rep,     # pd.Series con repeticiones
+    valores_rep,    # pd.Series con valores a sumar
     col_salida
 ):
     """
-    Agrega una columna con la suma de valores por poste.
-
-    - Si un poste se repite, se suman los valores asociados
-    - Si no se repite, se conserva el valor original
+    Agrega una columna al dataframe sumando valores provenientes
+    de dos series externas (postes y valores).
 
     Parámetros
     ----------
     df : pd.DataFrame
-        DataFrame de entrada
-    col_poste : str
-        Nombre de la columna identificadora del poste
-    col_valor : str
-        Columna cuyos valores se desean sumar
+        DataFrame base (sin repetición de postes)
+    col_poste_df : str
+        Nombre de la columna de postes en df
+    postes_rep : pd.Series
+        Serie con nombres de postes (puede tener repeticiones)
+    valores_rep : pd.Series
+        Serie de valores asociados a postes_rep
     col_salida : str
-        Nombre de la nueva columna a crear
+        Nombre de la columna de salida
     """
 
+    # Validaciones mínimas
+    if len(postes_rep) != len(valores_rep):
+        raise ValueError("postes_rep y valores_rep deben tener la misma longitud")
+
+    # Suma por poste a partir de las series
     suma_por_poste = (
-        df
-        .groupby(col_poste)[col_valor]
+        pd.DataFrame({
+            "poste": postes_rep.values,
+            "valor": valores_rep.values
+        })
+        .groupby("poste", as_index=True)["valor"]
         .sum()
     )
 
-    df[col_salida] = df[col_poste].map(suma_por_poste)
+    # Mapear al dataframe base
+    df[col_salida] = df[col_poste_df].map(suma_por_poste).fillna(0)
 
     return df
+
