@@ -1116,7 +1116,6 @@ def calcular_FTEC(
 
 
 
-
 def calcular_EVU(
     mec,
     postes,
@@ -1127,7 +1126,9 @@ def calcular_EVU(
     nombre_columna="E.V.U."
 ):
     """
-    Calcula el Esfuerzo Vertical Último (E.V.U) por poste.
+    Calcula el Esfuerzo Vertical Último (E.V.U) por poste,
+    tomando de la tabla el valor MENOR más cercano de altura
+    y carga de rotura.
     """
 
     mec[nombre_columna] = 0.0
@@ -1146,27 +1147,51 @@ def calcular_EVU(
         h_poste = float(altura_postes.loc[idx])
         carga = float(carga_rotura_poste.loc[idx])
 
-        # Hn efectivo
+        # ---------------- Hn efectivo ----------------
         if Hn is None:
             hn_val = h_poste - 2.0
         else:
             hn_val = float(Hn.loc[idx])
 
-        # Buscar fila correspondiente en tabla
-        fila = tabla_capacidad[
-            (tabla_capacidad["altura_m"] == h_poste) &
-            (tabla_capacidad["carga_flexion_daN"] == carga)
+        # ------------------------------------------------
+        # 1) Selección de altura menor más cercana
+        # ------------------------------------------------
+        alturas_validas = tabla_capacidad[
+            tabla_capacidad["altura_m"] <= h_poste
         ]
 
-        if fila.empty:
+        if alturas_validas.empty:
             mec.loc[mec[postes.name] == poste, nombre_columna] = np.nan
             continue
 
-        fila = fila.iloc[0]
+        altura_sel = alturas_validas["altura_m"].max()
 
-        # Selección de columna Hn más cercana
+        tabla_altura = alturas_validas[
+            alturas_validas["altura_m"] == altura_sel
+        ]
+
+        # ------------------------------------------------
+        # 2) Selección de carga menor más cercana
+        # ------------------------------------------------
+        cargas_validas = tabla_altura[
+            tabla_altura["carga_flexion_daN"] <= carga
+        ]
+
+        if cargas_validas.empty:
+            mec.loc[mec[postes.name] == poste, nombre_columna] = np.nan
+            continue
+
+        carga_sel = cargas_validas["carga_flexion_daN"].max()
+
+        fila = cargas_validas[
+            cargas_validas["carga_flexion_daN"] == carga_sel
+        ].iloc[0]
+
+        # ------------------------------------------------
+        # 3) Selección de columna Hn más cercana
+        # ------------------------------------------------
         diferencias = {
-            col: abs(hn_val - (h_poste - off))
+            col: abs(hn_val - (altura_sel - off))
             for col, off in hn_offsets.items()
         }
 
