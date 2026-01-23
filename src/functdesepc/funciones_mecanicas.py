@@ -221,7 +221,7 @@ def identificar_poste(codigo: str, detallado: bool = False):
         "Tensión del Circuito": tension
     }
 
-""" print(identificar_poste("MTF331-2",True)) """
+""" print(identificar_poste("MTF331-2")) """
 
 
 def calcular_cantones(armados, rutas, postes, vanos_adelante, detallado=False):
@@ -1200,5 +1200,81 @@ def calcular_EVU(
         EVU = fila[col_sel]
 
         mec.loc[mec[postes.name] == poste, nombre_columna] = EVU
+
+    return mec
+
+
+
+def calcular_FI(
+    mec: pd.DataFrame,
+    postes_orden: pd.Series,
+    postes_export: pd.Series,
+    tipo_poste_export: pd.Series,
+    tiro_adelante: pd.Series,
+    tiro_atras: pd.Series,
+    nombre_columna: str = "FI"
+):
+    """
+    Calcula el Esfuerzo Horizontal Longitudinal por 50% de desequilibrio de tracciones.
+
+    Parámetros
+    ----------
+    mec : pd.DataFrame
+        DataFrame mecánico base (se modifica in-place).
+    postes_orden : pd.Series
+        Serie de postes sin repeticiones, en el orden final del DataFrame mec.
+    postes_export : pd.Series
+        Serie de postes exportados (puede tener repeticiones).
+    tipo_poste_export : pd.Series
+        Serie con el tipo de poste correspondiente a cada fila exportada.
+    tiro_adelante : pd.Series
+        Serie de tensiones adelante por fila exportada.
+    tiro_atras : pd.Series
+        Serie de tensiones atrás por fila exportada.
+    nombre_columna : str, optional
+        Nombre de la columna a crear. Default "FI".
+
+    Retorna
+    -------
+    pd.DataFrame
+        DataFrame mec con la columna FI añadida.
+    """
+
+    # Inicialización conservadora
+    mec[nombre_columna] = 0.0
+
+    # Postes a los que aplica el criterio
+    tipos_validos = {"ANC", "FL"}
+
+    # Iteración por poste final (sin repeticiones)
+    for poste in postes_orden:
+
+        # Filas exportadas correspondientes a este poste
+        mask = postes_export == poste
+
+        if not mask.any():
+            continue
+
+        # Tipo de poste (puede repetirse, se toma el conjunto)
+        tipos = set(tipo_poste_export.loc[mask].dropna().unique())
+
+        # Si el poste no es ANC ni FL → FI = 0
+        if tipos.isdisjoint(tipos_validos):
+            continue
+
+        # Tensiones asociadas a todas las repeticiones
+        ta = tiro_adelante.loc[mask].abs()
+        td = tiro_atras.loc[mask].abs()
+
+        # Máxima tensión considerando adelante y atrás
+        t_max = max(ta.max(skipna=True), td.max(skipna=True))
+
+        if pd.isna(t_max):
+            continue
+
+        FI = 0.5 * t_max
+
+        # Escritura por poste (nunca por índice)
+        mec.loc[mec[postes_orden.name] == poste, nombre_columna] = FI
 
     return mec
