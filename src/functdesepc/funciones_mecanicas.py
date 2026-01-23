@@ -1124,7 +1124,7 @@ def calcular_EVU(
     carga_rotura_poste,
     tabla_capacidad,
     Hn=None,
-    nombre_columna="E.V.U"
+    nombre_columna="E.V.U."
 ):
     """
     Calcula el Esfuerzo Vertical Último (E.V.U) por poste.
