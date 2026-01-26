@@ -1374,22 +1374,28 @@ def calcular_Mut(
     nombre_columna="Mut"
 ):
     """
-    Calcula el Momento Último de Torsión (Mut) por poste,
-    seleccionando de forma conservadora el valor correspondiente
-    a la mayor altura y carga de rotura menores o iguales a las del poste.
+    Calcula el Momento Último de Torsión (Mut) por poste.
+
+    Criterio:
+    1) Se selecciona la mayor altura de tabla <= altura del poste.
+    2) Para esa altura:
+       - Si existe alguna carga con diferencia relativa <= 5% respecto
+         a la carga del poste, se toma la más cercana (aunque sea mayor).
+       - Si no, se toma la mayor carga menor inmediata.
+    3) Si la combinación no existe, se itera hacia cargas menores
+       hasta encontrar una fila válida.
     """
 
-    # Inicialización conservadora
     mec[nombre_columna] = 0.0
 
     for idx in postes.index:
 
         poste = postes.loc[idx]
         h_poste = float(altura_postes.loc[idx])
-        carga = float(carga_rotura_poste.loc[idx])
+        carga_poste = float(carga_rotura_poste.loc[idx])
 
         # ------------------------------------------------
-        # 1) Selección de altura menor o igual más cercana
+        # 1) Altura menor o igual más cercana
         # ------------------------------------------------
         alturas_validas = tabla_capacidad[
             tabla_capacidad["altura_m"] <= h_poste
@@ -1406,24 +1412,56 @@ def calcular_Mut(
         ]
 
         # ------------------------------------------------
-        # 2) Selección de carga menor o igual más cercana
+        # 2) Selección de carga con criterio 5%
         # ------------------------------------------------
-        cargas_validas = tabla_altura[
-            tabla_altura["carga_flexion_daN"] <= carga
-        ]
+        cargas_tabla = tabla_altura["carga_flexion_daN"].unique()
 
-        if cargas_validas.empty:
+        if len(cargas_tabla) == 0:
             mec.loc[mec[postes.name] == poste, nombre_columna] = np.nan
             continue
 
-        carga_sel = cargas_validas["carga_flexion_daN"].max()
+        # Diferencias relativas
+        diffs = {
+            c: abs(c - carga_poste) / carga_poste
+            for c in cargas_tabla
+        }
 
-        fila = cargas_validas[
-            cargas_validas["carga_flexion_daN"] == carga_sel
-        ].iloc[0]
+        # Cargas dentro del 5%
+        cargas_5 = [c for c, d in diffs.items() if d <= 0.05]
+
+        if cargas_5:
+            # Más cercana, aunque sea mayor
+            carga_sel = min(cargas_5, key=lambda c: abs(c - carga_poste))
+        else:
+            # Piso inmediato
+            cargas_menores = [c for c in cargas_tabla if c <= carga_poste]
+            if not cargas_menores:
+                mec.loc[mec[postes.name] == poste, nombre_columna] = np.nan
+                continue
+            carga_sel = max(cargas_menores)
 
         # ------------------------------------------------
-        # 3) Momento último de torsión
+        # 3) Fallback si la combinación no existe
+        # ------------------------------------------------
+        cargas_ordenadas = sorted(cargas_tabla, reverse=True)
+
+        fila = None
+        for c in cargas_ordenadas:
+            if c > carga_sel:
+                continue
+            candidata = tabla_altura[
+                tabla_altura["carga_flexion_daN"] == c
+            ]
+            if not candidata.empty:
+                fila = candidata.iloc[0]
+                break
+
+        if fila is None:
+            mec.loc[mec[postes.name] == poste, nombre_columna] = np.nan
+            continue
+
+        # ------------------------------------------------
+        # 4) Momento último de torsión
         # ------------------------------------------------
         Mut = fila["momento_torsion_daN_m"]
 
