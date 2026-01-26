@@ -1306,7 +1306,7 @@ def calcular_mr(
     if len(cols_tiros) == 0:
         return mec
 
-    # Determinar si el brazo es numérico o armado (string)
+    # Identificar si el brazo es numérico por poste
     brazo_es_numerico = brazo.map(
         lambda x: isinstance(x, (int, float)) and not pd.isna(x)
     )
@@ -1337,14 +1337,22 @@ def calcular_mr(
         if pd.isna(t_max):
             continue
 
-        # Obtención del brazo
+        # Índice del poste en la serie ordenada
         idx_poste = postes_orden.index[postes_orden == poste][0]
 
+        # Obtención del brazo
         if brazo_es_numerico.loc[idx_poste]:
             brazo_p = brazo.loc[idx_poste]
         else:
             armado = str(brazo.loc[idx_poste]).strip()
-            if armado.startswith(("6", "7")):
+
+            primer_digito = None
+            for ch in armado:
+                if ch.isdigit():
+                    primer_digito = ch
+                    break
+
+            if primer_digito in {"6", "7"}:
                 brazo_p = 0.52
             else:
                 brazo_p = 1.12
