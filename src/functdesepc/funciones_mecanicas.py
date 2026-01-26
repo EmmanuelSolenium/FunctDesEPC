@@ -999,7 +999,7 @@ def calcular_fve(
     postes_reco,
     PE=None,                 # peso del equipo por poste (daN)
     col_poste="Numero de apoyo",
-    col_fve="FVE"
+    col_fve="Fve"
 ):
     """
     Calcula la Fuerza Vertical por Equipos (FVE).
@@ -1213,7 +1213,7 @@ def calcular_FI(
     df_tiros,
     nombre_tiro_ad,
     nombre_tiro_at,
-    nombre_columna="FI"
+    nombre_columna="Fl"
 ):
     """
     Calcula el Esfuerzo Horizontal Longitudinal por 50% de desequilibrio de tracciones.
