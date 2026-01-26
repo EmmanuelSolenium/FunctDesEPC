@@ -1210,16 +1210,18 @@ def calcular_FI(
     postes_orden,
     postes_export,
     tipo_poste_orden,
-    tiro_adelante,
-    tiro_atras,
+    df_tiros,
+    nombre_tiro_ad,
+    nombre_tiro_at,
     nombre_columna="FI"
 ):
     """
     Calcula el Esfuerzo Horizontal Longitudinal por 50% de desequilibrio de tracciones.
 
-    Aplica solo a postes tipo ANC o FL.
-    Para cada poste se toma la mitad de la máxima tensión (adelante o atrás)
-    considerando todas sus repeticiones.
+    - Aplica solo a postes tipo ANC o FL
+    - Busca el máximo absoluto entre una cantidad indefinida de columnas
+      identificadas por nombres en un MultiIndex
+    - Considera todas las repeticiones del poste
     """
 
     # Inicialización conservadora
@@ -1227,11 +1229,22 @@ def calcular_FI(
 
     tipos_validos = {"ANC", "FL"}
 
+    # Identificación de columnas relevantes en el MultiIndex
+    cols_ad = [c for c in df_tiros.columns if c[1] == nombre_tiro_ad]
+    cols_at = [c for c in df_tiros.columns if c[1] == nombre_tiro_at]
+
+    cols_tiros = cols_ad + cols_at
+
+    if len(cols_tiros) == 0:
+        return mec
+
     # Iteración por poste final (sin repeticiones)
     for poste in postes_orden:
 
-        # Tipo del poste según lista ordenada
-        tipo = tipo_poste_orden.loc[tipo_poste_orden.index[postes_orden == poste][0]]
+        # Tipo de poste (alineado con postes_orden)
+        tipo = tipo_poste_orden.loc[
+            tipo_poste_orden.index[postes_orden == poste][0]
+        ]
 
         if tipo not in tipos_validos:
             continue
@@ -1242,12 +1255,13 @@ def calcular_FI(
         if not mask.any():
             continue
 
-        # Tensiones de todas las repeticiones
-        ta = tiro_adelante.loc[mask].abs()
-        td = tiro_atras.loc[mask].abs()
+        # Subconjunto de tiros:
+        # filas → repeticiones
+        # columnas → todos los tiros adelante y atrás
+        tiros_poste = df_tiros.loc[mask, cols_tiros]
 
-        # Máxima tensión considerando adelante y atrás
-        t_max = max(ta.max(skipna=True), td.max(skipna=True))
+        # Máximo absoluto global
+        t_max = tiros_poste.abs().to_numpy().max()
 
         if pd.isna(t_max):
             continue
@@ -1258,4 +1272,3 @@ def calcular_FI(
         mec.loc[mec[postes_orden.name] == poste, nombre_columna] = FI
 
     return mec
-
