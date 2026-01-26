@@ -1282,7 +1282,7 @@ def calcular_mr(
     nombre_tiro_ad,
     nombre_tiro_at,
     brazo,
-    nombre_columna="mr"
+    nombre_columna="Mr"
 ):
     """
     Calcula el momento torsor mr a partir del máximo desequilibrio de tensiones.
