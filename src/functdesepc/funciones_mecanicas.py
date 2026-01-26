@@ -1272,3 +1272,87 @@ def calcular_FI(
         mec.loc[mec[postes_orden.name] == poste, nombre_columna] = FI
 
     return mec
+
+def calcular_mr(
+    mec,
+    postes_orden,
+    postes_export,
+    tipo_poste_orden,
+    df_tiros,
+    nombre_tiro_ad,
+    nombre_tiro_at,
+    brazo,
+    nombre_columna="mr"
+):
+    """
+    Calcula el momento torsor mr a partir del máximo desequilibrio de tensiones.
+
+    - Aplica solo a postes tipo ANC o FL
+    - El brazo puede ser:
+        * una Series numérica (brazo por poste)
+        * una Series de armados (string), de la cual se deduce el brazo
+    """
+
+    # Inicialización conservadora
+    mec[nombre_columna] = 0.0
+
+    tipos_validos = {"ANC", "FL"}
+
+    # Identificación de columnas de tensiones en el MultiIndex
+    cols_ad = [c for c in df_tiros.columns if c[1] == nombre_tiro_ad]
+    cols_at = [c for c in df_tiros.columns if c[1] == nombre_tiro_at]
+    cols_tiros = cols_ad + cols_at
+
+    if len(cols_tiros) == 0:
+        return mec
+
+    # Determinar si el brazo es numérico o armado (string)
+    brazo_es_numerico = brazo.map(
+        lambda x: isinstance(x, (int, float)) and not pd.isna(x)
+    )
+
+    # Iteración por poste final
+    for poste in postes_orden:
+
+        # Tipo de poste
+        tipo = tipo_poste_orden.loc[
+            tipo_poste_orden.index[postes_orden == poste][0]
+        ]
+
+        if tipo not in tipos_validos:
+            continue
+
+        # Filas exportadas correspondientes a este poste
+        mask = postes_export == poste
+
+        if not mask.any():
+            continue
+
+        # Subconjunto de tensiones del poste
+        tiros_poste = df_tiros.loc[mask, cols_tiros]
+
+        # Máximo absoluto global
+        t_max = tiros_poste.abs().to_numpy().max()
+
+        if pd.isna(t_max):
+            continue
+
+        # Obtención del brazo
+        idx_poste = postes_orden.index[postes_orden == poste][0]
+
+        if brazo_es_numerico.loc[idx_poste]:
+            brazo_p = brazo.loc[idx_poste]
+        else:
+            armado = str(brazo.loc[idx_poste]).strip()
+            if armado.startswith(("6", "7")):
+                brazo_p = 0.52
+            else:
+                brazo_p = 1.12
+
+        # Momento torsor
+        mr = t_max * brazo_p
+
+        # Escritura final por poste
+        mec.loc[mec[postes_orden.name] == poste, nombre_columna] = mr
+
+    return mec
