@@ -240,7 +240,7 @@ def df_tabla_afinia_capacidad(tabla_dict):
 
 TABLA_AFINIA_CAPACIDAD_MECANICA_DF = df_tabla_afinia_capacidad(TABLA_AFINIA_CAPACIDAD_MECANICA)
 
-""" print(TABLA_AFINIA_CAPACIDAD_MECANICA_DF) """
+print(TABLA_AFINIA_CAPACIDAD_MECANICA_DF)
 
 # ============================================================
 #  TABLA 46 - CAPACIDAD VERTICAL DE POSTES CON RETENIDAS (AFINIA)

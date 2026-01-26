@@ -1364,3 +1364,69 @@ def calcular_mr(
         mec.loc[mec[postes_orden.name] == poste, nombre_columna] = mr
 
     return mec
+
+def calcular_Mut(
+    mec,
+    postes,
+    altura_postes,
+    carga_rotura_poste,
+    tabla_capacidad,
+    nombre_columna="Mut"
+):
+    """
+    Calcula el Momento Último de Torsión (Mut) por poste,
+    seleccionando de forma conservadora el valor correspondiente
+    a la mayor altura y carga de rotura menores o iguales a las del poste.
+    """
+
+    # Inicialización conservadora
+    mec[nombre_columna] = 0.0
+
+    for idx in postes.index:
+
+        poste = postes.loc[idx]
+        h_poste = float(altura_postes.loc[idx])
+        carga = float(carga_rotura_poste.loc[idx])
+
+        # ------------------------------------------------
+        # 1) Selección de altura menor o igual más cercana
+        # ------------------------------------------------
+        alturas_validas = tabla_capacidad[
+            tabla_capacidad["altura_m"] <= h_poste
+        ]
+
+        if alturas_validas.empty:
+            mec.loc[mec[postes.name] == poste, nombre_columna] = np.nan
+            continue
+
+        altura_sel = alturas_validas["altura_m"].max()
+
+        tabla_altura = alturas_validas[
+            alturas_validas["altura_m"] == altura_sel
+        ]
+
+        # ------------------------------------------------
+        # 2) Selección de carga menor o igual más cercana
+        # ------------------------------------------------
+        cargas_validas = tabla_altura[
+            tabla_altura["carga_flexion_daN"] <= carga
+        ]
+
+        if cargas_validas.empty:
+            mec.loc[mec[postes.name] == poste, nombre_columna] = np.nan
+            continue
+
+        carga_sel = cargas_validas["carga_flexion_daN"].max()
+
+        fila = cargas_validas[
+            cargas_validas["carga_flexion_daN"] == carga_sel
+        ].iloc[0]
+
+        # ------------------------------------------------
+        # 3) Momento último de torsión
+        # ------------------------------------------------
+        Mut = fila["momento_torsion_daN_m"]
+
+        mec.loc[mec[postes.name] == poste, nombre_columna] = Mut
+
+    return mec
