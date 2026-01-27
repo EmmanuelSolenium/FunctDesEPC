@@ -1470,7 +1470,7 @@ def calcular_Mut(
     return mec
 
 def crear_fase_mensajero(
-    mec,
+    carac_postes,
     postes_orden,
     postes_export,
     texto_export,
@@ -1481,12 +1481,14 @@ def crear_fase_mensajero(
     Crea las columnas 'Fase' y 'Mensajero' a partir de un texto exportado
     con formato: 'FASE / MENSAJERO'.
 
-    Aplica consolidación por poste cuando los datos provienen de exportación.
+    Los datos provienen de exportación (pueden estar desordenados y repetidos).
+    Para postes repetidos, se toma el PRIMER valor válido encontrado
+    en el orden de la exportación.
     """
 
     # Inicialización
-    mec[col_fase] = np.nan
-    mec[col_mensajero] = np.nan
+    carac_postes[col_fase] = np.nan
+    carac_postes[col_mensajero] = np.nan
 
     # Validación: más de un separador " / "
     n_sep = texto_export.str.count(" / ")
@@ -1498,10 +1500,21 @@ def crear_fase_mensajero(
         )
 
     # Separación segura
-    fase = texto_export.str.split(" / ", expand=True).iloc[:, 0]
-    mensajero = texto_export.str.split(" / ", expand=True).iloc[:, 1]
+    partes = texto_export.str.split(" / ", expand=True)
+    fase = partes.iloc[:, 0]
+    mensajero = partes.iloc[:, 1]
 
-    # Iteración por poste final (sin repeticiones)
+    def primer_valor_valido(serie):
+        for v in serie:
+            if pd.isna(v):
+                continue
+            v_str = str(v).strip()
+            if v_str in {"", "-", "0"}:
+                continue
+            return v_str
+        return np.nan
+
+    # Iteración por poste final (ordenado)
     for poste in postes_orden:
 
         mask = postes_export == poste
@@ -1509,15 +1522,15 @@ def crear_fase_mensajero(
         if not mask.any():
             continue
 
-        # Valores únicos no nulos (conservador)
-        fase_vals = fase.loc[mask].dropna().unique()
-        mensajero_vals = mensajero.loc[mask].dropna().unique()
+        fase_sel = primer_valor_valido(fase.loc[mask])
+        mensajero_sel = primer_valor_valido(mensajero.loc[mask])
 
-        fase_sel = fase_vals[0] if len(fase_vals) > 0 else np.nan
-        mensajero_sel = mensajero_vals[0] if len(mensajero_vals) > 0 else np.nan
+        carac_postes.loc[
+            carac_postes[postes_orden.name] == poste, col_fase
+        ] = fase_sel
 
-        mec.loc[mec[postes_orden.name] == poste, col_fase] = fase_sel
-        mec.loc[mec[postes_orden.name] == poste, col_mensajero] = mensajero_sel
+        carac_postes.loc[
+            carac_postes[postes_orden.name] == poste, col_mensajero
+        ] = mensajero_sel
 
-    return mec
-
+    return carac_postes
