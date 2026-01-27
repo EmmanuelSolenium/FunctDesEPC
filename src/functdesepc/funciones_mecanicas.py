@@ -1468,3 +1468,56 @@ def calcular_Mut(
         mec.loc[mec[postes.name] == poste, nombre_columna] = Mut
 
     return mec
+
+def crear_fase_mensajero(
+    mec,
+    postes_orden,
+    postes_export,
+    texto_export,
+    col_fase="Fase",
+    col_mensajero="Mensajero"
+):
+    """
+    Crea las columnas 'Fase' y 'Mensajero' a partir de un texto exportado
+    con formato: 'FASE / MENSAJERO'.
+
+    Aplica consolidación por poste cuando los datos provienen de exportación.
+    """
+
+    # Inicialización
+    mec[col_fase] = np.nan
+    mec[col_mensajero] = np.nan
+
+    # Validación: más de un separador " / "
+    n_sep = texto_export.str.count(" / ")
+
+    if (n_sep > 1).any():
+        filas_err = texto_export[n_sep > 1]
+        raise ValueError(
+            f"Error: se encontró más de un ' / ' en los siguientes registros:\n{filas_err}"
+        )
+
+    # Separación segura
+    fase = texto_export.str.split(" / ", expand=True).iloc[:, 0]
+    mensajero = texto_export.str.split(" / ", expand=True).iloc[:, 1]
+
+    # Iteración por poste final (sin repeticiones)
+    for poste in postes_orden:
+
+        mask = postes_export == poste
+
+        if not mask.any():
+            continue
+
+        # Valores únicos no nulos (conservador)
+        fase_vals = fase.loc[mask].dropna().unique()
+        mensajero_vals = mensajero.loc[mask].dropna().unique()
+
+        fase_sel = fase_vals[0] if len(fase_vals) > 0 else np.nan
+        mensajero_sel = mensajero_vals[0] if len(mensajero_vals) > 0 else np.nan
+
+        mec.loc[mec[postes_orden.name] == poste, col_fase] = fase_sel
+        mec.loc[mec[postes_orden.name] == poste, col_mensajero] = mensajero_sel
+
+    return mec
+
