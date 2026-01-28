@@ -1539,59 +1539,44 @@ def determinar_tense(
     carac_postes,
     postes_orden,
     postes_export,
-    armado_orden,
+    armado_export,
     tiro_adelante_export,
     tiro_atras_export,
     tabla_tiro_rotura,
-    cable,
-    col_tense="Tense"
+    cable_export,
+    nombre_columna="Tense"
 ):
     """
-    Determina el tipo de tensado ("Normal" o "Reducido") por poste.
+    Determina el tipo de tense por poste ("Normal" o "Reducido").
 
     Reglas:
-    1) Si el primer dígito numérico del armado es 6 o 7 → "Normal"
-    2) En otro caso:
-       - Se obtiene la carga de rotura del cable desde la tabla
-       - Se toma el máximo tiro (adelante / atrás) asociado al poste
-       - Si tiro_max > 8% carga_rotura → "Normal"
-         caso contrario → "Reducido"
-
-    Los datos de tiros y armado provienen de exportación:
-    pueden estar desordenados y repetidos.
-    Para postes repetidos se toma el PRIMER valor válido.
+    - Datos provenientes de exportación (postes repetidos y desordenados).
+    - Se evalúa por poste ordenado.
+    - Si el primer dígito numérico del armado es 6 o 7 -> "Normal".
+    - En caso contrario:
+        * Se toma el mayor tiro absoluto del poste.
+        * Se obtiene la carga de rotura de TODOS los cables del poste.
+        * Se toma la mayor carga de rotura.
+        * Si tiro_max > 8% de carga_rotura -> "Normal"
+          de lo contrario -> "Reducido".
     """
 
-    carac_postes[col_tense] = np.nan
+    # Asegurar que la columna exista y sea tipo object
+    carac_postes[nombre_columna] = pd.Series(index=carac_postes.index, dtype="object")
 
-    # -----------------------------
-    # 1) Obtener carga de rotura del cable
-    # -----------------------------
-    fila_cable = tabla_tiro_rotura[
-        tabla_tiro_rotura["Conductor"].str.contains(cable, case=False, na=False)
-    ]
+    # Función interna: validar strings
+    def es_valido(x):
+        return (
+            pd.notna(x)
+            and isinstance(x, str)
+            and x.strip() != ""
+            and x.strip() != "-"
+            and x.strip() != "0"
+        )
 
-    if fila_cable.empty:
-        raise ValueError(f"No se encontró el cable '{cable}' en la tabla de tiro de rotura")
-
-    carga_rotura = float(fila_cable.iloc[0]["Carga de Rotura (daN)"])
-
-    # -----------------------------
-    # Función auxiliar: primer valor válido
-    # -----------------------------
-    def primer_valor_valido(serie):
-        for v in serie:
-            if pd.isna(v):
-                continue
-            v_str = str(v).strip()
-            if v_str in {"", "-", "0"}:
-                continue
-            return v
-        return np.nan
-
-    # -----------------------------
-    # Iteración por poste ordenado
-    # -----------------------------
+    # ---------------------------------------------------------
+    # Iteración por poste ORDENADO
+    # ---------------------------------------------------------
     for poste in postes_orden:
 
         mask = postes_export == poste
@@ -1599,45 +1584,90 @@ def determinar_tense(
         if not mask.any():
             continue
 
-        # ---- Armado
-        armado = primer_valor_valido(armado_orden.loc[mask])
+        # -----------------------------------------------------
+        # 1) Armado → primer valor válido
+        # -----------------------------------------------------
+        armados = armado_export.loc[mask].dropna()
 
-        if pd.isna(armado):
+        armado_valido = None
+        for a in armados:
+            if es_valido(a):
+                armado_valido = a
+                break
+
+        # Si no hay armado válido → no se puede evaluar
+        if armado_valido is None:
+            carac_postes.loc[
+                carac_postes[postes_orden.name] == poste, nombre_columna
+            ] = np.nan
             continue
 
         # Extraer primer dígito numérico del armado
-        digitos = [c for c in str(armado) if c.isdigit()]
-
-        if digitos and digitos[0] in {"6", "7"}:
+        m = re.search(r"\d", armado_valido)
+        if m and m.group() in {"6", "7"}:
             carac_postes.loc[
-                carac_postes[postes_orden.name] == poste, col_tense
+                carac_postes[postes_orden.name] == poste, nombre_columna
             ] = "Normal"
             continue
 
-        # ---- Tiros
-        tiro_adelante = pd.to_numeric(
-            tiro_adelante_export.loc[mask], errors="coerce"
-        )
-        tiro_atras = pd.to_numeric(
-            tiro_atras_export.loc[mask], errors="coerce"
-        )
+        # -----------------------------------------------------
+        # 2) Tiro máximo del poste
+        # -----------------------------------------------------
+        tiros = pd.concat([
+            tiro_adelante_export.loc[mask],
+            tiro_atras_export.loc[mask]
+        ])
 
-        tiro_max = max(
-            primer_valor_valido(tiro_adelante),
-            primer_valor_valido(tiro_atras)
-        )
+        tiros = pd.to_numeric(tiros, errors="coerce").abs().dropna()
 
-        if pd.isna(tiro_max):
+        if tiros.empty:
+            carac_postes.loc[
+                carac_postes[postes_orden.name] == poste, nombre_columna
+            ] = np.nan
             continue
 
-        # ---- Comparación con 8%
-        if tiro_max > 0.08 * carga_rotura:
+        tiro_max = tiros.max()
+
+        # -----------------------------------------------------
+        # 3) Carga de rotura máxima de los cables del poste
+        # -----------------------------------------------------
+        cables = cable_export.loc[mask]
+
+        cargas_rotura = []
+
+        for cab in cables:
+            if not es_valido(cab):
+                continue
+
+            fila = tabla_tiro_rotura[
+                tabla_tiro_rotura["Conductor"]
+                .astype(str)
+                .str.contains(cab, case=False, na=False)
+            ]
+
+            if not fila.empty:
+                cargas_rotura.append(
+                    fila["Carga de Rotura (daN)"].max()
+                )
+
+        if not cargas_rotura:
+            carac_postes.loc[
+                carac_postes[postes_orden.name] == poste, nombre_columna
+            ] = np.nan
+            continue
+
+        carga_rotura_max = max(cargas_rotura)
+
+        # -----------------------------------------------------
+        # 4) Determinación del tense
+        # -----------------------------------------------------
+        if tiro_max > 0.08 * carga_rotura_max:
             tense = "Normal"
         else:
             tense = "Reducido"
 
         carac_postes.loc[
-            carac_postes[postes_orden.name] == poste, col_tense
+            carac_postes[postes_orden.name] == poste, nombre_columna
         ] = tense
 
     return carac_postes
