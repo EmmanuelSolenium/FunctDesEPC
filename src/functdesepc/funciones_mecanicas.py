@@ -1534,3 +1534,110 @@ def crear_fase_mensajero(
         ] = mensajero_sel
 
     return carac_postes
+
+def determinar_tense(
+    carac_postes,
+    postes_orden,
+    postes_export,
+    armado_orden,
+    tiro_adelante_export,
+    tiro_atras_export,
+    tabla_tiro_rotura,
+    cable,
+    col_tense="Tense"
+):
+    """
+    Determina el tipo de tensado ("Normal" o "Reducido") por poste.
+
+    Reglas:
+    1) Si el primer dígito numérico del armado es 6 o 7 → "Normal"
+    2) En otro caso:
+       - Se obtiene la carga de rotura del cable desde la tabla
+       - Se toma el máximo tiro (adelante / atrás) asociado al poste
+       - Si tiro_max > 8% carga_rotura → "Normal"
+         caso contrario → "Reducido"
+
+    Los datos de tiros y armado provienen de exportación:
+    pueden estar desordenados y repetidos.
+    Para postes repetidos se toma el PRIMER valor válido.
+    """
+
+    carac_postes[col_tense] = np.nan
+
+    # -----------------------------
+    # 1) Obtener carga de rotura del cable
+    # -----------------------------
+    fila_cable = tabla_tiro_rotura[
+        tabla_tiro_rotura["Conductor"].str.contains(cable, case=False, na=False)
+    ]
+
+    if fila_cable.empty:
+        raise ValueError(f"No se encontró el cable '{cable}' en la tabla de tiro de rotura")
+
+    carga_rotura = float(fila_cable.iloc[0]["Carga de Rotura (daN)"])
+
+    # -----------------------------
+    # Función auxiliar: primer valor válido
+    # -----------------------------
+    def primer_valor_valido(serie):
+        for v in serie:
+            if pd.isna(v):
+                continue
+            v_str = str(v).strip()
+            if v_str in {"", "-", "0"}:
+                continue
+            return v
+        return np.nan
+
+    # -----------------------------
+    # Iteración por poste ordenado
+    # -----------------------------
+    for poste in postes_orden:
+
+        mask = postes_export == poste
+
+        if not mask.any():
+            continue
+
+        # ---- Armado
+        armado = primer_valor_valido(armado_orden.loc[mask])
+
+        if pd.isna(armado):
+            continue
+
+        # Extraer primer dígito numérico del armado
+        digitos = [c for c in str(armado) if c.isdigit()]
+
+        if digitos and digitos[0] in {"6", "7"}:
+            carac_postes.loc[
+                carac_postes[postes_orden.name] == poste, col_tense
+            ] = "Normal"
+            continue
+
+        # ---- Tiros
+        tiro_adelante = pd.to_numeric(
+            tiro_adelante_export.loc[mask], errors="coerce"
+        )
+        tiro_atras = pd.to_numeric(
+            tiro_atras_export.loc[mask], errors="coerce"
+        )
+
+        tiro_max = max(
+            primer_valor_valido(tiro_adelante),
+            primer_valor_valido(tiro_atras)
+        )
+
+        if pd.isna(tiro_max):
+            continue
+
+        # ---- Comparación con 8%
+        if tiro_max > 0.08 * carga_rotura:
+            tense = "Normal"
+        else:
+            tense = "Reducido"
+
+        carac_postes.loc[
+            carac_postes[postes_orden.name] == poste, col_tense
+        ] = tense
+
+    return carac_postes
