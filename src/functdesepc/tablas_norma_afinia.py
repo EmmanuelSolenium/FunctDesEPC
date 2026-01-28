@@ -392,7 +392,6 @@ df_cables_acero_galvanizado = pd.DataFrame({
 """ print(df_cables_acero_galvanizado)  """
 
 
-import pandas as pd
 
 tabla_B2_4 = pd.DataFrame({
     "Zona": ["A", "A", "B", "B", "C", "C"],
@@ -416,3 +415,24 @@ tabla_B2_4 = pd.DataFrame({
 })
 
 """ print(tabla_B2_4) """
+
+
+tabla_cap_conductores = pd.DataFrame({
+    "Conductor": [
+        "477 kcmil",
+        "336,4 kcmil",
+        "266,8 kcmil",
+        "4/0 AWG",
+        "1/0 AWG"
+    ],
+    "Carga de Rotura (daN)": [
+        8677,
+        6270,
+        5028,
+        3716,
+        1949
+    ]
+})
+
+
+print(tabla_cap_conductores)
