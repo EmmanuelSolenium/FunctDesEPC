@@ -1485,9 +1485,8 @@ def crear_fase_mensajero(
     - Datos provenientes de exportación (pueden estar desordenados y repetidos)
     - Para postes repetidos, se toma el PRIMER valor válido encontrado
     - Valor válido: no NaN, no "", no "-", no "0"
-    - MODIFICACIÓN:
-      Si el valor seleccionado (n) para Mensajero es inválido,
-      se toma el valor inmediatamente anterior (n-1)
+    - Si el valor seleccionado (n) es inválido, se hereda el valor n-1
+      (aplica tanto para Fase como para Mensajero)
     """
 
     # --------------------------------------------------
@@ -1523,10 +1522,22 @@ def crear_fase_mensajero(
         v_str = str(v).strip()
         return v_str not in {"", "-", "0"}
 
-    def primer_valor_valido(serie):
-        for v in serie:
+    def seleccionar_valor(serie, idxs):
+        """
+        Devuelve el primer valor válido.
+        Si el valor en n es inválido, intenta heredar n-1.
+        """
+        for i in idxs:
+            v = serie.iloc[i]
+
             if es_valido(v):
                 return str(v).strip()
+
+            if i > 0:
+                v_ant = serie.iloc[i - 1]
+                if es_valido(v_ant):
+                    return str(v_ant).strip()
+
         return np.nan
 
     # --------------------------------------------------
@@ -1539,34 +1550,9 @@ def crear_fase_mensajero(
         if len(idxs) == 0:
             continue
 
-        # -----------------------------
-        # FASE
-        # -----------------------------
-        fase_sel = primer_valor_valido(fase.iloc[idxs])
+        fase_sel = seleccionar_valor(fase, idxs)
+        mensajero_sel = seleccionar_valor(mensajero, idxs)
 
-        # -----------------------------
-        # MENSAJERO (con herencia n-1)
-        # -----------------------------
-        mensajero_sel = np.nan
-
-        for i in idxs:
-            val = mensajero.iloc[i]
-
-            # Caso normal
-            if es_valido(val):
-                mensajero_sel = str(val).strip()
-                break
-
-            # NUEVA REGLA: heredar valor anterior (n-1)
-            if i > 0:
-                val_ant = mensajero.iloc[i - 1]
-                if es_valido(val_ant):
-                    mensajero_sel = str(val_ant).strip()
-                    break
-
-        # -----------------------------
-        # Asignación al dataframe final
-        # -----------------------------
         carac_postes.loc[
             carac_postes[postes_orden.name] == poste, col_fase
         ] = fase_sel
