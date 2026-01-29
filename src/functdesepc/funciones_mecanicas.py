@@ -1901,3 +1901,62 @@ def identificar_retenida(
             ] = "X"
 
     return carac_postes
+
+
+def calcular_tiro_maximo(
+    carac_postes,
+    postes_orden,
+    postes_export,
+    tiro_adelante_export,
+    tiro_atras_export,
+    nombre_columna="Tiro_max"
+):
+    """
+    Calcula por cada poste el tiro máximo entre tiro adelante y tiro atrás,
+    considerando todas las repeticiones provenientes de la exportación.
+
+    - Se toma el máximo absoluto.
+    - Si el poste se repite, se evalúan todas sus repeticiones.
+    - Escritura final ordenada por postes_orden.
+    """
+
+    # Inicialización conservadora
+    carac_postes[nombre_columna] = np.nan
+
+    postes_exp = postes_export.values
+    ta = tiro_adelante_export.values
+    td = tiro_atras_export.values
+
+    # ------------------------------------------------------------
+    # Iteración por poste final (ordenado)
+    # ------------------------------------------------------------
+    for idx in postes_orden.index:
+
+        poste = postes_orden.loc[idx]
+
+        # Repeticiones en exportación
+        idxs = np.where(postes_exp == poste)[0]
+
+        if len(idxs) == 0:
+            continue
+
+        # Tiros de todas las repeticiones
+        tiros = []
+
+        for i in idxs:
+            if not pd.isna(ta[i]):
+                tiros.append(abs(ta[i]))
+            if not pd.isna(td[i]):
+                tiros.append(abs(td[i]))
+
+        if not tiros:
+            continue
+
+        tiro_max = max(tiros)
+
+        # Escritura final por poste
+        carac_postes.loc[
+            carac_postes[postes_orden.name] == poste, nombre_columna
+        ] = tiro_max
+
+    return carac_postes
