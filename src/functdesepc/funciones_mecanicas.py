@@ -1671,3 +1671,130 @@ def determinar_tense(
         ] = tense
 
     return carac_postes
+
+def calcular_vanos_adelante_atras(
+    carac_postes,
+    postes_orden,
+    postes_export,
+    numero_estructura_export,
+    vano_adelante_export,
+    col_vano_post="Vano posterior",
+    col_vano_ant="Vano anterior"
+):
+    """
+    Determina el vano anterior y vano posterior por poste, considerando
+    rutas, posiciones (inicial / intermedia / final) y repeticiones.
+    """
+
+    carac_postes[col_vano_post] = 0.0
+    carac_postes[col_vano_ant] = 0.0
+
+    ne = numero_estructura_export.values
+    vanos = vano_adelante_export.values
+    postes_exp = postes_export.values
+
+    n = len(ne)
+
+    # ------------------------------------------------------------
+    # 1) Clasificar cada fila de la exportación
+    # ------------------------------------------------------------
+    tipo_posicion = []
+
+    for i in range(n):
+        if ne[i] == 0:
+            tipo_posicion.append("inicio")
+        else:
+            # final si el siguiente es 0 o si es el último registro
+            if i == n - 1 or ne[i + 1] == 0:
+                tipo_posicion.append("final")
+            else:
+                tipo_posicion.append("intermedio")
+
+    tipo_posicion = np.array(tipo_posicion)
+
+    # ------------------------------------------------------------
+    # 2) Funciones auxiliares
+    # ------------------------------------------------------------
+    def primera_posicion(indices, tipo):
+        for i in indices:
+            if tipo_posicion[i] == tipo:
+                return i
+        return None
+
+    # ------------------------------------------------------------
+    # 3) Iteración por poste final ordenado
+    # ------------------------------------------------------------
+    for poste in postes_orden:
+
+        idxs = np.where(postes_exp == poste)[0]
+
+        if len(idxs) == 0:
+            continue
+
+        # Clasificar repeticiones
+        idx_inicio = [i for i in idxs if tipo_posicion[i] == "inicio"]
+        idx_inter = [i for i in idxs if tipo_posicion[i] == "intermedio"]
+        idx_final  = [i for i in idxs if tipo_posicion[i] == "final"]
+
+        vano_ant = 0.0
+        vano_post = 0.0
+
+        # --------------------------------------------------------
+        # CASO 1: hay al menos una aparición intermedia
+        # --------------------------------------------------------
+        if idx_inter:
+            i = idx_inter[0]
+            vano_post = vanos[i]
+            vano_ant = vanos[i - 1] if i > 0 else 0.0
+
+        # --------------------------------------------------------
+        # CASO 2: poste inicial
+        # --------------------------------------------------------
+        elif idx_inicio:
+            # 2.1 hay repetición final
+            if idx_final:
+                i_ini = idx_inicio[0]
+                i_fin = idx_final[0]
+                vano_post = vanos[i_ini]
+                vano_ant = vanos[i_fin - 1] if i_fin > 0 else 0.0
+
+            # 2.2 solo repeticiones iniciales
+            elif len(idx_inicio) >= 2:
+                vano_post = vanos[idx_inicio[0]]
+                vano_ant = vanos[idx_inicio[1]]
+
+            # 2.3 único inicial
+            else:
+                i = idx_inicio[0]
+                vano_post = vanos[i]
+                vano_ant = 0.0
+
+        # --------------------------------------------------------
+        # CASO 3: poste final
+        # --------------------------------------------------------
+        elif idx_final:
+            # 3.1 solo finales
+            if len(idx_final) >= 2:
+                i1 = idx_final[0]
+                i2 = idx_final[1]
+                vano_ant = vanos[i1 - 1] if i1 > 0 else 0.0
+                vano_post = vanos[i2 - 1] if i2 > 0 else 0.0
+
+            # 3.2 único final
+            else:
+                i = idx_final[0]
+                vano_ant = vanos[i - 1] if i > 0 else 0.0
+                vano_post = 0.0
+
+        # --------------------------------------------------------
+        # Escritura en carac_postes
+        # --------------------------------------------------------
+        carac_postes.loc[
+            carac_postes[postes_orden.name] == poste, col_vano_ant
+        ] = vano_ant
+
+        carac_postes.loc[
+            carac_postes[postes_orden.name] == poste, col_vano_post
+        ] = vano_post
+
+    return carac_postes
