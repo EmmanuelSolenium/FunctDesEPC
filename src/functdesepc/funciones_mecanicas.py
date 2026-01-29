@@ -1798,3 +1798,106 @@ def calcular_vanos_adelante_atras(
         ] = vano_post
 
     return carac_postes
+
+def identificar_retenida(
+    carac_postes,
+    postes_orden,
+    postes_export,
+    retenidas_export,
+    armado_orden,
+    col_bisectora="Bisectora",
+    col_90="Conjunto a 90º"
+):
+    """
+    Determina si un poste tiene retenida bisectora o conjunto a 90°.
+
+    - Si todas las retenidas (incluyendo repeticiones) son 0, "-", "", o NaN:
+      → ambas columnas quedan NaN.
+    - Si existe al menos una retenida válida:
+      → se evalúa el armado del poste.
+        * Si los dos últimos dígitos antes del último guión y el dígito final son 35
+          → Conjunto a 90º = "X"
+        * En caso contrario
+          → Bisectora = "X"
+    """
+
+    # Inicialización
+    carac_postes[col_bisectora] = np.nan
+    carac_postes[col_90] = np.nan
+
+    postes_exp = postes_export.values
+    retenidas = retenidas_export.values
+
+    # ------------------------------------------------------------
+    # Función auxiliar: valor válido de retenida
+    # ------------------------------------------------------------
+    def es_retenida_valida(val):
+        if pd.isna(val):
+            return False
+        if isinstance(val, str) and val.strip() == "":
+            return False
+        if val == "-" or val == 0:
+            return False
+        return True
+
+    # ------------------------------------------------------------
+    # Iteración por poste final (ordenado)
+    # ------------------------------------------------------------
+    for idx in postes_orden.index:
+
+        poste = postes_orden.loc[idx]
+
+        # Repeticiones en exportación
+        idxs = np.where(postes_exp == poste)[0]
+
+        if len(idxs) == 0:
+            continue
+
+        # ¿Existe al menos una retenida válida?
+        hay_retenida = False
+        for i in idxs:
+            if es_retenida_valida(retenidas[i]):
+                hay_retenida = True
+                break
+
+        if not hay_retenida:
+            continue
+
+        # --------------------------------------------------------
+        # Evaluación del armado
+        # --------------------------------------------------------
+        armado = armado_orden.loc[idx]
+
+        if pd.isna(armado) or not isinstance(armado, str):
+            continue
+
+        # Se espera formato "$$$$-###-#"
+        partes = armado.split("-")
+
+        if len(partes) < 3:
+            # Formato no reconocible → conservador: bisectora
+            carac_postes.loc[
+                carac_postes[postes_orden.name] == poste, col_bisectora
+            ] = "X"
+            continue
+
+        try:
+            ult_dos = partes[-2][-2:]   # dos últimos dígitos antes del último guión
+            ult_uno = partes[-1]        # dígito final
+            codigo = ult_dos + ult_uno
+        except Exception:
+            codigo = ""
+
+        # --------------------------------------------------------
+        # Asignación final
+        # --------------------------------------------------------
+        if codigo == "35":
+            carac_postes.loc[
+                carac_postes[postes_orden.name] == poste, col_90
+            ] = "X"
+        else:
+            carac_postes.loc[
+                carac_postes[postes_orden.name] == poste, col_bisectora
+            ] = "X"
+
+    return carac_postes
