@@ -1469,10 +1469,12 @@ def calcular_Mut(
 
     return mec
 
+
 def crear_fase_mensajero(
     carac_postes,
     postes_orden,
     postes_export,
+    numero_estructura_export,
     texto_export,
     col_fase="Fase",
     col_mensajero="Mensajero"
@@ -1481,16 +1483,24 @@ def crear_fase_mensajero(
     Crea las columnas 'Fase' y 'Mensajero' a partir de un texto exportado
     con formato: 'FASE / MENSAJERO'.
 
-    Los datos provienen de exportación (pueden estar desordenados y repetidos).
-    Para postes repetidos, se toma el PRIMER valor válido encontrado
-    en el orden de la exportación.
+    Reglas:
+    - Datos provenientes de exportación (desordenados y con repeticiones)
+    - Para postes repetidos se toma el PRIMER valor válido
+    - Valor válido: no NaN, no "", no "-", no "0"
+    - NUEVO:
+      Si el poste es FIN DE LÍNEA y el mensajero es inválido,
+      se hereda el valor inmediatamente anterior en la exportación
     """
 
+    # ---------------------------------------------------------
     # Inicialización
+    # ---------------------------------------------------------
     carac_postes[col_fase] = np.nan
     carac_postes[col_mensajero] = np.nan
 
+    # ---------------------------------------------------------
     # Validación: más de un separador " / "
+    # ---------------------------------------------------------
     n_sep = texto_export.str.count(" / ")
 
     if (n_sep > 1).any():
@@ -1499,32 +1509,77 @@ def crear_fase_mensajero(
             f"Error: se encontró más de un ' / ' en los siguientes registros:\n{filas_err}"
         )
 
+    # ---------------------------------------------------------
     # Separación segura
+    # ---------------------------------------------------------
     partes = texto_export.str.split(" / ", expand=True)
     fase = partes.iloc[:, 0]
     mensajero = partes.iloc[:, 1]
 
+    # ---------------------------------------------------------
+    # Funciones auxiliares
+    # ---------------------------------------------------------
+    def es_valido(v):
+        if pd.isna(v):
+            return False
+        v_str = str(v).strip()
+        return v_str not in {"", "-", "0"}
+
     def primer_valor_valido(serie):
         for v in serie:
-            if pd.isna(v):
-                continue
-            v_str = str(v).strip()
-            if v_str in {"", "-", "0"}:
-                continue
-            return v_str
+            if es_valido(v):
+                return str(v).strip()
         return np.nan
 
-    # Iteración por poste final (ordenado)
+    # ---------------------------------------------------------
+    # Identificación de postes finales
+    # ---------------------------------------------------------
+    num_est = numero_estructura_export.values
+    es_final = np.zeros(len(num_est), dtype=bool)
+
+    for i in range(len(num_est)):
+        if i == len(num_est) - 1:
+            es_final[i] = True
+        elif num_est[i] != 0 and num_est[i + 1] == 0:
+            es_final[i] = True
+
+    # ---------------------------------------------------------
+    # Iteración por poste ordenado
+    # ---------------------------------------------------------
     for poste in postes_orden:
 
-        mask = postes_export == poste
+        idxs = np.where(postes_export.values == poste)[0]
 
-        if not mask.any():
+        if len(idxs) == 0:
             continue
 
-        fase_sel = primer_valor_valido(fase.loc[mask])
-        mensajero_sel = primer_valor_valido(mensajero.loc[mask])
+        # -------------------------
+        # FASE
+        # -------------------------
+        fase_sel = primer_valor_valido(fase.iloc[idxs])
 
+        # -------------------------
+        # MENSAJERO (con herencia en fin de línea)
+        # -------------------------
+        mensajero_sel = np.nan
+
+        for i in idxs:
+            val = mensajero.iloc[i]
+
+            if es_valido(val):
+                mensajero_sel = str(val).strip()
+                break
+
+            # NUEVA REGLA: fin de línea → heredar anterior
+            if es_final[i] and i > 0:
+                val_ant = mensajero.iloc[i - 1]
+                if es_valido(val_ant):
+                    mensajero_sel = str(val_ant).strip()
+                    break
+
+        # -------------------------
+        # Asignación
+        # -------------------------
         carac_postes.loc[
             carac_postes[postes_orden.name] == poste, col_fase
         ] = fase_sel
