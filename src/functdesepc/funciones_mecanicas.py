@@ -1847,16 +1847,12 @@ def identificar_retenida(
     """
     Determina si un poste tiene retenida bisectora o a 90°.
 
-    Reglas:
-    - Si TODAS las retenidas (incluyendo repeticiones) son inválidas
-      (0, "-", "", NaN) → ambas columnas quedan NaN
-    - Si al menos una es válida:
-        * Se analiza el código de armado
-        * El armado SIEMPRE termina en '#-#'
-        * Se toma el bloque inmediatamente anterior al último guion
-        * De ese bloque se toma el PRIMER dígito numérico
-        * Si ese dígito es 3 y el último dígito es 5 → 90°
-        * En cualquier otro caso → bisectora
+    Regla correcta del armado:
+    - Se ignora el último '-#'
+    - Se toma el bloque inmediatamente anterior
+    - Se extrae el ÚLTIMO dígito numérico de ese bloque
+    - Si ese dígito es 5 → Conjunto a 90°
+    - En cualquier otro caso → Bisectora
     """
 
     # Inicialización
@@ -1870,9 +1866,6 @@ def identificar_retenida(
         return v_str not in {"", "-", "0"}
 
     def clasificar_armado(armado):
-        """
-        Devuelve '90' o 'B' según la regla del código
-        """
         if pd.isna(armado):
             return None
 
@@ -1881,28 +1874,18 @@ def identificar_retenida(
         if "-" not in s:
             return None
 
-        partes = s.rsplit("-", 1)
-        if len(partes) != 2:
-            return None
+        # Quitar el último '-#'
+        bloque = s.rsplit("-", 1)[0]
 
-        bloque_previo = partes[0]
-        ultimo_digito = partes[1]
-
-        # Buscar primer dígito numérico del bloque previo
-        for c in bloque_previo:
+        # Buscar el ÚLTIMO dígito numérico del bloque
+        for c in reversed(bloque):
             if c.isdigit():
-                primer_digito = c
-                break
-        else:
-            return None
+                return "90" if c == "5" else "B"
 
-        if primer_digito == "3" and ultimo_digito == "5":
-            return "90"
-        else:
-            return "B"
+        return None
 
     # --------------------------------------------------
-    # Iteración por poste final (ordenado)
+    # Iteración por poste final
     # --------------------------------------------------
     for idx, poste in postes_orden.items():
 
@@ -1911,12 +1894,8 @@ def identificar_retenida(
         if not mask.any():
             continue
 
-        # ¿Hay al menos una retenida válida?
-        retenidas_validas = any(
-            es_valido(v) for v in retenidas_export.loc[mask]
-        )
-
-        if not retenidas_validas:
+        # ¿Existe al menos una retenida válida?
+        if not any(es_valido(v) for v in retenidas_export.loc[mask]):
             continue
 
         armado = armado_orden.loc[idx]
