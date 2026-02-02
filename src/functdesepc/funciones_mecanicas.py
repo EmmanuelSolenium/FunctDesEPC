@@ -1970,3 +1970,133 @@ def calcular_tiro_maximo(
         ] = tiro_max
 
     return carac_postes
+
+
+import numpy as np
+import pandas as pd
+
+
+import numpy as np
+import pandas as pd
+
+
+def calcular_fuerza_residual_retenidas(
+    carac_postes,
+    postes_orden,
+    postes_export,
+    retenidas,
+    flmc,
+    altura_postes,
+    capacidad_poste,
+    tablas_coeficientes,
+    tipo_retenida,
+    calibre_retenida="3/8",
+    altura_retenidas=None,
+    col_salida="Fuerza Residual Fres (daN)",
+):
+    """
+    Calcula la fuerza residual por retenidas y agrega la columna
+    'Fuerza Residual Fres (daN)' al dataframe carac_postes.
+    """
+
+    # Inicialización
+    carac_postes[col_salida] = np.nan
+
+    if altura_retenidas is None:
+        altura_retenidas = altura_postes
+
+    # Selección de tablas según calibre
+    if calibre_retenida == "3/8":
+        tablas_calibre = [tablas_coeficientes[0], tablas_coeficientes[2]]
+    else:
+        tablas_calibre = [tablas_coeficientes[1], tablas_coeficientes[3]]
+
+    def seleccionar_longitud(delta_h):
+        if delta_h <= 1.2:
+            return "≤1.2 m"
+        elif delta_h <= 2.2:
+            return "1.2 < L ≤ 2.2 m"
+        else:
+            return ">3.0 m"
+
+    def valor_cercano(valores, objetivo):
+        valores = np.array(sorted(valores))
+        dif_rel = np.abs(valores - objetivo) / objetivo
+
+        mask_5 = dif_rel <= 0.05
+        if mask_5.any():
+            return valores[mask_5][
+                np.argmin(np.abs(valores[mask_5] - objetivo))
+            ]
+
+        menores = valores[valores <= objetivo]
+        if len(menores) > 0:
+            return menores[-1]
+
+        return valores[0]
+
+    # Iteración por poste (orden final)
+    for i, poste in enumerate(postes_orden):
+
+        mask = postes_export == poste
+
+        if not mask.any():
+            continue
+
+        # 1. Verificar retenidas
+        ret_vals = retenidas.loc[mask]
+        ret_vals = ret_vals[ret_vals > 0]
+
+        if ret_vals.empty:
+            continue
+
+        # 2. Alturas
+        Hn = altura_postes.iloc[i]
+        Hj = altura_retenidas.iloc[i]
+        delta_h = Hn - Hj
+
+        # 3. Tipo de retenida
+        tipo_fila = tipo_retenida.iloc[i]
+
+        if tipo_fila["Bisectora"] == "X":
+            es_90 = False
+        elif tipo_fila["Conjunto a 90º"] == "X":
+            es_90 = True
+        else:
+            continue
+
+        # 4. Selección de tabla
+        if es_90:
+            tabla = tablas_calibre[1]  # con beta
+            betas = tabla.index.get_level_values("β (°)").unique()
+            beta_sel = valor_cercano(betas, 90)
+        else:
+            tabla = tablas_calibre[0]  # sin beta
+
+        # Carga de rotura
+        carga_poste = capacidad_poste.iloc[i]
+
+        if es_90:
+            cargas_tabla = tabla.index.get_level_values("Carga (daN)").unique()
+        else:
+            cargas_tabla = tabla.index
+
+        carga_sel = valor_cercano(cargas_tabla, carga_poste)
+
+        # Longitud
+        col_long = seleccionar_longitud(delta_h)
+
+        # Coeficiente A
+        if es_90:
+            A = tabla.loc[(beta_sel, carga_sel), (col_long, "A")]
+        else:
+            A = tabla.loc[carga_sel, (col_long, "A")]
+
+        # 5. Fuerza residual
+        fres = flmc.iloc[i] * A * Hj / Hn
+
+        carac_postes.loc[
+            carac_postes[postes_orden.name] == poste, col_salida
+        ] = fres
+
+    return carac_postes
