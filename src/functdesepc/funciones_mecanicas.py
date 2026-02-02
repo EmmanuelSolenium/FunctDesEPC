@@ -1469,6 +1469,7 @@ def calcular_Mut(
 
     return mec
 
+
 def crear_fase_mensajero(
     carac_postes,
     postes_orden,
@@ -1478,10 +1479,15 @@ def crear_fase_mensajero(
     col_mensajero="Mensajero"
 ):
     """
-    Crea las columnas 'Fase' y 'Mensajero' a partir de un texto exportado
-    con formato: 'FASE / MENSAJERO'.
+    Crea las columnas 'Fase' y 'Mensajero' a partir de un texto exportado.
 
     Reglas:
+    - Si el texto cumple exactamente el formato 'FASE / MENSAJERO':
+        Fase = FASE
+        Mensajero = MENSAJERO
+    - En cualquier otro caso:
+        Fase = texto completo
+        Mensajero = NaN
     - Datos provenientes de exportación (pueden estar desordenados y repetidos)
     - Para postes repetidos, se toma el PRIMER valor válido encontrado
     - Valor válido: no NaN, no "", no "-", no "0"
@@ -1496,24 +1502,6 @@ def crear_fase_mensajero(
     carac_postes[col_mensajero] = np.nan
 
     # --------------------------------------------------
-    # Validación: más de un separador " / "
-    # --------------------------------------------------
-    n_sep = texto_export.str.count(" / ")
-
-    if (n_sep > 1).any():
-        filas_err = texto_export[n_sep > 1]
-        raise ValueError(
-            f"Error: se encontró más de un ' / ' en los siguientes registros:\n{filas_err}"
-        )
-
-    # --------------------------------------------------
-    # Separación segura
-    # --------------------------------------------------
-    partes = texto_export.str.split(" / ", expand=True)
-    fase = partes.iloc[:, 0]
-    mensajero = partes.iloc[:, 1]
-
-    # --------------------------------------------------
     # Funciones auxiliares
     # --------------------------------------------------
     def es_valido(v):
@@ -1522,23 +1510,41 @@ def crear_fase_mensajero(
         v_str = str(v).strip()
         return v_str not in {"", "-", "0"}
 
-    def seleccionar_valor(serie, idxs):
+    def obtener_fase_mensajero(v):
         """
-        Devuelve el primer valor válido.
-        Si el valor en n es inválido, intenta heredar n-1.
+        Aplica la regla de parsing:
+        - Solo si hay exactamente un ' / ' se separa
+        - En otro caso, todo es fase
+        """
+        if not es_valido(v):
+            return np.nan, np.nan
+
+        v_str = str(v).strip()
+
+        if v_str.count(" / ") == 1:
+            f, m = v_str.split(" / ")
+            return f.strip(), m.strip()
+
+        return v_str, np.nan
+
+    def seleccionar_valor_fase_mensajero(idxs):
+        """
+        Devuelve (fase, mensajero) aplicando:
+        - primer valor válido
+        - herencia n-1 si corresponde
         """
         for i in idxs:
-            v = serie.iloc[i]
+            f, m = obtener_fase_mensajero(texto_export.iloc[i])
 
-            if es_valido(v):
-                return str(v).strip()
+            if es_valido(f) or es_valido(m):
+                return f, m
 
             if i > 0:
-                v_ant = serie.iloc[i - 1]
-                if es_valido(v_ant):
-                    return str(v_ant).strip()
+                f_ant, m_ant = obtener_fase_mensajero(texto_export.iloc[i - 1])
+                if es_valido(f_ant) or es_valido(m_ant):
+                    return f_ant, m_ant
 
-        return np.nan
+        return np.nan, np.nan
 
     # --------------------------------------------------
     # Iteración por poste final (ordenado)
@@ -1550,8 +1556,7 @@ def crear_fase_mensajero(
         if len(idxs) == 0:
             continue
 
-        fase_sel = seleccionar_valor(fase, idxs)
-        mensajero_sel = seleccionar_valor(mensajero, idxs)
+        fase_sel, mensajero_sel = seleccionar_valor_fase_mensajero(idxs)
 
         carac_postes.loc[
             carac_postes[postes_orden.name] == poste, col_fase
@@ -1562,6 +1567,7 @@ def crear_fase_mensajero(
         ] = mensajero_sel
 
     return carac_postes
+
 
 
 def determinar_tense(
