@@ -435,3 +435,220 @@ tabla_cap_conductores = pd.DataFrame({
 })
 
 
+
+columnas = pd.MultiIndex.from_product(
+    [
+        ["≤1.2 m", "1.2 < L ≤ 2.2 m", ">3.0 m"],
+        ["A", "B", "C"]
+    ],
+    names=["Altura retenida", "Grupo"]
+)
+
+data = [
+    [0.11, 1.54, 1.82, 0.16, 1.46, 1.69, 0.19, 1.40, 1.62],
+    [0.21, 1.37, 1.65, 0.24, 1.32, 1.44, 0.33, 1.16, 1.56]
+]
+
+index = pd.Index(
+    ["500–735", "1030–1324"],
+    name="Carga (daN)"
+)
+
+c_retenida_3_8 = pd.DataFrame(data, index=index, columns=columnas)
+
+
+
+def expandir_rangos_carga(df):
+    filas = []
+
+    for idx, row in df.iterrows():
+        # Separar rango "500–735"
+        limites = idx.replace("–", "-").split("-")
+        limites = [int(l.strip()) for l in limites]
+
+        for carga in limites:
+            nueva_fila = row.copy()
+            nueva_fila.name = carga
+            filas.append(nueva_fila)
+
+    df_expandido = pd.DataFrame(filas)
+    df_expandido.index.name = "Carga (daN)"
+
+    return df_expandido.sort_index()
+
+c_retenida_3_8 = expandir_rangos_carga(c_retenida_3_8)
+
+
+# Columnas MultiIndex
+columnas = pd.MultiIndex.from_product(
+    [
+        ["≤1.2 m", "1.2 < L ≤ 2.2 m", ">3.0 m"],
+        ["A", "B", "C"]
+    ],
+    names=["Longitud poste", "Grupo"]
+)
+
+# Datos
+data = [
+    [0.06, 1.63, 1.88, 0.09, 1.58, 1.82, 0.11, 1.54, 1.78],
+    [0.12, 1.51, 1.75, 0.14, 1.48, 1.71, 0.21, 1.38, 1.59]
+]
+
+# Índice con rangos
+index = pd.Index(
+    ["500–735", "1030–1324"],
+    name="Carga (daN)"
+)
+
+c_retenida_1_2 = pd.DataFrame(data, index=index, columns=columnas)
+
+""" print(c_retenida_1_2) """
+
+
+
+# Columnas MultiIndex
+columnas = pd.MultiIndex.from_product(
+    [
+        ["≤1.2 m", "1.2 < L ≤ 2.2 m", ">3.0 m"],
+        ["A", "B", "CP"]
+    ],
+    names=["Longitud poste", "Grupo"]
+)
+
+# Datos organizados por beta
+bloques = {
+    20: [
+        ["500–735",  0.11, 1.54, 1.73, 0.16, 1.46, 1.64, 0.19, 1.40, 1.57],
+        ["1030–1324",0.21, 1.37, 1.53, 0.24, 1.32, 1.47, 0.33, 1.16, 1.30],
+    ],
+    30: [
+        ["500–735",  0.11, 1.54, 1.66, 0.16, 1.46, 1.58, 0.19, 1.40, 1.51],
+        ["1030–1324",0.21, 1.37, 1.47, 0.24, 1.32, 1.42, 0.33, 1.16, 1.25],
+    ],
+    40: [
+        ["500–735",  0.11, 1.54, 1.57, 0.16, 1.46, 1.49, 0.19, 1.40, 1.43],
+        ["1030–1324",0.21, 1.37, 1.39, 0.24, 1.32, 1.34, 0.33, 1.16, 1.19],
+    ],
+    50: [
+        ["500–735",  0.11, 1.54, 1.46, 0.16, 1.46, 1.39, 0.19, 1.40, 1.33],
+        ["1030–1324",0.21, 1.37, 1.30, 0.24, 1.32, 1.25, 0.33, 1.16, 1.10],
+    ],
+    60: [
+        ["500–735",  0.11, 1.54, 1.34, 0.16, 1.46, 1.27, 0.19, 1.40, 1.21],
+        ["1030–1324",0.21, 1.37, 1.18, 0.24, 1.32, 1.14, 0.33, 1.16, 1.01],
+    ],
+    70: [
+        ["500–735",  0.11, 1.54, 1.19, 0.16, 1.46, 1.13, 0.19, 1.40, 1.08],
+        ["1030–1324",0.21, 1.37, 1.06, 0.24, 1.32, 1.02, 0.33, 1.16, 0.90],
+    ],
+    80: [
+        ["500–735",  0.11, 1.54, 1.04, 0.16, 1.46, 0.99, 0.19, 1.40, 0.95],
+        ["1030–1324",0.21, 1.37, 0.93, 0.24, 1.32, 0.89, 0.33, 1.16, 0.79],
+    ],
+    90: [
+        ["500–735",  0.11, 1.54, 0.89, 0.16, 1.46, 0.84, 0.19, 1.40, 0.81],
+        ["1030–1324",0.21, 1.37, 0.79, 0.24, 1.32, 0.76, 0.33, 1.16, 0.67],
+    ],
+}
+
+frames = []
+
+for beta, filas in bloques.items():
+    df_beta = pd.DataFrame(
+        [f[1:] for f in filas],
+        index=pd.Index([f[0] for f in filas], name="Carga (daN)"),
+        columns=columnas
+    )
+    df_beta["β"] = beta
+    frames.append(df_beta)
+
+c_ret_3_8_90 = pd.concat(frames).set_index("β", append=True).reorder_levels(["β", "Carga (daN)"])
+
+def expandir_rangos_carga_multiindex(df):
+    filas = []
+
+    for (beta, carga_rango), row in df.iterrows():
+        limites = carga_rango.replace("–", "-").split("-")
+        limites = [int(l.strip()) for l in limites]
+
+        for carga in limites:
+            nueva = row.copy()
+            nueva.name = (beta, carga)
+            filas.append(nueva)
+
+    df_out = pd.DataFrame(filas)
+    df_out.index = pd.MultiIndex.from_tuples(
+        df_out.index, names=["β (°)", "Carga (daN)"]
+    )
+
+    return df_out.sort_index()
+
+c_ret_3_8_90 = expandir_rangos_carga_multiindex(c_ret_3_8_90)
+
+""" print(c_ret_3_8_90) """
+
+
+# Columnas MultiIndex
+columnas = pd.MultiIndex.from_product(
+    [
+        ["≤1.2 m", "1.2 < L ≤ 2.2 m", ">3.0 m"],
+        ["A", "B", "CP"]
+    ],
+    names=["Longitud poste", "Grupo"]
+)
+
+bloques = {
+    20: [
+        ["500–735",  0.06, 1.63, 1.82, 0.09, 1.58, 1.77, 0.11, 1.54, 1.72],
+        ["1030–1324",0.12, 1.52, 1.70, 0.14, 1.48, 1.66, 0.21, 1.38, 1.54],
+    ],
+    30: [
+        ["500–735",  0.06, 1.63, 1.75, 0.09, 1.58, 1.70, 0.11, 1.54, 1.66],
+        ["1030–1324",0.12, 1.52, 1.64, 0.14, 1.48, 1.60, 0.21, 1.38, 1.48],
+    ],
+    40: [
+        ["500–735",  0.06, 1.63, 1.66, 0.09, 1.58, 1.61, 0.11, 1.54, 1.57],
+        ["1030–1324",0.12, 1.52, 1.55, 0.14, 1.48, 1.51, 0.21, 1.38, 1.40],
+    ],
+    50: [
+        ["500–735",  0.06, 1.63, 1.54, 0.09, 1.58, 1.50, 0.11, 1.54, 1.46],
+        ["1030–1324",0.12, 1.52, 1.44, 0.14, 1.48, 1.41, 0.21, 1.38, 1.30],
+    ],
+    60: [
+        ["500–735",  0.06, 1.63, 1.41, 0.09, 1.58, 1.37, 0.11, 1.54, 1.33],
+        ["1030–1324",0.12, 1.52, 1.31, 0.14, 1.48, 1.29, 0.21, 1.38, 1.19],
+    ],
+    70: [
+        ["500–735",  0.06, 1.63, 1.26, 0.09, 1.58, 1.22, 0.11, 1.54, 1.19],
+        ["1030–1324",0.12, 1.52, 1.18, 0.14, 1.48, 1.15, 0.21, 1.38, 1.07],
+    ],
+    80: [
+        ["500–735",  0.06, 1.63, 1.10, 0.09, 1.58, 1.07, 0.11, 1.54, 1.04],
+        ["1030–1324",0.12, 1.52, 1.03, 0.14, 1.48, 1.01, 0.21, 1.38, 0.93],
+    ],
+    90: [
+        ["500–735",  0.06, 1.63, 0.94, 0.09, 1.58, 0.91, 0.11, 1.54, 0.89],
+        ["1030–1324",0.12, 1.52, 0.88, 0.14, 1.48, 0.86, 0.21, 1.38, 0.79],
+    ],
+}
+
+frames = []
+
+for beta, filas in bloques.items():
+    df_beta = pd.DataFrame(
+        [f[1:] for f in filas],
+        index=pd.Index([f[0] for f in filas], name="Carga (daN)"),
+        columns=columnas
+    )
+    df_beta["β"] = beta
+    frames.append(df_beta)
+
+c_ret_1_2_90 = (
+    pd.concat(frames)
+      .set_index("β", append=True)
+      .reorder_levels(["β", "Carga (daN)"])
+)
+
+c_ret_1_2_90 = expandir_rangos_carga_multiindex(c_ret_1_2_90)
+
+
