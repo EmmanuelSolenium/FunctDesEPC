@@ -2154,7 +2154,7 @@ def calcular_fuerza_residual_retenidas(
     carac_postes,
     postes_orden,
     postes_export,
-    retenidas_export,
+    retenidas,
     flmc,
     altura_postes,
     capacidad_poste,
