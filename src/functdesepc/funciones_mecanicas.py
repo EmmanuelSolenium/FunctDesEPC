@@ -2425,8 +2425,6 @@ def capacidad_vertical_ultima_retenida(
 
     return carac_postes
 
-import numpy as np
-import pandas as pd
 
 
 def calcular_cs(
