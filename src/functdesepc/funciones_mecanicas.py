@@ -2307,6 +2307,9 @@ def calcular_fuerza_residual_retenidas(
 
 
 
+import numpy as np
+import pandas as pd
+
 
 def capacidad_vertical_ultima_retenida(
     carac_postes,
@@ -2400,4 +2403,24 @@ def capacidad_vertical_ultima_retenida(
         altura_sel = valor_tabla_5pct(H_total, alturas_tabla)
         carga_sel = valor_tabla_5pct(carga_poste, cargas_tabla)
 
-        # ----------------------------------------------
+        # --------------------------------------------------
+        # 3. Fila final en tabla
+        # --------------------------------------------------
+        fila = tabla_evu_postes[
+            (tabla_evu_postes["altura_m"] == altura_sel)
+            & (tabla_evu_postes["carga_flexion_daN"] == carga_sel)
+        ]
+
+        if fila.empty:
+            continue
+
+        cap_vertical = float(fila.iloc[0][col_hn])
+
+        # --------------------------------------------------
+        # 4. Escritura final
+        # --------------------------------------------------
+        carac_postes.loc[
+            carac_postes[postes_orden.name] == poste, col_salida
+        ] = cap_vertical
+
+    return carac_postes
