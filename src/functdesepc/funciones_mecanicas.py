@@ -2460,7 +2460,6 @@ def calcular_cs(
             Mec.loc[max_es_FLMC, "FTVC"]
             + Mec.loc[max_es_FLMC, "FTVP"]
             + Mec.loc[max_es_FLMC, "FTVE"]
-            + Mec.loc[max_es_FLMC, "FTVC"]
             + Mec.loc[max_es_FLMC, "FTEC"]
         ) ** 2
         +
@@ -2478,7 +2477,6 @@ def calcular_cs(
             Ret.loc[max_es_FTVC, "Fuerza Residual Fres (daN)"]
             + Mec.loc[max_es_FTVC, "FTVP"]
             + Mec.loc[max_es_FTVC, "FTVE"]
-            + Mec.loc[max_es_FTVC, "FTVC"]
             + Mec.loc[max_es_FTVC, "FTEC"]
         ) ** 2
         +
