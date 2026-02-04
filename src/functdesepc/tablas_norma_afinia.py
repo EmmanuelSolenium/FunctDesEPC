@@ -389,7 +389,7 @@ df_cables_acero_galvanizado = pd.DataFrame({
     "Coeficiente de dilatación lineal (°C⁻¹)": [11.5e-6, 11.5e-6]
 })
 
-print(df_cables_acero_galvanizado["Carga de Rotura (daN)"]) 
+""" print(df_cables_acero_galvanizado["Carga de Rotura (daN)"])  """
 
 
 
@@ -501,7 +501,7 @@ index = pd.Index(
 )
 
 c_retenida_1_2 = pd.DataFrame(data, index=index, columns=columnas)
-
+c_retenida_1_2 =expandir_rangos_carga(c_retenida_1_2) 
 """ print(c_retenida_1_2) """
 
 
