@@ -322,7 +322,7 @@ def extraer_datos_poste(cadena):
         raise ValueError(f"Formato no válido: {cadena}")
 
     altura = int(match.group(1))
-    altura_libre = altura-2
+    altura_libre = altura-altura*0.1-0.7
     altura_esfuerzo = altura_libre-0.2
     carga = int(match.group(2))
 
