@@ -2316,7 +2316,7 @@ def capacidad_vertical_ultima_retenida(
     carga_rotura_poste,
     tabla_evu_postes,
     altura_retenida=None,
-    col_salida="Capacidad vertical última con retenida (daN)",
+    col_salida='Capacidad vertical del poste (daN)',
 ):
     """
     Calcula la capacidad vertical última de un poste con retenida
