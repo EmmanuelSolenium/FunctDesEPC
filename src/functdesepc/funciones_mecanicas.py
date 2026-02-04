@@ -1978,13 +1978,6 @@ def calcular_tiro_maximo(
     return carac_postes
 
 
-import numpy as np
-import pandas as pd
-
-
-import numpy as np
-import pandas as pd
-
 
 def calcular_fuerza_residual_retenidas(
     carac_postes,
