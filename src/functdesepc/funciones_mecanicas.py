@@ -2304,3 +2304,100 @@ def calcular_fuerza_residual_retenidas(
         
 
     return carac_postes
+
+
+
+
+def capacidad_vertical_ultima_retenida(
+    carac_postes,
+    postes_orden,
+    altura_poste,
+    altura_libre,
+    carga_rotura_poste,
+    tabla_evu_postes,
+    altura_retenida=None,
+    col_salida="Capacidad vertical última con retenida (daN)",
+):
+    """
+    Calcula la capacidad vertical última de un poste con retenida
+    según tabla AFINIA de capacidad vertical con retenidas.
+
+    Reglas generales:
+    - Iteración por postes_orden
+    - Uso del principio del 5% para selección de valores tabulados
+    - Si no hay coincidencia exacta, se toma el valor más cercano inferior
+    """
+
+    # --------------------------------------------------
+    # Inicialización
+    # --------------------------------------------------
+    carac_postes[col_salida] = np.nan
+
+    if altura_retenida is None:
+        altura_retenida = altura_poste
+
+    # --------------------------------------------------
+    # Funciones auxiliares
+    # --------------------------------------------------
+    def valor_tabla_5pct(objetivo, valores):
+        """
+        Aplica regla:
+        - ±5% → valor más cercano
+        - si no, toma el mayor <= objetivo
+        """
+        valores = np.array(sorted(valores), dtype=float)
+
+        dif_rel = np.abs(valores - objetivo) / objetivo
+        mask_5 = dif_rel <= 0.05
+
+        if mask_5.any():
+            return valores[mask_5][np.argmin(np.abs(valores[mask_5] - objetivo))]
+
+        menores = valores[valores <= objetivo]
+        if len(menores) > 0:
+            return menores[-1]
+
+        return valores[0]
+
+    def seleccionar_columna_hn(delta_h):
+        """
+        Selección de columna según delta de altura
+        """
+        if delta_h <= 0.4:
+            return "hN"
+        elif delta_h <= 0.8:
+            return "hN_0_4m"
+        elif delta_h <= 3.3:
+            return "hN_0_8m"
+        else:
+            return "hN_3_3m"
+
+    # --------------------------------------------------
+    # Iteración por poste (orden final)
+    # --------------------------------------------------
+    for i, poste in enumerate(postes_orden):
+
+        H_total = altura_poste.iloc[i]
+        H_libre = altura_libre.iloc[i]
+        H_ret = altura_retenida.iloc[i]
+        carga_poste = carga_rotura_poste.iloc[i]
+
+        if pd.isna(H_total) or pd.isna(H_libre) or pd.isna(carga_poste):
+            continue
+
+        # --------------------------------------------------
+        # 1. Delta de alturas
+        # --------------------------------------------------
+        delta_h = H_libre - H_ret
+        col_hn = seleccionar_columna_hn(delta_h)
+
+        # --------------------------------------------------
+        # 2. Selección de altura y carga en tabla
+        # --------------------------------------------------
+        alturas_tabla = tabla_evu_postes["altura_m"].unique()
+        cargas_tabla = tabla_evu_postes["carga_flexion_daN"].unique()
+
+        altura_sel = valor_tabla_5pct(H_total, alturas_tabla)
+        carga_sel = valor_tabla_5pct(carga_poste, cargas_tabla)
+
+        # ----------------------------------------------
