@@ -389,7 +389,7 @@ df_cables_acero_galvanizado = pd.DataFrame({
     "Coeficiente de dilatación lineal (°C⁻¹)": [11.5e-6, 11.5e-6]
 })
 
-""" print(df_cables_acero_galvanizado)  """
+print(df_cables_acero_galvanizado["Carga de Rotura (daN)"]) 
 
 
 
