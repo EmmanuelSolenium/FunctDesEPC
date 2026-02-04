@@ -2424,3 +2424,70 @@ def capacidad_vertical_ultima_retenida(
         ] = cap_vertical
 
     return carac_postes
+
+import numpy as np
+import pandas as pd
+
+
+def calcular_cs(
+    Ret: pd.DataFrame,
+    Mec: pd.DataFrame,
+    col_salida: str = "C.S. (2,5)"
+):
+    """
+    Calcula la combinación C.S. (2,5) y agrega la columna al dataframe Ret.
+
+    Para cada fila:
+    - Se compara FTVC vs FLMC en Mec
+    - Se toma el máximo
+    - Se aplica la expresión correspondiente
+    """
+
+    # ------------------------------------------------------------
+    # Inicializar columna con valor por defecto
+    # ------------------------------------------------------------
+    Ret[col_salida] = np.nan
+
+    # ------------------------------------------------------------
+    # Comparación fila a fila
+    # ------------------------------------------------------------
+    max_es_FLMC = Mec["FLMC"] >= Mec["FTVC"]
+    max_es_FTVC = Mec["FTVC"] > Mec["FLMC"]
+
+    # ------------------------------------------------------------
+    # Caso 1: máximo en FLMC
+    # ------------------------------------------------------------
+    Ret.loc[max_es_FLMC, col_salida] = np.sqrt(
+        (
+            Mec.loc[max_es_FLMC, "FTVC"]
+            + Mec.loc[max_es_FLMC, "FTVP"]
+            + Mec.loc[max_es_FLMC, "FTVE"]
+            + Mec.loc[max_es_FLMC, "FTVC"]
+            + Mec.loc[max_es_FLMC, "FTEC"]
+        ) ** 2
+        +
+        (
+            Mec.loc[max_es_FLMC, "FLEE"]
+            + Ret.loc[max_es_FLMC, "Fuerza Residual Fres (daN)"]
+        ) ** 2
+    )
+
+    # ------------------------------------------------------------
+    # Caso 2: máximo en FTVC
+    # ------------------------------------------------------------
+    Ret.loc[max_es_FTVC, col_salida] = np.sqrt(
+        (
+            Ret.loc[max_es_FTVC, "Fuerza Residual Fres (daN)"]
+            + Mec.loc[max_es_FTVC, "FTVP"]
+            + Mec.loc[max_es_FTVC, "FTVE"]
+            + Mec.loc[max_es_FTVC, "FTVC"]
+            + Mec.loc[max_es_FTVC, "FTEC"]
+        ) ** 2
+        +
+        (
+            Mec.loc[max_es_FTVC, "FLMC"]
+            + Mec.loc[max_es_FTVC, "FLEE"]
+        ) ** 2
+    )
+
+    return Ret
