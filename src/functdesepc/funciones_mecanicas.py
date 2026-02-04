@@ -2084,11 +2084,17 @@ def fuerza_residual_retenidas(
         # Tipo de retenida
         fila_tipo = tipo_retenida.loc[
             carac_postes[postes_orden.name] == poste
-        ].iloc[0]
+        ]
 
-        if fila_tipo["Conjunto a 90º"] == "X":
+        if fila_tipo.empty:
+            continue
+
+        conj_90 = fila_tipo["Conjunto a 90º"].iloc[0]
+        bisec = fila_tipo["Bisectora"].iloc[0]
+
+        if conj_90 == "X":
             tipo_ret = "90"
-        elif fila_tipo["Bisectora"] == "X":
+        elif bisec == "X":
             tipo_ret = "Bisectora"
         else:
             continue
