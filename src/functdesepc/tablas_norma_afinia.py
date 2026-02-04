@@ -652,5 +652,5 @@ c_ret_1_2_90 = (
 c_ret_1_2_90 = expandir_rangos_carga_multiindex(c_ret_1_2_90)
 
 
-
-print(c_ret_3_8_90.columns,c_ret_1_2_90.columns,c_retenida_1_2.columns,c_retenida_3_8.columns)
+""" 
+print(c_ret_3_8_90.columns,c_ret_1_2_90.columns,c_retenida_1_2.columns,c_retenida_3_8.columns) """
