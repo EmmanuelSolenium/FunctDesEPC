@@ -2430,7 +2430,7 @@ def capacidad_vertical_ultima_retenida(
 def calcular_cs(
     Ret: pd.DataFrame,
     Mec: pd.DataFrame,
-    col_salida: str = "C.S. (2,5)"
+    col_salida: str = 'Fuerza Total Horiz. Resultante (daN)'
 ):
     """
     Calcula la combinación C.S. (2,5) y agrega la columna al dataframe Ret.
