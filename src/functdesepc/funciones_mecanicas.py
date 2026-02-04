@@ -2082,12 +2082,17 @@ def fuerza_residual_retenidas(
             continue
 
         # Tipo de retenida
-        if tipo_retenida.loc[i, "Conjunto a 90º"] == "X":
+        fila_tipo = tipo_retenida.loc[
+            carac_postes[postes_orden.name] == poste
+        ].iloc[0]
+
+        if fila_tipo["Conjunto a 90º"] == "X":
             tipo_ret = "90"
-        elif tipo_retenida.loc[i, "Bisectora"] == "X":
+        elif fila_tipo["Bisectora"] == "X":
             tipo_ret = "Bisectora"
         else:
             continue
+
 
         # Parámetros geométricos
         Hj = altura_retenidas.iloc[i]
