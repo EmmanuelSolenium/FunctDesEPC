@@ -1980,173 +1980,173 @@ def calcular_tiro_maximo(
 
 
 
+import numpy as np
+import pandas as pd
+
+
 def calcular_fuerza_residual_retenidas(
-    carac_postes,
+    ret,
     postes_orden,
     postes_export,
-    retenidas_export,
+    retenidas,
     flmc,
     altura_postes,
     carga_rotura_poste,
-    tablas_coeficientes,
+    lista_tablas_coef,
     tipo_retenida_df,
     tipo_poste,
-    tabla_cables_acero,
-    calibre_retenida="3/8",
-    altura_retenidas=None,
-    col_salida="Fuerza Residual Fres (daN)",
+    df_cables_acero,
+    col_fres="Fuerza Residual Fres (daN)",
     col_fver="Fuerza vertical por retenida Fvert (daN)",
     col_trac="Tracción total cable ret.(daN)",
     col_pret="Pretensionado de la Retenida (daN)",
     col_rot="Carga rotura cable ret. (daN)",
 ):
     """
-    Calcula fuerza residual y fuerzas asociadas por retenidas.
+    Calcula fuerzas asociadas a retenidas:
+    - Fuerza residual
+    - Fuerza vertical
+    - Tracción
+    - Pretensionado
+    - Carga de rotura de la retenida
+
+    Corrección integrada:
+    - Acceso SIEMPRE por índice posicional (iloc)
+    - Mapeo poste → índice único
     """
 
-    # ---------------------------------------------------------
-    # Inicialización
-    # ---------------------------------------------------------
-    for col in [col_salida, col_fver, col_trac, col_pret, col_rot]:
-        carac_postes[col] = np.nan
+    # --------------------------------------------------
+    # Inicialización de columnas
+    # --------------------------------------------------
+    for col in [col_fres, col_fver, col_trac, col_pret, col_rot]:
+        ret[col] = np.nan
 
-    if altura_retenidas is None:
-        altura_retenidas = altura_postes
+    # --------------------------------------------------
+    # Mapeo seguro poste → índice
+    # --------------------------------------------------
+    map_idx = {v: i for i, v in enumerate(postes_export.values)}
 
-    # ---------------------------------------------------------
-    # Función robusta de selección (FIX PRINCIPAL)
-    # ---------------------------------------------------------
-    def seleccionar_valor_tabla(valor, valores_tabla):
-        vals = np.asarray(valores_tabla, dtype=float)
+    # --------------------------------------------------
+    # Función auxiliar: selección tabla de coeficientes
+    # --------------------------------------------------
+    def seleccionar_tabla(calibre, tipo):
+        """
+        calibre: '3/8' o '1/2'
+        tipo: '90' o 'BIS'
+        """
+        for tab in lista_tablas_coef:
+            nombre = tab.attrs.get("nombre", "").lower()
+            if calibre in nombre and tipo.lower() in nombre:
+                return tab
+        return None
 
-        if len(vals) == 0 or pd.isna(valor):
-            return np.nan
-
-        dif_rel = np.abs(vals - valor) / valor
-        mask_5 = dif_rel <= 0.05
-
-        if mask_5.any():
-            return vals[mask_5][dif_rel[mask_5].argmin()]
-
-        menores = vals[vals <= valor]
-        if len(menores) > 0:
-            return menores.max()
-
-        # FIX CRÍTICO: nunca dejar vacío
-        return vals.min()
-
-    # ---------------------------------------------------------
-    # Selección Ru cable de acero
-    # ---------------------------------------------------------
-    mask_ru = tabla_cables_acero["Denominación"].str.contains(
-        calibre_retenida, case=False, na=False
-    )
-    Ru = tabla_cables_acero.loc[mask_ru, "Carga de Rotura (daN)"].iloc[0]
-
-    # ---------------------------------------------------------
-    # Iteración por poste final (ordenado)
-    # ---------------------------------------------------------
+    # --------------------------------------------------
+    # Iteración por poste ordenado
+    # --------------------------------------------------
     for poste in postes_orden:
 
-        idxs = np.where(postes_export.values == poste)[0]
-
-        if len(idxs) == 0:
+        if poste not in map_idx:
             continue
 
-        # -----------------------------------------------------
-        # ¿Tiene retenidas?
-        # -----------------------------------------------------
-        vals_ret = retenidas_export.iloc[idxs]
-        tiene_ret = any(
-            (not pd.isna(v)) and str(v).strip() not in {"", "-", "0"} and float(v) > 0
-            for v in vals_ret
-        )
+        i = map_idx[poste]
 
-        if not tiene_ret:
+        # ¿Aplica retenida?
+        if not retenidas.iloc[i]:
             continue
 
-        # -----------------------------------------------------
-        # Datos base
-        # -----------------------------------------------------
-        flmc_i = flmc.loc[poste]
-        Hn = altura_postes.loc[poste]
-        Hj = altura_retenidas.loc[poste]
+        # --------------------------------------------------
+        # Datos base (TODOS por iloc)
+        # --------------------------------------------------
+        flmc_i = flmc.iloc[i]
+        Hn = altura_postes.iloc[i]
+        Hj = ret["Altura de anclaje retenida (m)"].iloc[i]
         delta_h = Hn - Hj
-        cr_poste = carga_rotura_poste.loc[poste]
-        tipo_p = tipo_poste.loc[poste]
+        cr_poste = carga_rotura_poste.iloc[i]
+        tipo_p = tipo_poste.iloc[i]
 
-        # -----------------------------------------------------
-        # Tipo de retenida
-        # -----------------------------------------------------
-        if tipo_retenida_df.loc[poste, "Conjunto a 90º"] == "X":
-            tipo = "90"
+        if pd.isna(flmc_i) or pd.isna(delta_h) or delta_h <= 0:
+            continue
+
+        # --------------------------------------------------
+        # Tipo de retenida: 90° o Bisectora
+        # --------------------------------------------------
+        if tipo_retenida_df.iloc[i]["Conjunto a 90º"] == "X":
+            tipo_ret = "90"
         else:
-            tipo = "BIS"
+            tipo_ret = "BIS"
 
-        # -----------------------------------------------------
-        # Selección tabla correcta
-        # -----------------------------------------------------
-        tablas_validas = []
-        for t in tablas_coeficientes:
-            if tipo == "90" and "β (°)" in t.index.names:
-                tablas_validas.append(t)
-            if tipo == "BIS" and "β (°)" not in t.index.names:
-                tablas_validas.append(t)
+        # --------------------------------------------------
+        # Calibre retenida
+        # --------------------------------------------------
+        calibre = ret["Calibre retenida"].iloc[i]
+        if pd.isna(calibre):
+            continue
 
-        tabla = tablas_validas[0]
+        calibre = str(calibre).strip()
 
-        # -----------------------------------------------------
-        # Selección carga
-        # -----------------------------------------------------
-        cargas_tabla = tabla.index.get_level_values(-1).unique()
-        carga_sel = seleccionar_valor_tabla(cr_poste, cargas_tabla)
+        # --------------------------------------------------
+        # Selección tabla coeficientes
+        # --------------------------------------------------
+        tabla = seleccionar_tabla(calibre, tipo_ret)
+        if tabla is None:
+            continue
 
-        # -----------------------------------------------------
-        # Selección beta si aplica
-        # -----------------------------------------------------
-        if tipo == "90":
-            betas = tabla.index.get_level_values(0).unique()
-            beta_sel = seleccionar_valor_tabla(90, betas)
-            fila = tabla.loc[(beta_sel, carga_sel)]
+        # --------------------------------------------------
+        # Búsqueda coeficientes A, B, C
+        # --------------------------------------------------
+        beta = ret["β"].iloc[i]
+
+        fila = tabla[tabla["β"] == beta]
+        if fila.empty:
+            continue
+
+        A = fila["A"].values[0]
+        B = fila["B"].values[0]
+        C = fila["CP"].values[0]
+
+        # --------------------------------------------------
+        # Fuerza residual
+        # --------------------------------------------------
+        fres = A * flmc_i
+        ret.loc[ret[postes_orden.name] == poste, col_fres] = fres
+
+        # --------------------------------------------------
+        # Fuerza vertical
+        # --------------------------------------------------
+        fver = B * flmc_i
+        ret.loc[ret[postes_orden.name] == poste, col_fver] = fver
+
+        # --------------------------------------------------
+        # Tracción retenida
+        # --------------------------------------------------
+        trac = 1.5 * C * flmc_i
+        ret.loc[ret[postes_orden.name] == poste, col_trac] = trac
+
+        # --------------------------------------------------
+        # Carga de rotura del cable de retenida
+        # --------------------------------------------------
+        fila_ru = df_cables_acero[
+            df_cables_acero["Denominación"].astype(str).str.contains(calibre)
+        ]
+
+        if fila_ru.empty:
+            continue
+
+        Ru = fila_ru["Carga de Rotura (daN)"].values[0]
+        ret.loc[ret[postes_orden.name] == poste, col_rot] = Ru
+
+        # --------------------------------------------------
+        # Pretensionado
+        # --------------------------------------------------
+        if tipo_p == "FL":
+            pretr = max(2 * abs(A * flmc_i - cr_poste / 2.5), 0.05 * Ru)
+        elif tipo_p == "ANC":
+            pretr = max(2 * abs(A * flmc_i - cr_poste / 1.5), 0.05 * Ru)
+        elif tipo_p == "ANG":
+            pretr = max(2 * abs(A * flmc_i - cr_poste / 2.5), 0.05 * Ru)
         else:
-            fila = tabla.loc[carga_sel]
+            pretr = np.nan
 
-        # -----------------------------------------------------
-        # Selección tramo por delta H
-        # -----------------------------------------------------
-        if delta_h <= 1.2:
-            tramo = "≤1.2 m"
-        elif delta_h <= 2.2:
-            tramo = "1.2 < L ≤ 2.2 m"
-        else:
-            tramo = ">3.0 m"
+        ret.loc[ret[postes_orden.name] == poste, col_pret] = pretr
 
-        A = fila[(tramo, "A")]
-        B = fila[(tramo, "B")]
-        C = fila[(tramo, "CP")] if "CP" in fila.index.get_level_values(1) else fila[(tramo, "C")]
-
-        # -----------------------------------------------------
-        # Cálculo de fuerzas
-        # -----------------------------------------------------
-        Fres = flmc_i * A * Hj / Hn
-        Fvert = B * flmc_i
-        Tracr = 1.5 * C * flmc_i
-        Rotr = Ru
-
-        if tipo_p == "ANC":
-            Pret = max(2 * abs(A * flmc_i - cr_poste / 1.5), 0.05 * Ru)
-        else:
-            Pret = max(2 * abs(A * flmc_i - cr_poste / 2.5), 0.05 * Ru)
-
-        # -----------------------------------------------------
-        # Escritura
-        # -----------------------------------------------------
-        mask_final = carac_postes[postes_orden.name] == poste
-
-        carac_postes.loc[mask_final, col_salida] = Fres
-        carac_postes.loc[mask_final, col_fver] = Fvert
-        carac_postes.loc[mask_final, col_trac] = Tracr
-        carac_postes.loc[mask_final, col_pret] = Pret
-        carac_postes.loc[mask_final, col_rot] = Rotr
-
-    return carac_postes
+    return ret
