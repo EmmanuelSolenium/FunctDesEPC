@@ -510,7 +510,7 @@ c_retenida_1_2 =expandir_rangos_carga(c_retenida_1_2)
 columnas = pd.MultiIndex.from_product(
     [
         ["≤1.2 m", "1.2 < L ≤ 2.2 m", ">3.0 m"],
-        ["A", "B", "CP"]
+        ["A", "B", "C"]
     ],
     names=["Longitud poste", "Grupo"]
 )
@@ -592,7 +592,7 @@ c_ret_3_8_90 = expandir_rangos_carga_multiindex(c_ret_3_8_90)
 columnas = pd.MultiIndex.from_product(
     [
         ["≤1.2 m", "1.2 < L ≤ 2.2 m", ">3.0 m"],
-        ["A", "B", "CP"]
+        ["A", "B", "C"]
     ],
     names=["Longitud poste", "Grupo"]
 )
@@ -653,4 +653,4 @@ c_ret_1_2_90 = expandir_rangos_carga_multiindex(c_ret_1_2_90)
 
 
 
-
+print(c_ret_3_8_90.columns,c_ret_1_2_90.columns,c_retenida_1_2.columns,c_retenida_3_8.columns)
