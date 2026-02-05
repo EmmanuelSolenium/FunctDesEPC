@@ -2657,77 +2657,65 @@ def clasificar_cantones(
 
 
 
-def max_por_canton(
-    van_reg,     # DataFrame base
+def max_canton(
+    van_reg,     # DataFrame base (se ajusta si es necesario)
     cantones,    # Series con cantón o lista de cantones por poste
     lista,       # Series con valores en orden de exportación
-    col          # Nombre de la columna a crear / reemplazar
+    col          # Nombre de la columna de salida
 ):
     """
-    Para cada cantón, obtiene el valor máximo de 'lista' considerando
-    solo los postes del cantón hasta el n-1 (excluye el último poste).
+    Obtiene un único valor máximo por cantón usando la regla n-1
+    (se excluye el último poste del cantón).
 
-    Agrega o reemplaza la columna 'col' en van_reg.
-
-    Si el tamaño de van_reg no coincide con el tamaño de la columna
-    resultante, se recorta van_reg al tamaño de la columna.
+    La salida tiene una fila por cantón, en orden creciente de cantón.
     """
 
     # ------------------------------------------------------------
-    # Normalizar cantones → cada poste puede pertenecer a 1 o 2
+    # Expandir relación poste–cantón
     # ------------------------------------------------------------
-    registros = []
+    pares = []
 
-    for i, c in cantones.items():
+    for idx, c in cantones.items():
         if isinstance(c, list):
             for ci in c:
-                registros.append((i, ci))
+                pares.append((ci, idx))
         else:
-            registros.append((i, c))
+            pares.append((c, idx))
 
-    df_cant = pd.DataFrame(registros, columns=["idx", "canton"])
+    df = pd.DataFrame(pares, columns=["canton", "idx"])
 
     # ------------------------------------------------------------
-    # Construir estructura por cantón (orden de exportación)
+    # Calcular máximo por cantón
     # ------------------------------------------------------------
-    resultado = pd.Series(index=lista.index, dtype=float)
+    resultados = []
 
-    for canton, grp in df_cant.groupby("canton"):
+    for canton in sorted(df["canton"].unique()):
 
-        # índices originales en orden
-        idxs = grp["idx"].tolist()
-        idxs.sort()
+        idxs = df[df["canton"] == canton]["idx"].tolist()
 
-        # Cantones deben tener mínimo 2 postes
         if len(idxs) < 2:
+            resultados.append(np.nan)
             continue
 
-        # Excluir el último poste del cantón
-        idxs_validos = idxs[:-1]
+        idxs_validos = idxs[:-1]  # regla n-1
 
-        # Máximo de la lista solo con n-1
-        valores = lista.loc[idxs_validos]
-        max_canton = valores.max()
+        valores = lista.loc[idxs_validos].dropna()
 
-        # Asignar a TODOS los postes del cantón
-        for idx in idxs:
-            resultado.loc[idx] = max_canton
+        if valores.empty:
+            resultados.append(np.nan)
+        else:
+            resultados.append(valores.max())
 
     # ------------------------------------------------------------
-    # Ajustar tamaño del dataframe si es necesario
+    # Ajustar van_reg al tamaño de la salida
     # ------------------------------------------------------------
-    n_col = len(resultado)
-    n_df = len(van_reg)
+    n_out = len(resultados)
 
-    if n_df > n_col:
-        van_reg = van_reg.iloc[:n_col].copy()
-    elif n_df < n_col:
-        resultado = resultado.iloc[:n_df]
+    if len(van_reg) > n_out:
+        van_reg = van_reg.iloc[:n_out].copy()
+    elif len(van_reg) < n_out:
+        resultados = resultados[:len(van_reg)]
 
-    # ------------------------------------------------------------
-    # Asignar columna
-    # ------------------------------------------------------------
-    van_reg[col] = resultado.values
+    van_reg[col] = resultados
 
     return van_reg
-
