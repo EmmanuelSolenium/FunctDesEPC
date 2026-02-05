@@ -2655,3 +2655,79 @@ def clasificar_cantones(
     return pd.Series(resultado, index=postes_exportacion.index, name="Canton")
 
 
+
+
+def max_por_canton(
+    van_reg,     # DataFrame base
+    cantones,    # Series con cantón o lista de cantones por poste
+    lista,       # Series con valores en orden de exportación
+    col          # Nombre de la columna a crear / reemplazar
+):
+    """
+    Para cada cantón, obtiene el valor máximo de 'lista' considerando
+    solo los postes del cantón hasta el n-1 (excluye el último poste).
+
+    Agrega o reemplaza la columna 'col' en van_reg.
+
+    Si el tamaño de van_reg no coincide con el tamaño de la columna
+    resultante, se recorta van_reg al tamaño de la columna.
+    """
+
+    # ------------------------------------------------------------
+    # Normalizar cantones → cada poste puede pertenecer a 1 o 2
+    # ------------------------------------------------------------
+    registros = []
+
+    for i, c in cantones.items():
+        if isinstance(c, list):
+            for ci in c:
+                registros.append((i, ci))
+        else:
+            registros.append((i, c))
+
+    df_cant = pd.DataFrame(registros, columns=["idx", "canton"])
+
+    # ------------------------------------------------------------
+    # Construir estructura por cantón (orden de exportación)
+    # ------------------------------------------------------------
+    resultado = pd.Series(index=lista.index, dtype=float)
+
+    for canton, grp in df_cant.groupby("canton"):
+
+        # índices originales en orden
+        idxs = grp["idx"].tolist()
+        idxs.sort()
+
+        # Cantones deben tener mínimo 2 postes
+        if len(idxs) < 2:
+            continue
+
+        # Excluir el último poste del cantón
+        idxs_validos = idxs[:-1]
+
+        # Máximo de la lista solo con n-1
+        valores = lista.loc[idxs_validos]
+        max_canton = valores.max()
+
+        # Asignar a TODOS los postes del cantón
+        for idx in idxs:
+            resultado.loc[idx] = max_canton
+
+    # ------------------------------------------------------------
+    # Ajustar tamaño del dataframe si es necesario
+    # ------------------------------------------------------------
+    n_col = len(resultado)
+    n_df = len(van_reg)
+
+    if n_df > n_col:
+        van_reg = van_reg.iloc[:n_col].copy()
+    elif n_df < n_col:
+        resultado = resultado.iloc[:n_df]
+
+    # ------------------------------------------------------------
+    # Asignar columna
+    # ------------------------------------------------------------
+    van_reg[col] = resultado.values
+
+    return van_reg
+
