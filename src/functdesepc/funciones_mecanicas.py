@@ -2655,10 +2655,11 @@ def clasificar_cantones(
     return pd.Series(resultado, index=postes_exportacion.index, name="Canton")
 
 
-
+import pandas as pd
+import numpy as np
 
 def max_canton(
-    van_reg,     # DataFrame base (se ajusta si es necesario)
+    van_reg,     # DataFrame base
     cantones,    # Series con cantón o lista de cantones por poste
     lista,       # Series con valores en orden de exportación
     col          # Nombre de la columna de salida
@@ -2667,7 +2668,9 @@ def max_canton(
     Obtiene un único valor máximo por cantón usando la regla n-1
     (se excluye el último poste del cantón).
 
-    La salida tiene una fila por cantón, en orden creciente de cantón.
+    - La salida tiene una fila por cantón, en orden creciente.
+    - Si van_reg tiene menos filas que la salida, se expande y
+      las columnas existentes se rellenan con NaN.
     """
 
     # ------------------------------------------------------------
@@ -2685,11 +2688,13 @@ def max_canton(
     df = pd.DataFrame(pares, columns=["canton", "idx"])
 
     # ------------------------------------------------------------
-    # Calcular máximo por cantón
+    # Calcular máximo por cantón (regla n-1)
     # ------------------------------------------------------------
     resultados = []
 
-    for canton in sorted(df["canton"].unique()):
+    cantones_ordenados = sorted(df["canton"].unique())
+
+    for canton in cantones_ordenados:
 
         idxs = df[df["canton"] == canton]["idx"].tolist()
 
@@ -2697,7 +2702,7 @@ def max_canton(
             resultados.append(np.nan)
             continue
 
-        idxs_validos = idxs[:-1]  # regla n-1
+        idxs_validos = idxs[:-1]  # excluir último poste del cantón
 
         valores = lista.loc[idxs_validos].dropna()
 
@@ -2707,15 +2712,29 @@ def max_canton(
             resultados.append(valores.max())
 
     # ------------------------------------------------------------
-    # Ajustar van_reg al tamaño de la salida
+    # Ajustar tamaño del DataFrame
     # ------------------------------------------------------------
     n_out = len(resultados)
+    n_df = len(van_reg)
 
-    if len(van_reg) > n_out:
+    if n_df < n_out:
+        # Expandir DataFrame
+        filas_extra = n_out - n_df
+        df_extra = pd.DataFrame(
+            np.nan,
+            index=range(filas_extra),
+            columns=van_reg.columns
+        )
+        van_reg = pd.concat([van_reg, df_extra], ignore_index=True)
+
+    elif n_df > n_out:
+        # Recortar DataFrame
         van_reg = van_reg.iloc[:n_out].copy()
-    elif len(van_reg) < n_out:
-        resultados = resultados[:len(van_reg)]
 
+    # ------------------------------------------------------------
+    # Asignar columna de salida
+    # ------------------------------------------------------------
     van_reg[col] = resultados
 
     return van_reg
+
