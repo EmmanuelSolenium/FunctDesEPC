@@ -141,7 +141,7 @@ def identificar_poste(codigo: str, detallado: bool = False):
 
     # --- Validación básica ---
     if "-" not in codigo:
-        raise ValueError("El código debe tener el formato 'CCC###-#'.")
+        return np.nan
 
     parte_armado, parte_tension = codigo.split("-")
 
@@ -150,7 +150,7 @@ def identificar_poste(codigo: str, detallado: bool = False):
     numeros = ''.join([c for c in parte_armado if c.isdigit()])
 
     if len(numeros) != 3:
-        raise ValueError("El código debe contener tres dígitos consecutivos para el armado.")
+        return np.nan
 
     # --- Interpretación de letras ---
     nivel_tension = letras[:2]
@@ -2563,3 +2563,4 @@ def clasificar_cantones(
             resultado[i] = canton_actual
 
     return pd.Series(resultado, index=postes_exportacion.index, name="Canton")
+
