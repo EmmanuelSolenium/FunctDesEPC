@@ -141,7 +141,7 @@ def identificar_poste(codigo: str, detallado: bool = False):
 
     # --- Validación básica ---
     if "-" not in codigo:
-        return np.nan
+        raise ValueError("El código debe tener el formato 'CCC###-#'.")
 
     parte_armado, parte_tension = codigo.split("-")
 
@@ -150,7 +150,7 @@ def identificar_poste(codigo: str, detallado: bool = False):
     numeros = ''.join([c for c in parte_armado if c.isdigit()])
 
     if len(numeros) != 3:
-        return np.nan
+        raise ValueError("El código debe contener tres dígitos consecutivos para el armado.")
 
     # --- Interpretación de letras ---
     nivel_tension = letras[:2]
@@ -2564,3 +2564,99 @@ def clasificar_cantones(
 
     return pd.Series(resultado, index=postes_exportacion.index, name="Canton")
 
+import numpy as np
+
+def identificar_poste(codigo: str, detallado: bool = False):
+    """
+    Identifica el tipo de poste según el código de armado de AFINIA.
+
+    Si detallado=False → retorna solo las siglas del tipo de poste: FL, AL, ANG, ANC.
+    Si detallado=True  → retorna un diccionario con información completa.
+    Si el código no es válido → retorna np.nan
+    """
+
+    try:
+        # --- Validación básica ---
+        if not isinstance(codigo, str) or "-" not in codigo:
+            return np.nan
+
+        parte_armado, parte_tension = codigo.split("-")
+
+        # Letras y números
+        letras = ''.join(c for c in parte_armado if c.isalpha())
+        numeros = ''.join(c for c in parte_armado if c.isdigit())
+
+        if len(numeros) != 3 or len(letras) < 2:
+            return np.nan
+
+        # --- Interpretación de letras ---
+        nivel_tension = letras[:2]
+        if nivel_tension == "BT":
+            nivel = "Baja Tensión"
+        elif nivel_tension == "MT":
+            nivel = "Media Tensión"
+        else:
+            return np.nan  # nivel no reconocido
+
+        tipo_cable = "Forrado" if (len(letras) == 3 and letras[2] == "F") else "Desnudo"
+
+        # --- Interpretación de dígitos ---
+        d1, d2, d3 = map(int, numeros)
+
+        # Armado general
+        if d1 == 6:
+            armado_general = "Autosoportado (1 circuito)"
+        elif d1 == 7:
+            armado_general = "Autosoportado (2 circuitos)"
+        else:
+            return np.nan
+
+        # Fases
+        if d2 == 3:
+            fases = "Trifásico"
+        elif d2 == 2:
+            fases = "Bifásico"
+        else:
+            return np.nan
+
+        # Tipo de poste
+        if d3 == 1:
+            sigla_poste = "FL"
+            tipo_poste = "Fin de Línea"
+        elif d3 == 2:
+            sigla_poste = "AL"
+            tipo_poste = "Alineación"
+        elif d3 == 3:
+            sigla_poste = "ANG"
+            tipo_poste = "Ángulo"
+        elif d3 in (4, 5):
+            sigla_poste = "ANC"
+            tipo_poste = "Anclaje"
+        else:
+            return np.nan
+
+        # Tensión del circuito
+        if parte_tension == "1":
+            tension = "13.2 kV"
+        elif parte_tension == "2":
+            tension = "34.5 kV"
+        else:
+            return np.nan
+
+        # --- Salida ---
+        if not detallado:
+            return sigla_poste
+
+        return {
+            "Código": codigo,
+            "Sigla": sigla_poste,
+            "Tipo de Poste": tipo_poste,
+            "Nivel de Tensión": nivel,
+            "Tipo de Cable": tipo_cable,
+            "Armado General": armado_general,
+            "Fases": fases,
+            "Tensión del Circuito": tension
+        }
+
+    except Exception:
+        return np.nan
