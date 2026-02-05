@@ -2655,8 +2655,6 @@ def clasificar_cantones(
     return pd.Series(resultado, index=postes_exportacion.index, name="Canton")
 
 
-import pandas as pd
-import numpy as np
 
 def max_canton(
     van_reg,     # DataFrame base
@@ -2738,3 +2736,71 @@ def max_canton(
 
     return van_reg
 
+
+
+def resumen_cantones(
+    reg_van,          # DataFrame base
+    postes,           # Series con nombre del poste (orden exportación)
+    cantones,         # Series con cantón o lista de cantones
+    col1="Cantón",
+    col2="Poste Inicial",
+    col3="Poste Final",
+):
+    """
+    Construye una tabla resumen por cantón con:
+    - Cantón
+    - Poste inicial
+    - Poste final
+
+    El orden de los cantones sigue el orden de exportación.
+    """
+
+    # ------------------------------------------------------------
+    # Expandir relación poste–cantón
+    # ------------------------------------------------------------
+    registros = []
+
+    for i, c in cantones.items():
+        if isinstance(c, list):
+            for ci in c:
+                registros.append((ci, i))
+        else:
+            registros.append((c, i))
+
+    df = pd.DataFrame(registros, columns=["canton", "idx"])
+
+    # ------------------------------------------------------------
+    # Ordenar por aparición en exportación
+    # ------------------------------------------------------------
+    df = df.sort_values("idx")
+
+    cantones_ordenados = []
+    for c in df["canton"]:
+        if c not in cantones_ordenados:
+            cantones_ordenados.append(c)
+
+    # ------------------------------------------------------------
+    # Obtener poste inicial y final por cantón
+    # ------------------------------------------------------------
+    cant_out = []
+    poste_ini = []
+    poste_fin = []
+
+    for c in cantones_ordenados:
+
+        idxs = df[df["canton"] == c]["idx"].tolist()
+
+        cant_out.append(c)
+        poste_ini.append(postes.loc[idxs[0]])
+        poste_fin.append(postes.loc[idxs[-1]])
+
+    # ------------------------------------------------------------
+    # Construir DataFrame final
+    # ------------------------------------------------------------
+    salida = pd.DataFrame({
+        col1: cant_out,
+        col2: poste_ini,
+        col3: poste_fin
+    })
+
+    return salida
