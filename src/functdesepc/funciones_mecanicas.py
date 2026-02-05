@@ -137,91 +137,94 @@ def identificar_poste(codigo: str, detallado: bool = False):
 
     Si detallado=False → retorna solo las siglas del tipo de poste: FL, AL, ANG, ANC.
     Si detallado=True  → retorna un diccionario con información completa.
+    Si el código no es válido → retorna np.nan
     """
 
-    # --- Validación básica ---
-    if "-" not in codigo:
-        raise ValueError("El código debe tener el formato 'CCC###-#'.")
+    try:
+        # --- Validación básica ---
+        if not isinstance(codigo, str) or "-" not in codigo:
+            return np.nan
 
-    parte_armado, parte_tension = codigo.split("-")
+        parte_armado, parte_tension = codigo.split("-")
 
-    # Letras iniciales (2 o 3)
-    letras = ''.join([c for c in parte_armado if c.isalpha()])
-    numeros = ''.join([c for c in parte_armado if c.isdigit()])
+        # Letras y números
+        letras = ''.join(c for c in parte_armado if c.isalpha())
+        numeros = ''.join(c for c in parte_armado if c.isdigit())
 
-    if len(numeros) != 3:
-        raise ValueError("El código debe contener tres dígitos consecutivos para el armado.")
+        if len(numeros) != 3 or len(letras) < 2:
+            return np.nan
 
-    # --- Interpretación de letras ---
-    nivel_tension = letras[:2]
-    if nivel_tension == "BT":
-        nivel = "Baja Tensión"
-    elif nivel_tension == "MT":
-        nivel = "Media Tensión"
-    else:
-        nivel = "Desconocido"
+        # --- Interpretación de letras ---
+        nivel_tension = letras[:2]
+        if nivel_tension == "BT":
+            nivel = "Baja Tensión"
+        elif nivel_tension == "MT":
+            nivel = "Media Tensión"
+        else:
+            return np.nan  # nivel no reconocido
 
-    # Tipo de cable
-    tipo_cable = "Forrado" if (len(letras) == 3 and letras[2] == "F") else "Desnudo"
+        tipo_cable = "Forrado" if (len(letras) == 3 and letras[2] == "F") else "Desnudo"
 
-    # --- Interpretación de dígitos ---
-    d1 = int(numeros[0])
-    d2 = int(numeros[1])
-    d3 = int(numeros[2])
+        # --- Interpretación de dígitos ---
+        d1, d2, d3 = map(int, numeros)
 
-    # Armado general
-    if d1 == 6:
-        armado_general = "Autosoportado (1 circuito)"
-    elif d1 == 7:
-        armado_general = "Autosoportado (2 circuitos)"
-    else:
-        armado_general = f"Armado general tipo {d1}"
+        # Armado general
+        if d1 == 6:
+            armado_general = "Autosoportado (1 circuito)"
+        elif d1 == 7:
+            armado_general = "Autosoportado (2 circuitos)"
+        else:
+            return np.nan
 
-    # Fases
-    fases = "Trifásico" if d2 == 3 else ("Bifásico" if d2 == 2 else f"{d2} fases")
+        # Fases
+        if d2 == 3:
+            fases = "Trifásico"
+        elif d2 == 2:
+            fases = "Bifásico"
+        else:
+            return np.nan
 
-    # Tipo de poste → SIGLAS
-    if d3 == 1:
-        sigla_poste = "FL"
-        tipo_poste = "Fin de Línea"
-    elif d3 == 2:
-        sigla_poste = "AL"
-        tipo_poste = "Alineación"
-    elif d3 == 3:
-        sigla_poste = "ANG"
-        tipo_poste = "Ángulo"
-    elif d3 in (4, 5):
-        sigla_poste = "ANC"
-        tipo_poste = "Anclaje"
-    else:
-        sigla_poste = f"({d3})"
-        tipo_poste = "Desconocido"
+        # Tipo de poste
+        if d3 == 1:
+            sigla_poste = "FL"
+            tipo_poste = "Fin de Línea"
+        elif d3 == 2:
+            sigla_poste = "AL"
+            tipo_poste = "Alineación"
+        elif d3 == 3:
+            sigla_poste = "ANG"
+            tipo_poste = "Ángulo"
+        elif d3 in (4, 5):
+            sigla_poste = "ANC"
+            tipo_poste = "Anclaje"
+        else:
+            return np.nan
 
-    # Tensión del circuito
-    if parte_tension == "1":
-        tension = "13.2 kV"
-    elif parte_tension == "2":
-        tension = "34.5 kV"
-    else:
-        tension = f"Tensión desconocida ({parte_tension})"
+        # Tensión del circuito
+        if parte_tension == "1":
+            tension = "13.2 kV"
+        elif parte_tension == "2":
+            tension = "34.5 kV"
+        else:
+            return np.nan
 
-    # --- Salida ---
-    if not detallado:
-        return sigla_poste  # <-- 🔥 SOLO SIGLAS (FL, AL, ANG, ANC)
+        # --- Salida ---
+        if not detallado:
+            return sigla_poste
 
-    # Salida completa
-    return {
-        "Código": codigo,
-        "Sigla": sigla_poste,
-        "Tipo de Poste": tipo_poste,
-        "Nivel de Tensión": nivel,
-        "Tipo de Cable": tipo_cable,
-        "Armado General": armado_general,
-        "Fases": fases,
-        "Tensión del Circuito": tension
-    }
+        return {
+            "Código": codigo,
+            "Sigla": sigla_poste,
+            "Tipo de Poste": tipo_poste,
+            "Nivel de Tensión": nivel,
+            "Tipo de Cable": tipo_cable,
+            "Armado General": armado_general,
+            "Fases": fases,
+            "Tensión del Circuito": tension
+        }
 
-""" print(identificar_poste("MTF331-2")) """
+    except Exception:
+        return np.nan
 
 
 def calcular_cantones(armados, rutas, postes, vanos_adelante, detallado=False):
@@ -2488,10 +2491,11 @@ def calcular_cs(
 
     return Ret
 
+
 import pandas as pd
 
 def clasificar_cantones(
-    postes_exportacion,     # Series con identificador del poste (solo para referencia)
+    postes_exportacion,     # Series con identificador del poste (solo referencia)
     tipo_poste,             # Series ("ANC", "FL", etc.)
     numero_en_ruta          # Series numérico
 ):
@@ -2516,6 +2520,7 @@ def clasificar_cantones(
 
         tipo = tipo_poste.iloc[i]
         nr = numero_en_ruta.iloc[i]
+        es_ultimo = (i == n - 1)
 
         # --- Regla 1: tipo ANC o FL ---
         if tipo in ["ANC", "FL"]:
@@ -2527,11 +2532,18 @@ def clasificar_cantones(
             inicio[i] = True
 
         if nr != 0:
-            if i == n - 1:
+            if es_ultimo:
                 fin[i] = True
             else:
                 if numero_en_ruta.iloc[i + 1] == 0:
                     fin[i] = True
+
+        # --------------------------------------------------------
+        # AJUSTE CLAVE:
+        # El último poste NO puede iniciar un cantón nuevo
+        # --------------------------------------------------------
+        if es_ultimo:
+            inicio[i] = False
 
     # ------------------------------------------------------------
     # Asignar cantones en orden de exportación
@@ -2547,13 +2559,10 @@ def clasificar_cantones(
             iniciar_nuevo = False
 
         if inicio[i] and fin[i]:
-            # Fin e inicio simultáneo
+            # Fin e inicio simultáneo (NO ocurre en el último poste)
             resultado[i] = [canton_actual, canton_actual + 1]
             canton_actual += 1
             iniciar_nuevo = False
-
-        elif inicio[i]:
-            resultado[i] = canton_actual
 
         elif fin[i]:
             resultado[i] = canton_actual
@@ -2564,99 +2573,85 @@ def clasificar_cantones(
 
     return pd.Series(resultado, index=postes_exportacion.index, name="Canton")
 
-import numpy as np
+import pandas as pd
 
-def identificar_poste(codigo: str, detallado: bool = False):
+def clasificar_cantones(
+    postes_exportacion,     # Series con identificador del poste (solo referencia)
+    tipo_poste,             # Series ("ANC", "FL", etc.)
+    numero_en_ruta          # Series numérico
+):
     """
-    Identifica el tipo de poste según el código de armado de AFINIA.
+    Clasifica cada poste en su(s) cantón(es) según reglas definidas.
 
-    Si detallado=False → retorna solo las siglas del tipo de poste: FL, AL, ANG, ANC.
-    Si detallado=True  → retorna un diccionario con información completa.
-    Si el código no es válido → retorna np.nan
+    Retorna:
+        pd.Series con:
+        - int → pertenece a un solo cantón
+        - list[int, int] → es fin de un cantón e inicio de otro
     """
 
-    try:
-        # --- Validación básica ---
-        if not isinstance(codigo, str) or "-" not in codigo:
-            return np.nan
+    n = len(postes_exportacion)
 
-        parte_armado, parte_tension = codigo.split("-")
+    # ------------------------------------------------------------
+    # Identificar inicio / fin de cantón por poste
+    # ------------------------------------------------------------
+    inicio = [False] * n
+    fin = [False] * n
 
-        # Letras y números
-        letras = ''.join(c for c in parte_armado if c.isalpha())
-        numeros = ''.join(c for c in parte_armado if c.isdigit())
+    for i in range(n):
 
-        if len(numeros) != 3 or len(letras) < 2:
-            return np.nan
+        tipo = tipo_poste.iloc[i]
+        nr = numero_en_ruta.iloc[i]
+        es_ultimo = (i == n - 1)
 
-        # --- Interpretación de letras ---
-        nivel_tension = letras[:2]
-        if nivel_tension == "BT":
-            nivel = "Baja Tensión"
-        elif nivel_tension == "MT":
-            nivel = "Media Tensión"
+        # --- Regla 1: tipo ANC o FL ---
+        if tipo in ["ANC", "FL"]:
+            inicio[i] = True
+            fin[i] = True
+
+        # --- Regla 2: cambio de ruta ---
+        if nr == 0:
+            inicio[i] = True
+
+        if nr != 0:
+            if es_ultimo:
+                fin[i] = True
+            else:
+                if numero_en_ruta.iloc[i + 1] == 0:
+                    fin[i] = True
+
+        # --------------------------------------------------------
+        # AJUSTE CLAVE:
+        # El último poste NO puede iniciar un cantón nuevo
+        # --------------------------------------------------------
+        if es_ultimo:
+            inicio[i] = False
+
+    # ------------------------------------------------------------
+    # Asignar cantones en orden de exportación
+    # ------------------------------------------------------------
+    canton_actual = 0
+    resultado = [None] * n
+    iniciar_nuevo = True
+
+    for i in range(n):
+
+        if iniciar_nuevo:
+            canton_actual += 1
+            iniciar_nuevo = False
+
+        if inicio[i] and fin[i]:
+            # Fin e inicio simultáneo (NO ocurre en el último poste)
+            resultado[i] = [canton_actual, canton_actual + 1]
+            canton_actual += 1
+            iniciar_nuevo = False
+
+        elif fin[i]:
+            resultado[i] = canton_actual
+            iniciar_nuevo = True
+
         else:
-            return np.nan  # nivel no reconocido
+            resultado[i] = canton_actual
 
-        tipo_cable = "Forrado" if (len(letras) == 3 and letras[2] == "F") else "Desnudo"
+    return pd.Series(resultado, index=postes_exportacion.index, name="Canton")
 
-        # --- Interpretación de dígitos ---
-        d1, d2, d3 = map(int, numeros)
 
-        # Armado general
-        if d1 == 6:
-            armado_general = "Autosoportado (1 circuito)"
-        elif d1 == 7:
-            armado_general = "Autosoportado (2 circuitos)"
-        else:
-            return np.nan
-
-        # Fases
-        if d2 == 3:
-            fases = "Trifásico"
-        elif d2 == 2:
-            fases = "Bifásico"
-        else:
-            return np.nan
-
-        # Tipo de poste
-        if d3 == 1:
-            sigla_poste = "FL"
-            tipo_poste = "Fin de Línea"
-        elif d3 == 2:
-            sigla_poste = "AL"
-            tipo_poste = "Alineación"
-        elif d3 == 3:
-            sigla_poste = "ANG"
-            tipo_poste = "Ángulo"
-        elif d3 in (4, 5):
-            sigla_poste = "ANC"
-            tipo_poste = "Anclaje"
-        else:
-            return np.nan
-
-        # Tensión del circuito
-        if parte_tension == "1":
-            tension = "13.2 kV"
-        elif parte_tension == "2":
-            tension = "34.5 kV"
-        else:
-            return np.nan
-
-        # --- Salida ---
-        if not detallado:
-            return sigla_poste
-
-        return {
-            "Código": codigo,
-            "Sigla": sigla_poste,
-            "Tipo de Poste": tipo_poste,
-            "Nivel de Tensión": nivel,
-            "Tipo de Cable": tipo_cable,
-            "Armado General": armado_general,
-            "Fases": fases,
-            "Tensión del Circuito": tension
-        }
-
-    except Exception:
-        return np.nan
