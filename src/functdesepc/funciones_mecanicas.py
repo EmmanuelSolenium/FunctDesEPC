@@ -2487,3 +2487,79 @@ def calcular_cs(
     )
 
     return Ret
+
+import pandas as pd
+
+def clasificar_cantones(
+    postes_exportacion,     # Series con identificador del poste (solo para referencia)
+    tipo_poste,             # Series ("ANC", "FL", etc.)
+    numero_en_ruta          # Series numérico
+):
+    """
+    Clasifica cada poste en su(s) cantón(es) según reglas definidas.
+
+    Retorna:
+        pd.Series con:
+        - int → pertenece a un solo cantón
+        - list[int, int] → es fin de un cantón e inicio de otro
+    """
+
+    n = len(postes_exportacion)
+
+    # ------------------------------------------------------------
+    # Identificar inicio / fin de cantón por poste
+    # ------------------------------------------------------------
+    inicio = [False] * n
+    fin = [False] * n
+
+    for i in range(n):
+
+        tipo = tipo_poste.iloc[i]
+        nr = numero_en_ruta.iloc[i]
+
+        # --- Regla 1: tipo ANC o FL ---
+        if tipo in ["ANC", "FL"]:
+            inicio[i] = True
+            fin[i] = True
+
+        # --- Regla 2: cambio de ruta ---
+        if nr == 0:
+            inicio[i] = True
+
+        if nr != 0:
+            if i == n - 1:
+                fin[i] = True
+            else:
+                if numero_en_ruta.iloc[i + 1] == 0:
+                    fin[i] = True
+
+    # ------------------------------------------------------------
+    # Asignar cantones en orden de exportación
+    # ------------------------------------------------------------
+    canton_actual = 0
+    resultado = [None] * n
+    iniciar_nuevo = True
+
+    for i in range(n):
+
+        if iniciar_nuevo:
+            canton_actual += 1
+            iniciar_nuevo = False
+
+        if inicio[i] and fin[i]:
+            # Fin e inicio simultáneo
+            resultado[i] = [canton_actual, canton_actual + 1]
+            canton_actual += 1
+            iniciar_nuevo = False
+
+        elif inicio[i]:
+            resultado[i] = canton_actual
+
+        elif fin[i]:
+            resultado[i] = canton_actual
+            iniciar_nuevo = True
+
+        else:
+            resultado[i] = canton_actual
+
+    return pd.Series(resultado, index=postes_exportacion.index, name="Canton")
