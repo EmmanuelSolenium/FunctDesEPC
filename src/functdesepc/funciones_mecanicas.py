@@ -2815,7 +2815,7 @@ def resumen_cantones(
 
 
 
-def agregar_longitud_canton(
+def longitud_canton(
     reg_van,
     cantones,                 # Series en orden de exportación (int o list)
     longitudes,               # Series en orden de exportación
