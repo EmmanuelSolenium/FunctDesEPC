@@ -2739,20 +2739,20 @@ def max_canton(
 
 
 def resumen_cantones(
-    reg_van,          # DataFrame base
-    postes,           # Series con nombre del poste (orden exportación)
-    cantones,         # Series con cantón o lista de cantones
+    reg_van,
+    postes,
+    cantones,
     col1="Cantón",
     col2="Poste Inicial",
     col3="Poste Final",
 ):
     """
-    Construye una tabla resumen por cantón con:
+    Agrega / reemplaza en reg_van las columnas:
     - Cantón
-    - Poste inicial
-    - Poste final
+    - Poste Inicial
+    - Poste Final
 
-    El orden de los cantones sigue el orden de exportación.
+    Cada fila representa un cantón.
     """
 
     # ------------------------------------------------------------
@@ -2760,47 +2760,55 @@ def resumen_cantones(
     # ------------------------------------------------------------
     registros = []
 
-    for i, c in cantones.items():
+    for idx, c in cantones.items():
         if isinstance(c, list):
             for ci in c:
-                registros.append((ci, i))
+                registros.append((ci, idx))
         else:
-            registros.append((c, i))
+            registros.append((c, idx))
 
-    df = pd.DataFrame(registros, columns=["canton", "idx"])
+    df = pd.DataFrame(registros, columns=["canton", "idx"]).sort_values("idx")
 
     # ------------------------------------------------------------
-    # Ordenar por aparición en exportación
+    # Cantones únicos en orden de exportación
     # ------------------------------------------------------------
-    df = df.sort_values("idx")
-
     cantones_ordenados = []
     for c in df["canton"]:
         if c not in cantones_ordenados:
             cantones_ordenados.append(c)
 
     # ------------------------------------------------------------
-    # Obtener poste inicial y final por cantón
+    # Poste inicial y final por cantón
     # ------------------------------------------------------------
     cant_out = []
     poste_ini = []
     poste_fin = []
 
     for c in cantones_ordenados:
-
-        idxs = df[df["canton"] == c]["idx"].tolist()
-
+        idxs = df.loc[df["canton"] == c, "idx"].tolist()
         cant_out.append(c)
         poste_ini.append(postes.loc[idxs[0]])
         poste_fin.append(postes.loc[idxs[-1]])
 
-    # ------------------------------------------------------------
-    # Construir DataFrame final
-    # ------------------------------------------------------------
-    salida = pd.DataFrame({
-        col1: cant_out,
-        col2: poste_ini,
-        col3: poste_fin
-    })
+    n = len(cant_out)
 
-    return salida
+    # ------------------------------------------------------------
+    # Ajustar tamaño de reg_van
+    # ------------------------------------------------------------
+    if len(reg_van) > n:
+        reg_van = reg_van.iloc[:n].copy()
+    elif len(reg_van) < n:
+        filas_extra = n - len(reg_van)
+        reg_van = pd.concat(
+            [reg_van, pd.DataFrame(np.nan, index=range(filas_extra), columns=reg_van.columns)],
+            ignore_index=True
+        )
+
+    # ------------------------------------------------------------
+    # Asignar columnas (sin borrar las demás)
+    # ------------------------------------------------------------
+    reg_van[col1] = cant_out
+    reg_van[col2] = poste_ini
+    reg_van[col3] = poste_fin
+
+    return reg_van
