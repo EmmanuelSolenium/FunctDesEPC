@@ -2737,6 +2737,92 @@ def max_canton(
 
 
 
+def min_canton(
+    van_reg,
+    cantones,          # Series en orden de exportación (int o list)
+    lista,             # Series en orden de exportación
+    col                # nombre de la columna a crear / reemplazar
+):
+    """
+    Obtiene el valor mínimo por cantón usando solo los valores hasta n-1.
+    Si el mínimo es 0, se toma el siguiente mínimo distinto de 0.
+
+    La salida tiene una fila por cantón.
+    Ajusta el tamaño de van_reg si es necesario.
+    """
+
+    # ------------------------------------------------------------
+    # Expandir relación poste – cantón
+    # ------------------------------------------------------------
+    registros = []
+
+    for idx, c in cantones.items():
+        if isinstance(c, list):
+            for ci in c:
+                registros.append((ci, idx))
+        else:
+            registros.append((c, idx))
+
+    df = pd.DataFrame(registros, columns=["canton", "idx"]).sort_values("idx")
+
+    # ------------------------------------------------------------
+    # Cantones únicos en orden de aparición
+    # ------------------------------------------------------------
+    cantones_ordenados = []
+    for c in df["canton"]:
+        if c not in cantones_ordenados:
+            cantones_ordenados.append(c)
+
+    # ------------------------------------------------------------
+    # Calcular mínimos por cantón (regla n-1 + exclusión de ceros)
+    # ------------------------------------------------------------
+    valores = []
+
+    for c in cantones_ordenados:
+        idxs = df.loc[df["canton"] == c, "idx"].tolist()
+
+        # n-1
+        if len(idxs) <= 1:
+            valores.append(np.nan)
+            continue
+
+        idxs_validos = idxs[:-1]
+        datos = lista.loc[idxs_validos].astype(float)
+
+        # eliminar ceros
+        datos_no_cero = datos[datos != 0]
+
+        if datos_no_cero.empty:
+            valores.append(np.nan)
+        else:
+            valores.append(datos_no_cero.min())
+
+    serie_min = pd.Series(valores, name=col)
+
+    # ------------------------------------------------------------
+    # Ajustar tamaño del dataframe
+    # ------------------------------------------------------------
+    n_df = len(van_reg)
+    n_col = len(serie_min)
+
+    if n_df > n_col:
+        van_reg = van_reg.iloc[:n_col].copy()
+    elif n_df < n_col:
+        filas_extra = pd.DataFrame(
+            np.nan,
+            index=range(n_df, n_col),
+            columns=van_reg.columns
+        )
+        van_reg = pd.concat([van_reg, filas_extra], ignore_index=True)
+
+    # ------------------------------------------------------------
+    # Asignar columna
+    # ------------------------------------------------------------
+    van_reg[col] = serie_min.values
+
+    return van_reg
+
+
 def resumen_cantones(
     reg_van,
     postes,
