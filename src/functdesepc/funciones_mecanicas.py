@@ -2885,3 +2885,95 @@ def longitud_canton(
     reg_van[col] = serie_longitud.values
 
     return reg_van
+
+
+
+def agregar_vano_regulacion(
+    van_reg,
+    cantones,                 # Series en orden de exportación (int o list)
+    vanos,                    # Series en orden de exportación
+    desniveles=None,          # Series en orden de exportación o None
+    usar_k_truxa=True,
+    col="Vano de Regulación"
+):
+    """
+    Calcula el vano de regulación por cantón (método de Truxá)
+    y agrega/reemplaza la columna en van_reg.
+    """
+
+    # ------------------------------------------------------------
+    # Expandir relación poste – cantón
+    # ------------------------------------------------------------
+    registros = []
+
+    for idx, c in cantones.items():
+        if isinstance(c, list):
+            for ci in c:
+                registros.append((ci, idx))
+        else:
+            registros.append((c, idx))
+
+    df = pd.DataFrame(registros, columns=["canton", "idx"]).sort_values("idx")
+
+    # ------------------------------------------------------------
+    # Cantones únicos en orden de aparición
+    # ------------------------------------------------------------
+    cantones_ordenados = []
+    for c in df["canton"]:
+        if c not in cantones_ordenados:
+            cantones_ordenados.append(c)
+
+    # ------------------------------------------------------------
+    # Calcular vano de regulación por cantón
+    # ------------------------------------------------------------
+    valores = []
+
+    for c in cantones_ordenados:
+        idxs = df.loc[df["canton"] == c, "idx"].tolist()
+
+        # Solo hasta n-1
+        if len(idxs) <= 1:
+            valores.append(np.nan)
+            continue
+
+        idxs_validos = idxs[:-1]
+
+        a = vanos.loc[idxs_validos].values
+
+        if desniveles is None:
+            b = None
+        else:
+            b = desniveles.loc[idxs_validos].values
+
+        ar = vano_regulacion(
+            vanos_m=a,
+            desniveles_m=b,
+            usar_k_truxa=usar_k_truxa
+        )
+
+        valores.append(ar)
+
+    serie_vr = pd.Series(valores, name=col)
+
+    # ------------------------------------------------------------
+    # Ajustar tamaño del dataframe
+    # ------------------------------------------------------------
+    n_df = len(van_reg)
+    n_col = len(serie_vr)
+
+    if n_df > n_col:
+        van_reg = van_reg.iloc[:n_col].copy()
+    elif n_df < n_col:
+        filas_extra = pd.DataFrame(
+            np.nan,
+            index=range(n_df, n_col),
+            columns=van_reg.columns
+        )
+        van_reg = pd.concat([van_reg, filas_extra], ignore_index=True)
+
+    # ------------------------------------------------------------
+    # Asignar columna
+    # ------------------------------------------------------------
+    van_reg[col] = serie_vr.values
+
+    return van_reg
