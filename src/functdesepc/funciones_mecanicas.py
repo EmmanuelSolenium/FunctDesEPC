@@ -2573,7 +2573,6 @@ def clasificar_cantones(
 
     return pd.Series(resultado, index=postes_exportacion.index, name="Canton")
 
-import pandas as pd
 
 def clasificar_cantones(
     postes_exportacion,     # Series con identificador del poste (solo referencia)
@@ -2810,5 +2809,79 @@ def resumen_cantones(
     reg_van[col1] = cant_out
     reg_van[col2] = poste_ini
     reg_van[col3] = poste_fin
+
+    return reg_van
+
+
+
+
+def agregar_longitud_canton(
+    reg_van,
+    cantones,                 # Series en orden de exportación (int o list)
+    longitudes,               # Series en orden de exportación
+    col="Longitud Total del cantón"
+):
+    """
+    Calcula la longitud total de cada cantón (hasta n-1)
+    y agrega/reemplaza la columna en reg_van.
+    """
+
+    # ------------------------------------------------------------
+    # Expandir relación poste – cantón
+    # ------------------------------------------------------------
+    registros = []
+
+    for idx, c in cantones.items():
+        if isinstance(c, list):
+            for ci in c:
+                registros.append((ci, idx))
+        else:
+            registros.append((c, idx))
+
+    df = pd.DataFrame(registros, columns=["canton", "idx"]).sort_values("idx")
+
+    # ------------------------------------------------------------
+    # Cantones únicos en orden de aparición
+    # ------------------------------------------------------------
+    cantones_ordenados = []
+    for c in df["canton"]:
+        if c not in cantones_ordenados:
+            cantones_ordenados.append(c)
+
+    # ------------------------------------------------------------
+    # Calcular longitud total por cantón (hasta n-1)
+    # ------------------------------------------------------------
+    valores = []
+
+    for c in cantones_ordenados:
+        idxs = df.loc[df["canton"] == c, "idx"].tolist()
+
+        if len(idxs) <= 1:
+            valores.append(0)
+        else:
+            valores.append(longitudes.loc[idxs[:-1]].sum())
+
+    serie_longitud = pd.Series(valores, name=col)
+
+    # ------------------------------------------------------------
+    # Ajustar tamaño del dataframe
+    # ------------------------------------------------------------
+    n_df = len(reg_van)
+    n_col = len(serie_longitud)
+
+    if n_df > n_col:
+        reg_van = reg_van.iloc[:n_col].copy()
+    elif n_df < n_col:
+        filas_extra = pd.DataFrame(
+            np.nan,
+            index=range(n_df, n_col),
+            columns=reg_van.columns
+        )
+        reg_van = pd.concat([reg_van, filas_extra], ignore_index=True)
+
+    # ------------------------------------------------------------
+    # Asignar columna
+    # ------------------------------------------------------------
+    reg_van[col] = serie_longitud.values
 
     return reg_van
