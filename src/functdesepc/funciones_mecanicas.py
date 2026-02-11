@@ -3110,6 +3110,18 @@ def canton_eovanos(
 
 
 
+import pandas as pd
+import numpy as np
+
+def ajustar_df(df, fila):
+    n_cols = max(df.shape[1], len(fila))
+    if df.shape[1] < n_cols:
+        for i in range(df.shape[1], n_cols):
+            df[i] = np.nan
+    if len(fila) < n_cols:
+        fila = fila + [np.nan] * (n_cols - len(fila))
+    return df, fila
+
 
 def tablas_por_canton(
     postes_orden,
@@ -3118,79 +3130,55 @@ def tablas_por_canton(
     conductor,
     vano_regulacion
 ):
-    """
-    Crea una lista de dataframes (uno por cantón), con filas de tamaño variable.
-    """
+    # -------------------------
+    # Preparación
+    # -------------------------
+    postes_orden = pd.Series(postes_orden).reset_index(drop=True)
+    postes_exportacion = pd.Series(postes_exportacion).reset_index(drop=True)
+    cantones = pd.Series(cantones).reset_index(drop=True)
+    conductor = pd.Series(conductor).reset_index(drop=True)
+    vano_regulacion = pd.Series(vano_regulacion).reset_index(drop=True)
 
-    # ---------------------------------------------------------
-    # Alinear todo al índice de cantones
-    # ---------------------------------------------------------
-    idx_ref = cantones.index
+    cantones_unicos = cantones.dropna().unique()
+    n_cantones = len(cantones_unicos)
 
-    postes_exportacion = postes_exportacion.reindex(idx_ref)
-    conductor = conductor.reindex(idx_ref)
+    tablas = []
 
-    # ---------------------------------------------------------
-    # Función auxiliar: ajustar dataframe al tamaño de la fila
-    # ---------------------------------------------------------
-    def ajustar_df(df, fila):
-        n_df = df.shape[1]
-        n_f = len(fila)
-
-        if n_f > n_df:
-            for i in range(n_df, n_f):
-                df[i] = np.nan
-        elif n_f < n_df:
-            fila = fila + [np.nan] * (n_df - n_f)
-
-        return df, fila
-
-    # ---------------------------------------------------------
-    # Cantones únicos en orden
-    # ---------------------------------------------------------
-    cantones_unicos = []
-    for c in cantones:
-        if isinstance(c, list):
-            for x in c:
-                if x not in cantones_unicos:
-                    cantones_unicos.append(x)
-        else:
-            if c not in cantones_unicos:
-                cantones_unicos.append(c)
-
-    cantones_unicos = sorted(cantones_unicos)
-
-    dfs = []
-
-    # ---------------------------------------------------------
-    # Construcción por cantón
-    # ---------------------------------------------------------
+    # -------------------------
+    # Iterar por cantón
+    # -------------------------
     for k in cantones_unicos:
-
         df = pd.DataFrame()
 
-        idxs = cantones.index[
-            cantones.apply(lambda x: x == k or (isinstance(x, list) and k in x))
-        ]
+        # Índices de postes del cantón (en exportación)
+        idx_exp = cantones[cantones == k].index
 
-        if len(idxs) == 0:
-            dfs.append(df)
-            continue
+        postes_canton = postes_exportacion.loc[idx_exp].values
 
-        poste_ini = postes_exportacion.loc[idxs[0]]
-        poste_fin = postes_exportacion.loc[idxs[-1]]
-        cond_val = conductor.loc[idxs[0]]
-        ar = vano_regulacion.loc[k]
+        poste_ini = postes_canton[0]
+        poste_fin = postes_canton[-1]
 
         # -------------------------
-        # Conductor
+        # Conductor del cantón
         # -------------------------
-        fila = ["Conductor", cond_val]
+        conductores_canton = []
+
+        for p in postes_canton:
+            idx_ord = postes_orden[postes_orden == p].index
+            if len(idx_ord) > 0:
+                conductores_canton.append(conductor.iloc[idx_ord[0]])
+
+        if len(conductores_canton) > 0:
+            cond_canton = conductores_canton[0]
+        else:
+            cond_canton = np.nan
+
+        fila = ["Conductor", cond_canton]
         df, fila = ajustar_df(df, fila)
         df.loc[len(df)] = fila
 
         # -------------------------
-        # Cantón
+        # Fila Cantón
         # -------------------------
         fila = ["Cantón", k, "Poste Inicial", poste_ini]
         df, fila = ajustar_df(df, fila)
@@ -3199,10 +3187,16 @@ def tablas_por_canton(
         # -------------------------
         # Vano de Regulación
         # -------------------------
-        fila = ["Vano de Regulación", ar, "Poste Final", poste_fin]
+        pos = int(k) - 1 if pd.notna(k) else None
+        if pos is not None and 0 <= pos < len(vano_regulacion):
+            vano = vano_regulacion.iloc[pos]
+        else:
+            vano = np.nan
+
+        fila = ["Vano de Regulación", vano, "Poste Final", poste_fin]
         df, fila = ajustar_df(df, fila)
         df.loc[len(df)] = fila
 
-        dfs.append(df)
+        tablas.append(df)
 
-    return dfs
+    return tablas
