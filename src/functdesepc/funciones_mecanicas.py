@@ -3231,3 +3231,95 @@ def tablas_por_canton(
         tablas.append(df)
 
     return tablas
+
+
+def ajustar_df(df, fila):
+    n_cols = max(df.shape[1], len(fila))
+    if df.shape[1] < n_cols:
+        for i in range(df.shape[1], n_cols):
+            df[i] = np.nan
+    if len(fila) < n_cols:
+        fila = fila + [np.nan] * (n_cols - len(fila))
+    return df, fila
+
+
+def pertenece_canton(valor, k):
+    if isinstance(valor, list):
+        return k in valor
+    return valor == k
+
+
+def filas_canton(
+    lista_tablas,
+    cantones,
+    vanos,
+    postes_export,
+    desnivel
+):
+    cantones = pd.Series(cantones).reset_index(drop=True)
+    vanos = pd.Series(vanos).reset_index(drop=True)
+    postes_export = pd.Series(postes_export).reset_index(drop=True)
+    desnivel = pd.Series(desnivel).reset_index(drop=True)
+
+    # Cantones únicos (ya sabemos que la lista_tablas está en ese orden)
+    cantones_unicos = []
+    for c in cantones.dropna():
+        if isinstance(c, list):
+            for x in c:
+                if x not in cantones_unicos:
+                    cantones_unicos.append(x)
+        else:
+            if c not in cantones_unicos:
+                cantones_unicos.append(c)
+
+    # Iterar por cada tabla / cantón
+    for df, k in zip(lista_tablas, cantones_unicos):
+
+        # índices de postes del cantón k
+        idx = [
+            i for i, c in cantones.items()
+            if pertenece_canton(c, k)
+        ]
+
+        if len(idx) < 2:
+            continue  # no hay vanos
+
+        # Postes del cantón
+        postes_canton = postes_export.iloc[idx].values
+
+        # -------------------------
+        # Vano (numeración)
+        # -------------------------
+        fila = ["Vano"] + list(range(1, len(postes_canton)))
+        df, fila = ajustar_df(df, fila)
+        df.loc[len(df)] = fila
+
+        # -------------------------
+        # Longitud (m)
+        # -------------------------
+        fila = ["Longitud (m)"] + vanos.iloc[idx[:-1]].tolist()
+        df, fila = ajustar_df(df, fila)
+        df.loc[len(df)] = fila
+
+        # -------------------------
+        # Poste inicial
+        # -------------------------
+        fila = ["Poste inicial"] + list(postes_canton[:-1])
+        df, fila = ajustar_df(df, fila)
+        df.loc[len(df)] = fila
+
+        # -------------------------
+        # Poste final
+        # -------------------------
+        fila = ["Poste final"] + list(postes_canton[1:])
+        df, fila = ajustar_df(df, fila)
+        df.loc[len(df)] = fila
+
+        # -------------------------
+        # Desnivel
+        # -------------------------
+        fila = ["Desnivel"] + desnivel.iloc[idx[:-1]].tolist()
+        df, fila = ajustar_df(df, fila)
+        df.loc[len(df)] = fila
+
+    return lista_tablas
