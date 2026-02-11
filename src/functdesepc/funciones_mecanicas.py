@@ -3063,3 +3063,47 @@ def agregar_vano_regulacion(
     van_reg[col] = serie_vr.values
 
     return van_reg
+
+
+
+def canton_eovanos(
+    df_eovanos,          # DataFrame a modificar
+    postes,              # Series de postes en orden (df_eovanos)
+    cantones,            # Series de cantones en orden de exportación
+    postes_exportacion,  # Series de postes en orden de exportación
+    col="No de Cantón"
+):
+    """
+    Agrega al df_eovanos la columna 'No de Cantón'.
+
+    - Si un poste pertenece a varios cantones, retorna string "1,3,4"
+    - Si pertenece a uno solo, retorna el entero
+    """
+
+    resultado = []
+
+    for poste in postes:
+        # índices donde aparece el poste en exportación
+        idxs = postes_exportacion[postes_exportacion == poste].index
+
+        cantones_poste = []
+
+        for idx in idxs:
+            c = cantones.loc[idx]
+            if isinstance(c, list):
+                cantones_poste.extend(c)
+            else:
+                cantones_poste.append(c)
+
+        # eliminar duplicados conservando orden
+        cantones_unicos = list(dict.fromkeys(cantones_poste))
+
+        if len(cantones_unicos) == 0:
+            resultado.append(None)
+        elif len(cantones_unicos) == 1:
+            resultado.append(cantones_unicos[0])
+        else:
+            resultado.append(",".join(str(x) for x in cantones_unicos))
+
+    df_eovanos[col] = resultado
+    return df_eovanos
