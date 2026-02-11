@@ -3323,3 +3323,137 @@ def filas_canton(
         df.loc[len(df)] = fila
 
     return lista_tablas
+
+
+
+def limpiar_flechado(tablas_flechado: pd.DataFrame) -> pd.DataFrame:
+    df = tablas_flechado.copy()
+
+    # ============================================================
+    # 1. Eliminar filas por valores específicos en Temp (°C)\
+    # ============================================================
+    eliminar_temp = ["Tiro Extremo Ini (kg)", "Tiro Extremo Fin (kg)"]
+    df = df[~df["Temp (°C)\\"].isin(eliminar_temp)]
+
+    # ============================================================
+    # 2. Eliminar filas repetidas de encabezados
+    #    (cuando una fila contiene los mismos nombres de columnas)
+    # ============================================================
+    colnames = list(df.columns)
+
+    def es_fila_encabezado(row):
+        return all(str(row[c]).strip() == str(c).strip() for c in colnames)
+
+    df = df[~df.apply(es_fila_encabezado, axis=1)]
+
+    # ============================================================
+    # 3. Procesamiento de la columna N°
+    # ============================================================
+    df = df.reset_index(drop=True)
+
+    i = 0
+    while i < len(df):
+        val = df.loc[i, "N°"]
+
+        if isinstance(val, str) and "Secundario" in val:
+            j = i + 1
+            while j < len(df):
+                n_val = df.loc[j, "N°"]
+                if isinstance(n_val, (int, float)) and not pd.isna(n_val):
+                    df.loc[j, "Derivación"] = (
+                        str(df.loc[j, "Derivación"]) + " secundario"
+                        if pd.notna(df.loc[j, "Derivación"])
+                        else "secundario"
+                    )
+                    j += 1
+                else:
+                    break
+            df = df.drop(index=i).reset_index(drop=True)
+            continue
+
+        if isinstance(val, str):
+            df = df.drop(index=i).reset_index(drop=True)
+            continue
+
+        i += 1
+
+    # ============================================================
+    # 4. Procesamiento de la columna N° Vano
+    # ============================================================
+    vano = df["N° Vano"].astype(object).tolist()
+
+    # 4.1 Agregar "S" si es derivación secundaria
+    for i in range(len(df)):
+        if isinstance(df.loc[i, "Derivación"], str) and "secundario" in df.loc[i, "Derivación"].lower():
+            if pd.notna(vano[i]):
+                vano[i] = f"{int(vano[i])}S"
+
+    # 4.2 Reindexar secuencias repetidas (numéricas y con S)
+    def normalizar_secuencia(lista):
+        salida = []
+        contadores = {}
+
+        for v in lista:
+            if pd.isna(v):
+                salida.append(np.nan)
+                continue
+
+            v_str = str(v)
+            base = re.sub(r"[^\d]", "", v_str)
+            sufijo = "S" if v_str.endswith("S") else ""
+
+            if base not in contadores:
+                contadores[base] = int(base)
+            else:
+                contadores[base] += 1
+
+            salida.append(f"{contadores[base]}{sufijo}")
+
+        return salida
+
+    vano = normalizar_secuencia(vano)
+
+    # 4.3 Rellenar NaN con el último valor válido
+    ultimo = None
+    for i in range(len(vano)):
+        if pd.isna(vano[i]):
+            vano[i] = ultimo
+        else:
+            ultimo = vano[i]
+
+    df["N° Vano"] = vano
+
+    # ============================================================
+    # 5. Reestructuración a MultiIndex
+    # ============================================================
+    columnas_datos = df.columns[df.columns.get_loc("Temp (°C)\\") + 1 :]
+
+    registros = []
+
+    for _, row in df.iterrows():
+        vano_id = row["N° Vano"]
+        tipo = row["Temp (°C)\\"]
+        valores = row[columnas_datos].tolist()
+
+        for col, val in zip(columnas_datos, valores):
+            registros.append({
+                "Vano": vano_id,
+                "Tipo": tipo,
+                "Col": col,
+                "Valor": val
+            })
+
+    nuevo = pd.DataFrame(registros)
+
+    tabla_final = (
+        nuevo
+        .pivot_table(
+            index=["Vano", "Tipo"],
+            columns="Col",
+            values="Valor",
+            aggfunc="first"
+        )
+        .sort_index()
+    )
+
+    return tabla_final
