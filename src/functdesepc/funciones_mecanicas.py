@@ -3324,8 +3324,6 @@ def filas_canton(
 
     return lista_tablas
 
-
-
 def limpiar_flechado(tablas_flechado: pd.DataFrame) -> pd.DataFrame:
     df = tablas_flechado.copy()
 
@@ -3337,10 +3335,7 @@ def limpiar_flechado(tablas_flechado: pd.DataFrame) -> pd.DataFrame:
 
     # ============================================================
     # 2. Eliminar filas repetidas de encabezados
-    #    (cuando una fila contiene los mismos nombres de columnas)
     # ============================================================
-    colnames = list(df.columns)
-
     def es_fila_encabezado(row):
         return str(row["N°"]).strip() == "N°"
 
@@ -3388,30 +3383,50 @@ def limpiar_flechado(tablas_flechado: pd.DataFrame) -> pd.DataFrame:
             if pd.notna(vano[i]):
                 vano[i] = f"{int(vano[i])}S"
 
-    # 4.2 Reindexar secuencias repetidas (numéricas y con S)
-    def normalizar_secuencia(lista):
-        salida = []
-        contadores = {}
+    # -------- MODIFICACIÓN SOLICITADA (4.2) --------
+    import re
+    import numpy as np
 
-        for v in lista:
-            if pd.isna(v):
-                salida.append(np.nan)
-                continue
+    # Valores numéricos máximos existentes (sin S)
+    existentes = [
+        int(re.sub(r"[^\d]", "", str(v)))
+        for v in vano
+        if pd.notna(v) and str(v).isdigit()
+    ]
+    max_base = max(existentes) if existentes else 0
+    nuevo_base = max_base + 1
 
-            v_str = str(v)
-            base = re.sub(r"[^\d]", "", v_str)
-            sufijo = "S" if v_str.endswith("S") else ""
+    # Agrupar índices por derivación
+    grupos = {}
+    for idx, deriv in enumerate(df["Derivación"]):
+        if pd.isna(vano[idx]) or not isinstance(vano[idx], str):
+            continue
+        grupos.setdefault(deriv, []).append(idx)
 
-            if base not in contadores:
-                contadores[base] = int(base)
-            else:
-                contadores[base] += 1
+    for deriv, idxs in grupos.items():
+        idx_s = [i for i in idxs if str(vano[i]).endswith("S")]
+        idx_n = [i for i in idxs if not str(vano[i]).endswith("S")]
 
-            salida.append(f"{contadores[base]}{sufijo}")
+        if not idx_s:
+            continue
 
-        return salida
+        # Verificar si derivación coincide con vanos sin S
+        coincide = False
+        if idx_n:
+            for i in idx_n:
+                if str(vano[i]) in str(deriv):
+                    coincide = True
+                    break
 
-    vano = normalizar_secuencia(vano)
+        if not coincide or len(idx_s) > len(idx_n):
+            # Caso 1 y 3
+            for i in idx_s:
+                vano[i] = f"{nuevo_base}S"
+            nuevo_base += 1
+        else:
+            # Caso 2
+            for i, j in zip(idx_s, idx_n):
+                vano[i] = f"{re.sub(r'[^\d]', '', str(vano[j]))}S"
 
     # 4.3 Rellenar NaN con el último valor válido
     ultimo = None
