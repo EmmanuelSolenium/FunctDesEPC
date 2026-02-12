@@ -3457,3 +3457,87 @@ def limpiar_flechado(tablas_flechado: pd.DataFrame) -> pd.DataFrame:
     )
 
     return tabla_final
+
+
+
+def tab_fle_canton(
+    tabla_fle,          # DataFrame depurado y transpuesto
+    cantones,           # Series en orden de exportación
+    postes_export       # Series en orden de exportación
+):
+    """
+    Construye una lista de tablas de flechado por cantón.
+    Retorna:
+        lista_df_normales, lista_df_secundarios
+    """
+
+    # ---------------------------------------------------------
+    # 1. Determinar vanos globales por cantón
+    # ---------------------------------------------------------
+    canton_postes = {}
+    for poste, c in zip(postes_export, cantones):
+        if isinstance(c, list):
+            for cc in c:
+                canton_postes.setdefault(cc, []).append(poste)
+        else:
+            canton_postes.setdefault(c, []).append(poste)
+
+    canton_vanos = {}
+    vano_actual = 1
+
+    for c in sorted(canton_postes.keys()):
+        n_postes = len(canton_postes[c])
+        n_vanos = max(n_postes - 1, 0)
+        canton_vanos[c] = list(range(vano_actual, vano_actual + n_vanos))
+        vano_actual += n_vanos
+
+    # ---------------------------------------------------------
+    # 2. Separar vanos normales y con S
+    # ---------------------------------------------------------
+    cols = tabla_fle.columns
+    vanos_normales = {}
+    vanos_s = {}
+
+    for v, tipo in cols:
+        if tipo != "Flecha (m)":
+            continue
+
+        if isinstance(v, str) and v.endswith("S"):
+            vanos_s[int(v[:-1])] = v
+        else:
+            vanos_normales[int(v)] = v
+
+    # ---------------------------------------------------------
+    # 3. Función interna para construir tablas
+    # ---------------------------------------------------------
+    def construir_tablas(vanos_dict, sufijo=""):
+        tablas = []
+
+        for c, vanos in canton_vanos.items():
+            vanos_validos = [v for v in vanos if v in vanos_dict]
+            if not vanos_validos:
+                continue
+
+            df = pd.DataFrame(index=tabla_fle.index)
+            df["Temperatura (°C)"] = tabla_fle.index
+
+            # Tense: del primer vano
+            v0 = vanos_validos[0]
+            df["Tense (daN)"] = tabla_fle[(vanos_dict[v0], "Tiro H. (kg)")]
+
+            # Flechas
+            for v in vanos_validos:
+                nombre = f"f{v}{sufijo}(m)"
+                df[nombre] = tabla_fle[(vanos_dict[v], "Flecha (m)")]
+
+            tablas.append(df.reset_index(drop=True))
+
+        return tablas
+
+    # ---------------------------------------------------------
+    # 4. Construir tablas
+    # ---------------------------------------------------------
+    tablas_normales = construir_tablas(vanos_normales)
+    tablas_secundarios = construir_tablas(vanos_s, sufijo="S")
+
+    return tablas_normales, tablas_secundarios
