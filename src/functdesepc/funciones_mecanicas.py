@@ -3360,9 +3360,9 @@ def limpiar_flechado(tablas_flechado: pd.DataFrame) -> pd.DataFrame:
             while j < len(df):
                 n_val = df.loc[j, "N°"]
                 if isinstance(n_val, (int, float)) and not pd.isna(n_val):
-                    df.loc[j, "Derivación"] = (
-                        str(df.loc[j, "Derivación"]) + " secundario"
-                        if pd.notna(df.loc[j, "Derivación"])
+                    df.loc[j, "N°"] = (
+                        str(df.loc[j, "N°"]) + " secundario"
+                        if pd.notna(df.loc[j, "N°"])
                         else "secundario"
                     )
                     j += 1
