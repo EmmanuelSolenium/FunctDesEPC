@@ -3357,8 +3357,6 @@ def limpiar_flechado(tablas_flechado: pd.DataFrame) -> pd.DataFrame:
                 if isinstance(n_val, (int, float)) and not pd.isna(n_val):
                     df.loc[j, "Derivación"] = (
                         str(df.loc[j, "Derivación"]) + " secundario"
-                        if pd.notna(df.loc[j, "Derivación"])
-                        else "secundario"
                     )
                     j += 1
                 else:
@@ -3383,9 +3381,7 @@ def limpiar_flechado(tablas_flechado: pd.DataFrame) -> pd.DataFrame:
             if pd.notna(vano[i]):
                 vano[i] = f"{int(vano[i])}S"
 
-    # -------- MODIFICACIÓN SOLICITADA (4.2) --------
-    import re
-    import numpy as np
+
 
     # Valores numéricos máximos existentes (sin S)
     existentes = [
