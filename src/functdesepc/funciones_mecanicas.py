@@ -3342,7 +3342,7 @@ def limpiar_flechado(tablas_flechado: pd.DataFrame) -> pd.DataFrame:
     colnames = list(df.columns)
 
     def es_fila_encabezado(row):
-        return all(str(row[c]).strip() == str(c).strip() for c in colnames)
+        return str(row["N°"]).strip() == "N°"
 
     df = df[~df.apply(es_fila_encabezado, axis=1)]
 
@@ -3360,9 +3360,9 @@ def limpiar_flechado(tablas_flechado: pd.DataFrame) -> pd.DataFrame:
             while j < len(df):
                 n_val = df.loc[j, "N°"]
                 if isinstance(n_val, (int, float)) and not pd.isna(n_val):
-                    df.loc[j, "N°"] = (
-                        str(df.loc[j, "N°"]) + " secundario"
-                        if pd.notna(df.loc[j, "N°"])
+                    df.loc[j, "Derivación"] = (
+                        str(df.loc[j, "Derivación"]) + " secundario"
+                        if pd.notna(df.loc[j, "Derivación"])
                         else "secundario"
                     )
                     j += 1
