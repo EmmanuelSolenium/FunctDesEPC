@@ -3357,6 +3357,8 @@ def limpiar_flechado(tablas_flechado: pd.DataFrame) -> pd.DataFrame:
                 if isinstance(n_val, (int, float)) and not pd.isna(n_val):
                     df.loc[j, "Derivación"] = (
                         str(df.loc[j, "Derivación"]) + " secundario"
+                        if pd.notna(df.loc[j, "Derivación"])
+                        else "secundario"
                     )
                     j += 1
                 else:
@@ -3371,68 +3373,61 @@ def limpiar_flechado(tablas_flechado: pd.DataFrame) -> pd.DataFrame:
         i += 1
 
     # ============================================================
-    # 4. Procesamiento de la columna N° Vano
+    # 4. Procesamiento CORRECTO de la columna N° Vano
     # ============================================================
+    import numpy as np
+    import re
+
     vano = df["N° Vano"].astype(object).tolist()
 
-    # 4.1 Agregar "S" si es derivación secundaria
-    for i in range(len(df)):
-        if isinstance(df.loc[i, "Derivación"], str) and "secundario" in df.loc[i, "Derivación"].lower():
-            if pd.notna(vano[i]):
-                vano[i] = f"{int(vano[i])}S"
-
-
-
-    # Valores numéricos máximos existentes (sin S)
-    existentes = [
-        int(re.sub(r"[^\d]", "", str(v)))
-        for v in vano
-        if pd.notna(v) and str(v).isdigit()
-    ]
-    max_base = max(existentes) if existentes else 0
-    nuevo_base = max_base + 1
-
-    # Agrupar índices por derivación
-    grupos = {}
-    for idx, deriv in enumerate(df["Derivación"]):
-        if pd.isna(vano[idx]) or not isinstance(vano[idx], str):
-            continue
-        grupos.setdefault(deriv, []).append(idx)
-
-    for deriv, idxs in grupos.items():
-        idx_s = [i for i in idxs if str(vano[i]).endswith("S")]
-        idx_n = [i for i in idxs if not str(vano[i]).endswith("S")]
-
-        if not idx_s:
-            continue
-
-        # Verificar si derivación coincide con vanos sin S
-        coincide = False
-        if idx_n:
-            for i in idx_n:
-                if str(vano[i]) in str(deriv):
-                    coincide = True
-                    break
-
-        if not coincide or len(idx_s) > len(idx_n):
-            # Caso 1 y 3
-            for i in idx_s:
-                vano[i] = f"{nuevo_base}S"
-            nuevo_base += 1
-        else:
-            # Caso 2
-            for i, j in zip(idx_s, idx_n):
-                vano[i] = f"{re.sub(r'[^\d]', '', str(vano[j]))}S"
-
-    # 4.3 Rellenar NaN con el último valor válido
+    # 4.1 Rellenar NaN con último valor válido
     ultimo = None
     for i in range(len(vano)):
         if pd.isna(vano[i]):
             vano[i] = ultimo
         else:
+            vano[i] = int(vano[i])
             ultimo = vano[i]
 
-    df["N° Vano"] = vano
+    # 4.2 Renumerar vanos SIN S secuencialmente
+    nuevo_vano = []
+    contador = 1
+    for v in vano:
+        nuevo_vano.append(contador)
+        contador += 1
+
+    vano = nuevo_vano
+    max_vano = max(vano)
+
+    # 4.3 Procesar vanos con S usando derivación base
+    def base_derivacion(d):
+        return re.sub(r"\s*secundario", "", d, flags=re.IGNORECASE).strip()
+
+    df["Derivacion_base"] = df["Derivación"].apply(base_derivacion)
+
+    resultado = vano.copy()
+    contador_global = max_vano + 1
+
+    for deriv in df["Derivacion_base"].unique():
+        idxs = df.index[df["Derivacion_base"] == deriv].tolist()
+
+        idx_s = [i for i in idxs if "secundario" in str(df.loc[i, "Derivación"]).lower()]
+        idx_n = [i for i in idxs if i not in idx_s]
+
+        if not idx_s:
+            continue
+
+        if idx_n and len(idx_s) <= len(idx_n):
+            # Copian valores existentes
+            for i, j in zip(idx_s, idx_n):
+                resultado[i] = f"{resultado[j]}S"
+        else:
+            # Crear nuevos valores
+            for i in idx_s:
+                resultado[i] = f"{contador_global}S"
+                contador_global += 1
+
+    df["N° Vano"] = resultado
 
     # ============================================================
     # 5. Reestructuración a MultiIndex
@@ -3468,8 +3463,6 @@ def limpiar_flechado(tablas_flechado: pd.DataFrame) -> pd.DataFrame:
     )
 
     return tabla_final
-
-
 
 def tab_fle_canton(
     tabla_fle,          # DataFrame depurado y transpuesto
