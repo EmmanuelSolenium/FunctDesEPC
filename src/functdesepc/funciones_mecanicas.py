@@ -3110,8 +3110,6 @@ def canton_eovanos(
 
 
 
-import pandas as pd
-import numpy as np
 
 def ajustar_df(df, fila):
     n_cols = max(df.shape[1], len(fila))
@@ -3123,8 +3121,6 @@ def ajustar_df(df, fila):
     return df, fila
 
 
-import pandas as pd
-import numpy as np
 
 def ajustar_df(df, fila):
     n_cols = max(df.shape[1], len(fila))
@@ -3409,6 +3405,7 @@ def tab_fle_canton(
 
 
 
+
 def limpiar_flechado(tablas_flechado: pd.DataFrame) -> pd.DataFrame:
     df = tablas_flechado.copy()
 
@@ -3540,79 +3537,87 @@ def limpiar_flechado(tablas_flechado: pd.DataFrame) -> pd.DataFrame:
 
     return tabla_final
 
-    df = df.copy().reset_index(drop=True)
 
-    col_tipo = "N°"
-    col_vano = "N° Vano"
 
-    es_string = df[col_tipo].apply(lambda x: isinstance(x, str))
-    es_sec = es_string & df[col_tipo].str.contains("Secundari", case=False, na=False)
+def clasificar_cantones_s(
+    postes_exportacion,   # Series (solo índice / referencia)
+    tipo_poste            # Series en orden de exportación
+):
+    """
+    Clasifica cantones secundarios basándose SOLO en el tipo de poste.
 
-    # ======================================================
-    # PASADA 1 — PRIMARIOS (ignorar secundarios)
-    # ======================================================
-    ultimo_primario = None
-    primarios_idx = []
+    Conserva:
+    - doble pertenencia [c1S, c2S]
+    - lógica de fin/inicio consecutivo
 
-    i = 0
-    while i < len(df):
+    No usa:
+    - numero_en_ruta
 
-        if es_sec.iloc[i]:
-            # saltar TODO el bloque secundario
-            i += 1
-            while i < len(df) and not es_string.iloc[i]:
-                i += 1
+    NaN en tipo_poste → NaN en salida
+    """
+
+    import pandas as pd
+    import numpy as np
+
+    n = len(postes_exportacion)
+
+    inicio = [False] * n
+    fin = [False] * n
+
+    # ------------------------------------------------------------
+    # Identificar inicio / fin de cantón secundario
+    # ------------------------------------------------------------
+    for i in range(n):
+
+        tipo = tipo_poste.iloc[i]
+        if pd.isna(tipo):
             continue
 
-        if es_string.iloc[i]:
-            i += 1
+        # último poste válido (mirando hacia adelante)
+        es_ultimo_valido = True
+        for j in range(i + 1, n):
+            if not pd.isna(tipo_poste.iloc[j]):
+                es_ultimo_valido = False
+                break
+
+        # Regla principal
+        if tipo in ["ANC", "FL"]:
+            fin[i] = True
+            if not es_ultimo_valido:
+                inicio[i] = True
+
+    # ------------------------------------------------------------
+    # Asignación de cantones
+    # ------------------------------------------------------------
+    canton_actual = 0
+    iniciar_nuevo = True
+    resultado = [np.nan] * n
+
+    for i in range(n):
+
+        tipo = tipo_poste.iloc[i]
+        if pd.isna(tipo):
             continue
 
-        primarios_idx.append(i)
-        i += 1
+        if iniciar_nuevo:
+            canton_actual += 1
+            iniciar_nuevo = False
 
-    for idx in primarios_idx:
-        valor = df.at[idx, col_vano]
+        if inicio[i] and fin[i]:
+            # Fin e inicio simultáneo
+            resultado[i] = [f"{canton_actual}S", f"{canton_actual + 1}S"]
+            canton_actual += 1
+            iniciar_nuevo = False
 
-        if not pd.isna(valor):
-            if ultimo_primario is None:
-                ultimo_primario = int(valor)
-            else:
-                ultimo_primario += 1
-                df.at[idx, col_vano] = ultimo_primario
+        elif fin[i]:
+            resultado[i] = f"{canton_actual}S"
+            iniciar_nuevo = True
+
         else:
-            df.at[idx, col_vano] = ultimo_primario
+            resultado[i] = f"{canton_actual}S"
 
-    base_sec = ultimo_primario
-
-    # ======================================================
-    # PASADA 2 — SECUNDARIOS
-    # ======================================================
-    contador = base_sec
-    ultimo_s = None
-
-    i = 0
-    while i < len(df):
-
-        if not es_sec.iloc[i]:
-            i += 1
-            continue
-
-        i += 1
-        while i < len(df) and not es_string.iloc[i]:
-
-            if not pd.isna(df.at[i, col_vano]):
-                contador += 1
-                ultimo_s = f"{contador}S"
-                df.at[i, col_vano] = ultimo_s
-            else:
-                df.at[i, col_vano] = ultimo_s
-
-            i += 1
-
-    # ======================================================
-    # PASADA 3 — LIMPIEZA
-    # ======================================================
-    df = df[~es_string].reset_index(drop=True)
-
-    return df
+    return pd.Series(
+        resultado,
+        index=postes_exportacion.index,
+        name="Canton_Secundario"
+    )
