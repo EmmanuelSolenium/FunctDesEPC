@@ -3538,7 +3538,7 @@ def limpiar_flechado(tablas_flechado: pd.DataFrame) -> pd.DataFrame:
     return tabla_final
 
 
-def clasificar_cantones_secundario(
+def clasificar_cantones_s(
     postes_exportacion,
     tipo_poste
 ):
