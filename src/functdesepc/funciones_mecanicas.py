@@ -3604,3 +3604,72 @@ def clasificar_cantones_s(
         index=postes_exportacion.index,
         name="Canton_Secundario"
     )
+
+import pandas as pd
+import numpy as np
+
+def clasificar_cantones_secundarios(tipo_postes: pd.Series) -> pd.Series:
+    salida = []
+    canton = 1
+
+    def es_1a(v):
+        return isinstance(v, str) and ("ANC" in v or "FL" in v)
+
+    def es_1b(v):
+        return isinstance(v, str) and not es_1a(v)
+
+    def es_1c(v):
+        return not isinstance(v, str)
+
+    n = len(tipo_postes)
+
+    # encontrar primer poste válido
+    idx_primer_valido = next(
+        (i for i, v in enumerate(tipo_postes) if not es_1c(v)),
+        None
+    )
+
+    for i, v in enumerate(tipo_postes):
+
+        # --- 1.c ---
+        if es_1c(v):
+            salida.append(np.nan)
+            continue
+
+        prev_v = tipo_postes[i - 1] if i > 0 else None
+        next_v = tipo_postes[i + 1] if i < n - 1 else None
+
+        prev_es_1c = (i == 0) or es_1c(prev_v)
+        next_es_1c = (i == n - 1) or es_1c(next_v)
+
+        # --- 1.a ---
+        if es_1a(v):
+
+            # inicio y final
+            if not prev_es_1c and not next_es_1c:
+                salida.append([f"{canton}S", f"{canton + 1}S"])
+                canton += 1
+                continue
+
+            # inicio
+            if i == idx_primer_valido or prev_es_1c:
+                salida.append(f"{canton}S")
+                continue
+
+            # final
+            salida.append(f"{canton}S")
+            canton += 1
+            continue
+
+        # --- 1.b ---
+        if es_1b(v):
+
+            # inicio
+            if i == idx_primer_valido or prev_es_1c:
+                salida.append(f"{canton}S")
+            else:
+                salida.append(f"{canton}S")
+
+            continue
+
+    return pd.Series(salida, index=tipo_postes.index)
