@@ -3409,7 +3409,137 @@ def tab_fle_canton(
 
 
 
-def limpiar_flechado(df):
+def limpiar_flechado(tablas_flechado: pd.DataFrame) -> pd.DataFrame:
+    df = tablas_flechado.copy()
+
+    # ============================================================
+    # 1. Eliminar filas por valores específicos en Temp (°C)
+    # ============================================================
+    eliminar_temp = ["Tiro Extremo Ini (kg)", "Tiro Extremo Fin (kg)"]
+    df = df[~df["Temp (°C)\\"].isin(eliminar_temp)]
+
+    # ============================================================
+    # 2. Eliminar filas repetidas de encabezados
+    # ============================================================
+    def es_fila_encabezado(row):
+        return str(row["N°"]).strip() == "N°"
+
+    df = df[~df.apply(es_fila_encabezado, axis=1)]
+    df = df.reset_index(drop=True)
+
+    # ============================================================
+    # 3. PROCESAMIENTO CORRECTO DE N° VANO
+    #    (primarios y secundarios desacoplados)
+    # ============================================================
+    col_tipo = "N°"
+    col_vano = "N° Vano"
+
+    es_string = df[col_tipo].apply(lambda x: isinstance(x, str))
+    es_sec = es_string & df[col_tipo].str.contains("Secundari", case=False, na=False)
+
+    # -------------------------
+    # PASADA 1 — PRIMARIOS
+    # -------------------------
+    ultimo_primario = None
+    primarios_idx = []
+
+    i = 0
+    while i < len(df):
+
+        if es_sec.iloc[i]:
+            i += 1
+            while i < len(df) and not es_string.iloc[i]:
+                i += 1
+            continue
+
+        if es_string.iloc[i]:
+            i += 1
+            continue
+
+        primarios_idx.append(i)
+        i += 1
+
+    for idx in primarios_idx:
+        val = df.at[idx, col_vano]
+
+        if not pd.isna(val):
+            if ultimo_primario is None:
+                ultimo_primario = int(val)
+            else:
+                ultimo_primario += 1
+                df.at[idx, col_vano] = ultimo_primario
+        else:
+            df.at[idx, col_vano] = ultimo_primario
+
+    base_sec = ultimo_primario
+
+    # -------------------------
+    # PASADA 2 — SECUNDARIOS
+    # -------------------------
+    contador = base_sec
+    ultimo_s = None
+
+    i = 0
+    while i < len(df):
+
+        if not es_sec.iloc[i]:
+            i += 1
+            continue
+
+        i += 1
+        while i < len(df) and not es_string.iloc[i]:
+
+            val = df.at[i, col_vano]
+
+            if not pd.isna(val):
+                contador += 1
+                ultimo_s = f"{contador}S"
+                df.at[i, col_vano] = ultimo_s
+            else:
+                df.at[i, col_vano] = ultimo_s
+
+            i += 1
+
+    # -------------------------
+    # ELIMINAR FILAS STRING (solo eran marcadores)
+    # -------------------------
+    df = df[~es_string].reset_index(drop=True)
+
+    # ============================================================
+    # 5. Reestructuración a MultiIndex
+    # ============================================================
+    columnas_datos = df.columns[df.columns.get_loc("Temp (°C)\\") + 1 :]
+
+    registros = []
+
+    for _, row in df.iterrows():
+        vano_id = row["N° Vano"]
+        tipo = row["Temp (°C)\\"]
+        valores = row[columnas_datos].tolist()
+
+        for col, val in zip(columnas_datos, valores):
+            registros.append({
+                "Vano": vano_id,
+                "Tipo": tipo,
+                "Col": col,
+                "Valor": val
+            })
+
+    nuevo = pd.DataFrame(registros)
+
+    tabla_final = (
+        nuevo
+        .pivot_table(
+            index=["Vano", "Tipo"],
+            columns="Col",
+            values="Valor",
+            aggfunc="first"
+        )
+        .sort_index()
+    )
+
+    return tabla_final
+
     df = df.copy().reset_index(drop=True)
 
     col_tipo = "N°"
