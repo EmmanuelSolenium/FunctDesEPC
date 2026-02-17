@@ -3324,145 +3324,6 @@ def filas_canton(
 
     return lista_tablas
 
-def limpiar_flechado(tablas_flechado: pd.DataFrame) -> pd.DataFrame:
-    df = tablas_flechado.copy()
-
-    # ============================================================
-    # 1. Eliminar filas por valores específicos en Temp (°C)\
-    # ============================================================
-    eliminar_temp = ["Tiro Extremo Ini (kg)", "Tiro Extremo Fin (kg)"]
-    df = df[~df["Temp (°C)\\"].isin(eliminar_temp)]
-
-    # ============================================================
-    # 2. Eliminar filas repetidas de encabezados
-    # ============================================================
-    def es_fila_encabezado(row):
-        return str(row["N°"]).strip() == "N°"
-
-    df = df[~df.apply(es_fila_encabezado, axis=1)]
-
-    # ============================================================
-    # 3. Procesamiento de la columna N°
-    # ============================================================
-    df = df.reset_index(drop=True)
-
-    i = 0
-    while i < len(df):
-        val = df.loc[i, "N°"]
-
-        if isinstance(val, str) and "Secundario" in val:
-            j = i + 1
-            while j < len(df):
-                n_val = df.loc[j, "N°"]
-                if isinstance(n_val, (int, float)) and not pd.isna(n_val):
-                    df.loc[j, "Derivación"] = (
-                        str(df.loc[j, "Derivación"]) + " secundario"
-                        if pd.notna(df.loc[j, "Derivación"])
-                        else "secundario"
-                    )
-                    j += 1
-                else:
-                    break
-            df = df.drop(index=i).reset_index(drop=True)
-            continue
-
-        if isinstance(val, str):
-            df = df.drop(index=i).reset_index(drop=True)
-            continue
-
-        i += 1
-
-    # ============================================================
-    # 4. Procesamiento CORRECTO de la columna N° Vano
-    # ============================================================
-    import numpy as np
-    import re
-
-    vano = df["N° Vano"].astype(object).tolist()
-
-    # 4.1 Rellenar NaN con último valor válido
-    ultimo = None
-    for i in range(len(vano)):
-        if pd.isna(vano[i]):
-            vano[i] = ultimo
-        else:
-            vano[i] = int(vano[i])
-            ultimo = vano[i]
-
-    # 4.2 Renumerar vanos SIN S secuencialmente
-    nuevo_vano = []
-    contador = 1
-    for v in vano:
-        nuevo_vano.append(contador)
-        contador += 1
-
-    vano = nuevo_vano
-    max_vano = max(vano)
-
-    # 4.3 Procesar vanos con S usando derivación base
-    def base_derivacion(d):
-        return re.sub(r"\s*secundario", "", d, flags=re.IGNORECASE).strip()
-
-    df["Derivacion_base"] = df["Derivación"].apply(base_derivacion)
-
-    resultado = vano.copy()
-    contador_global = max_vano + 1
-
-    for deriv in df["Derivacion_base"].unique():
-        idxs = df.index[df["Derivacion_base"] == deriv].tolist()
-
-        idx_s = [i for i in idxs if "secundario" in str(df.loc[i, "Derivación"]).lower()]
-        idx_n = [i for i in idxs if i not in idx_s]
-
-        if not idx_s:
-            continue
-
-        if idx_n and len(idx_s) <= len(idx_n):
-            # Copian valores existentes
-            for i, j in zip(idx_s, idx_n):
-                resultado[i] = f"{resultado[j]}S"
-        else:
-            # Crear nuevos valores
-            for i in idx_s:
-                resultado[i] = f"{contador_global}S"
-                contador_global += 1
-
-    df["N° Vano"] = resultado
-
-    # ============================================================
-    # 5. Reestructuración a MultiIndex
-    # ============================================================
-    columnas_datos = df.columns[df.columns.get_loc("Temp (°C)\\") + 1 :]
-
-    registros = []
-
-    for _, row in df.iterrows():
-        vano_id = row["N° Vano"]
-        tipo = row["Temp (°C)\\"]
-        valores = row[columnas_datos].tolist()
-
-        for col, val in zip(columnas_datos, valores):
-            registros.append({
-                "Vano": vano_id,
-                "Tipo": tipo,
-                "Col": col,
-                "Valor": val
-            })
-
-    nuevo = pd.DataFrame(registros)
-
-    tabla_final = (
-        nuevo
-        .pivot_table(
-            index=["Vano", "Tipo"],
-            columns="Col",
-            values="Valor",
-            aggfunc="first"
-        )
-        .sort_index()
-    )
-
-    return tabla_final
 
 def tab_fle_canton(
     tabla_fle,          # DataFrame depurado y transpuesto
@@ -3545,3 +3406,83 @@ def tab_fle_canton(
     tablas_secundarios = construir_tablas(vanos_s, sufijo="S")
 
     return tablas_normales, tablas_secundarios
+
+
+
+def limpiar_flechado(df):
+    df = df.copy().reset_index(drop=True)
+
+    col_tipo = "N°"
+    col_vano = "N° Vano"
+
+    es_string = df[col_tipo].apply(lambda x: isinstance(x, str))
+    es_sec = es_string & df[col_tipo].str.contains("Secundari", case=False, na=False)
+
+    # ======================================================
+    # PASADA 1 — PRIMARIOS (ignorar secundarios)
+    # ======================================================
+    ultimo_primario = None
+    primarios_idx = []
+
+    i = 0
+    while i < len(df):
+
+        if es_sec.iloc[i]:
+            # saltar TODO el bloque secundario
+            i += 1
+            while i < len(df) and not es_string.iloc[i]:
+                i += 1
+            continue
+
+        if es_string.iloc[i]:
+            i += 1
+            continue
+
+        primarios_idx.append(i)
+        i += 1
+
+    for idx in primarios_idx:
+        valor = df.at[idx, col_vano]
+
+        if not pd.isna(valor):
+            if ultimo_primario is None:
+                ultimo_primario = int(valor)
+            else:
+                ultimo_primario += 1
+                df.at[idx, col_vano] = ultimo_primario
+        else:
+            df.at[idx, col_vano] = ultimo_primario
+
+    base_sec = ultimo_primario
+
+    # ======================================================
+    # PASADA 2 — SECUNDARIOS
+    # ======================================================
+    contador = base_sec
+    ultimo_s = None
+
+    i = 0
+    while i < len(df):
+
+        if not es_sec.iloc[i]:
+            i += 1
+            continue
+
+        i += 1
+        while i < len(df) and not es_string.iloc[i]:
+
+            if not pd.isna(df.at[i, col_vano]):
+                contador += 1
+                ultimo_s = f"{contador}S"
+                df.at[i, col_vano] = ultimo_s
+            else:
+                df.at[i, col_vano] = ultimo_s
+
+            i += 1
+
+    # ======================================================
+    # PASADA 3 — LIMPIEZA
+    # ======================================================
+    df = df[~es_string].reset_index(drop=True)
+
+    return df
