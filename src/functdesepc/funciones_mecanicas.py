@@ -3538,84 +3538,66 @@ def limpiar_flechado(tablas_flechado: pd.DataFrame) -> pd.DataFrame:
     return tabla_final
 
 
-def clasificar_cantones_s(
+def clasificar_cantones_secundario(
     postes_exportacion,
     tipo_poste
 ):
-    """
-    Clasifica cantones secundarios basándose SOLO en tipo de poste.
-    Corrige:
-    - cantón ficticio inicial
-    - inicios indebidos cuando solo hay NaN después
-    """
-
     import pandas as pd
     import numpy as np
 
     n = len(postes_exportacion)
-
-    inicio = [False] * n
-    fin = [False] * n
-    valido = [not pd.isna(v) for v in tipo_poste]
+    resultado = [np.nan] * n
 
     # índices de postes válidos
+    valido = tipo_poste.notna().tolist()
     idx_validos = [i for i, v in enumerate(valido) if v]
 
     if not idx_validos:
-        return pd.Series([np.nan]*n, index=postes_exportacion.index)
+        return pd.Series(resultado, index=postes_exportacion.index)
 
-    primero_valido = idx_validos[0]
-    ultimo_valido = idx_validos[-1]
+    canton_actual = 0
+    cantones_por_idx = {}
 
-    # ------------------------------------------------------------
-    # Determinar inicio / fin
-    # ------------------------------------------------------------
-    for i in idx_validos:
+    for pos, i in enumerate(idx_validos):
 
         tipo = tipo_poste.iloc[i]
 
-        # buscar si hay otro poste válido después
-        hay_valido_despues = any(j > i for j in idx_validos)
+        prev_valido = pos > 0
+        next_valido = pos < len(idx_validos) - 1
 
-        if tipo in ["ANC", "FL"]:
-            fin[i] = True
+        inicio = False
+        fin = False
 
-            # inicio solo si:
-            # - no es el primero válido
-            # - existe otro válido después
-            if i != primero_valido and hay_valido_despues:
-                inicio[i] = True
-
-    # el primer poste válido nunca puede ser fin
-    fin[primero_valido] = False
-
-    # ------------------------------------------------------------
-    # Asignación de cantones
-    # ------------------------------------------------------------
-    canton_actual = 0
-    iniciar_nuevo = True
-    resultado = [np.nan] * n
-
-    for i in range(n):
-
-        if not valido[i]:
-            continue
-
-        if iniciar_nuevo:
-            canton_actual += 1
-            iniciar_nuevo = False
-
-        if inicio[i] and fin[i]:
-            resultado[i] = [f"{canton_actual}S", f"{canton_actual + 1}S"]
-            canton_actual += 1
-            iniciar_nuevo = False
-
-        elif fin[i]:
-            resultado[i] = f"{canton_actual}S"
-            iniciar_nuevo = True
-
+        # -----------------------------
+        # INICIO
+        # -----------------------------
+        if not prev_valido:
+            inicio = True
         else:
-            resultado[i] = f"{canton_actual}S"
+            prev_i = idx_validos[pos - 1]
+            if pd.isna(tipo_poste.iloc[prev_i]):
+                inicio = True
+
+        # -----------------------------
+        # FIN
+        # -----------------------------
+        if tipo in ["FL", "ANC"] and prev_valido:
+            fin = True
+
+        # -----------------------------
+        # ASIGNACIÓN
+        # -----------------------------
+        if inicio:
+            canton_actual += 1
+
+        if inicio and fin and next_valido:
+            cantones_por_idx[i] = [f"{canton_actual}S", f"{canton_actual + 1}S"]
+        else:
+            cantones_por_idx[i] = f"{canton_actual}S"
+
+    # construir resultado final
+    for i, val in cantones_por_idx.items():
+        resultado[i] = val
 
     return pd.Series(
         resultado,
