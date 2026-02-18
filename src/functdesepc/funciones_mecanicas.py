@@ -2600,7 +2600,7 @@ def clasificar_cantones(
 
         tipo = tipo_poste.iloc[i]
         nr = numero_en_ruta.iloc[i]
-        es_ultimo = (i == n - 1)
+        es_ultimo = (i == n - 1) or (numero_en_ruta.iloc[i+1] == 0)
 
         # --- Regla 1: tipo ANC o FL ---
         if tipo in ["ANC", "FL"]:
@@ -3536,74 +3536,6 @@ def limpiar_flechado(tablas_flechado: pd.DataFrame) -> pd.DataFrame:
     )
 
     return tabla_final
-
-
-def clasificar_cantones_s(
-    postes_exportacion,
-    tipo_poste
-):
-    import pandas as pd
-    import numpy as np
-
-    n = len(postes_exportacion)
-    resultado = [np.nan] * n
-
-    # índices de postes válidos
-    valido = tipo_poste.notna().tolist()
-    idx_validos = [i for i, v in enumerate(valido) if v]
-
-    if not idx_validos:
-        return pd.Series(resultado, index=postes_exportacion.index)
-
-    canton_actual = 0
-    cantones_por_idx = {}
-
-    for pos, i in enumerate(idx_validos):
-
-        tipo = tipo_poste.iloc[i]
-
-        prev_valido = pos > 0
-        next_valido = pos < len(idx_validos) - 1
-
-        inicio = False
-        fin = False
-
-        # -----------------------------
-        # INICIO
-        # -----------------------------
-        if not prev_valido:
-            inicio = True
-        else:
-            prev_i = idx_validos[pos - 1]
-            if pd.isna(tipo_poste.iloc[prev_i]):
-                inicio = True
-
-        # -----------------------------
-        # FIN
-        # -----------------------------
-        if tipo in ["FL", "ANC"] and prev_valido:
-            fin = True
-
-        # -----------------------------
-        # ASIGNACIÓN
-        # -----------------------------
-        if inicio:
-            canton_actual += 1
-
-        if inicio and fin and next_valido:
-            cantones_por_idx[i] = [f"{canton_actual}S", f"{canton_actual + 1}S"]
-        else:
-            cantones_por_idx[i] = f"{canton_actual}S"
-
-    # construir resultado final
-    for i, val in cantones_por_idx.items():
-        resultado[i] = val
-
-    return pd.Series(
-        resultado,
-        index=postes_exportacion.index,
-        name="Canton_Secundario"
-    )
 
 
 
