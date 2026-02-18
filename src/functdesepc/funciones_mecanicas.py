@@ -2624,6 +2624,12 @@ def clasificar_cantones(
         # --------------------------------------------------------
         if es_ultimo:
             inicio[i] = False
+        
+        #El primero no puede terminar un ruta
+        if (numero_en_ruta.iloc[i] == 0) and not (es_ultimo):
+            fin[i] = False
+            
+        
 
     # ------------------------------------------------------------
     # Asignar cantones en orden de exportación
