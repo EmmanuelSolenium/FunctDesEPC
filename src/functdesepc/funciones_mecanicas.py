@@ -3605,8 +3605,7 @@ def clasificar_cantones_s(
         name="Canton_Secundario"
     )
 
-import pandas as pd
-import numpy as np
+
 
 def clasificar_cantones_secundarios(tipo_postes: pd.Series) -> pd.Series:
     salida = []
@@ -3673,3 +3672,130 @@ def clasificar_cantones_secundarios(tipo_postes: pd.Series) -> pd.Series:
             continue
 
     return pd.Series(salida, index=tipo_postes.index)
+
+def tab_fle_canton_v2(
+    tabla_fle,         # DataFrame con MultiIndex en columnas: (vano, 'Flecha (m)' | 'Tiro H. (kg)')
+    cantones,          # pd.Series: pertenencia de cada poste a cantón normal (int o list[int])
+    cantones_s         # pd.Series: pertenencia de cada poste a cantón secundario (str '1S' o list)
+):
+    """
+    Construye dos listas de DataFrames de flechado, uno por cantón normal
+    y uno por cantón secundario.
+
+    Lógica de asignación de vanos:
+    - n postes generan n-1 vanos, en el mismo orden.
+    - Si el poste i pertenece a [c1, c2], el vano i pertenece a c1
+        (es el último vano de c1, no el primero de c2).
+
+    Retorna:
+        tablas_normales   : list[pd.DataFrame]
+        tablas_secundarios: list[pd.DataFrame]
+    """
+
+    # ----------------------------------------------------------
+    # Helpers
+    # ----------------------------------------------------------
+    def normalizar(serie):
+        """Convierte cada elemento a lista de cantones."""
+        resultado = []
+        for v in serie:
+            if isinstance(v, list):
+                resultado.append(v)
+            elif v is None or (isinstance(v, float) and np.isnan(v)):
+                resultado.append([])
+            else:
+                resultado.append([v])
+        return resultado
+
+    def extraer_cantones_unicos(norm):
+        vistos, orden = set(), []
+        for lista in norm:
+            for c in lista:
+                if c not in vistos:
+                    vistos.add(c)
+                    orden.append(c)
+        return orden
+
+    def separar_columnas(tabla):
+        """
+        Separa columnas de vanos normales y secundarios.
+        Retorna dos dicts: {vano_id: {'flecha': col, 'tiro': col}}
+        """
+        normales, secundarios = {}, {}
+        for col in tabla.columns:
+            vano_id, tipo = col
+            # identificar si es secundario
+            es_s = isinstance(vano_id, str) and str(vano_id).endswith("S")
+            d = secundarios if es_s else normales
+            if vano_id not in d:
+                d[vano_id] = {}
+            if tipo == "Flecha (m)":
+                d[vano_id]["flecha"] = col
+            elif tipo == "Tiro H. (kg)":
+                d[vano_id]["tiro"] = col
+        return normales, secundarios
+
+    def asignar_vanos_a_cantones(norm_cantones, cols_dict):
+        """
+        Dado que n postes → n-1 vanos (mismo orden),
+        asigna cada vano al cantón del poste i (no i+1).
+        Si el poste i tiene [c1,c2], el vano i va a c1.
+        """
+        vanos_ids = sorted(cols_dict.keys(),
+                            key=lambda x: int(str(x).replace("S", "")))
+        canton_vanos = {}
+        for i, vano_id in enumerate(vanos_ids):
+            lista_c = norm_cantones[i] if i < len(norm_cantones) else []
+            # el vano pertenece al primer cantón de la lista del poste i
+            c = lista_c[0] if lista_c else None
+            if c is None:
+                continue
+            canton_vanos.setdefault(c, []).append(vano_id)
+        return canton_vanos
+
+    def construir_df(canton, vanos_ids, cols_dict, tabla):
+        """Construye el DataFrame de un cantón."""
+        df = pd.DataFrame()
+        df["Temperatura (°C)"] = tabla.index.tolist()
+
+        # Tiro: primer vano del cantón
+        if vanos_ids:
+            col_tiro = cols_dict[vanos_ids[0]].get("tiro")
+            if col_tiro is not None:
+                df["Tiro H. (kg)"] = tabla[col_tiro].values
+
+        # Flechas
+        for v in vanos_ids:
+            col_f = cols_dict[v].get("flecha")
+            if col_f is not None:
+                df[f"f{v}(m)"] = tabla[col_f].values
+
+        return df.reset_index(drop=True)
+
+    # ----------------------------------------------------------
+    # Proceso principal
+    # ----------------------------------------------------------
+    norm_cant  = normalizar(cantones)
+    norm_cant_s = normalizar(cantones_s)
+
+    cols_normales, cols_secundarios = separar_columnas(tabla_fle)
+
+    canton_vanos_n = asignar_vanos_a_cantones(norm_cant,   cols_normales)
+    canton_vanos_s = asignar_vanos_a_cantones(norm_cant_s, cols_secundarios)
+
+    cantones_n_orden = extraer_cantones_unicos(norm_cant)
+    cantones_s_orden = extraer_cantones_unicos(norm_cant_s)
+
+    tablas_normales = [
+        construir_df(c, canton_vanos_n.get(c, []), cols_normales, tabla_fle)
+        for c in cantones_n_orden
+        if c in canton_vanos_n
+    ]
+
+    tablas_secundarios = [
+        construir_df(c, canton_vanos_s.get(c, []), cols_secundarios, tabla_fle)
+        for c in cantones_s_orden
+        if c in canton_vanos_s
+    ]
+
+    return tablas_normales, tablas_secundarios
