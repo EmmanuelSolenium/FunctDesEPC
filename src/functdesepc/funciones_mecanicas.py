@@ -3751,3 +3751,82 @@ def filas_canton_s(
         df.loc[len(df)] = fila
 
     return lista_tablas
+
+
+def tablas_por_canton_s(
+    postes_orden,       # pd.Series sin repetición
+    postes_exportacion, # pd.Series en orden de exportación
+    cantones_s,         # pd.Series en orden de exportación ('1S', NaN, '2S'...)
+    conductor,          # pd.Series alineada con postes_orden
+    vano_regulacion     # pd.Series alineada con cantones (una entrada por cantón secundario)
+):
+    postes_orden       = pd.Series(postes_orden).reset_index(drop=True)
+    postes_exportacion = pd.Series(postes_exportacion).reset_index(drop=True)
+    cantones_s         = pd.Series(cantones_s).reset_index(drop=True)
+    conductor          = pd.Series(conductor).reset_index(drop=True)
+    vano_regulacion    = pd.Series(vano_regulacion).reset_index(drop=True)
+
+    # Filtrar solo postes válidos (no NaN en cantones_s)
+    mascara_valida     = cantones_s.notna()
+    cantones_s_val     = cantones_s[mascara_valida].reset_index(drop=True)
+    postes_exp_val     = postes_exportacion[mascara_valida].reset_index(drop=True)
+
+    # Cantones únicos en orden de aparición
+    cantones_unicos = []
+    for c in cantones_s_val:
+        if isinstance(c, list):
+            for x in c:
+                if x not in cantones_unicos:
+                    cantones_unicos.append(x)
+        else:
+            if c not in cantones_unicos:
+                cantones_unicos.append(c)
+
+    def pertenece(valor, k):
+        if isinstance(valor, list):
+            return k in valor
+        return valor == k
+
+    tablas = []
+
+    for i, k in enumerate(cantones_unicos):
+
+        df = pd.DataFrame()
+
+        # Índices de postes válidos que pertenecen al cantón k
+        idx_exp = [
+            j for j, c in enumerate(cantones_s_val)
+            if pertenece(c, k)
+        ]
+
+        if not idx_exp:
+            continue
+
+        postes_canton = postes_exp_val.iloc[idx_exp].values
+        poste_ini = postes_canton[0]
+        poste_fin = postes_canton[-1]
+
+        # Conductor del cantón (primer poste válido)
+        conductores = []
+        for p in postes_canton:
+            idx_ord = postes_orden[postes_orden == p].index
+            if len(idx_ord) > 0:
+                conductores.append(conductor.iloc[idx_ord[0]])
+        cond_canton = conductores[0] if conductores else np.nan
+
+        fila = ["Conductor", cond_canton]
+        df, fila = ajustar_df(df, fila)
+        df.loc[len(df)] = fila
+
+        fila = ["Cantón", k, "Poste Inicial", poste_ini]
+        df, fila = ajustar_df(df, fila)
+        df.loc[len(df)] = fila
+
+        vano = vano_regulacion.iloc[i] if i < len(vano_regulacion) else np.nan
+        fila = ["Vano de Regulación", vano, "Poste Final", poste_fin]
+        df, fila = ajustar_df(df, fila)
+        df.loc[len(df)] = fila
+
+        tablas.append(df)
+
+    return tablas
