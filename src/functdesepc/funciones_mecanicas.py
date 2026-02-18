@@ -3685,7 +3685,7 @@ def tab_fle_canton_v2(
     Lógica de asignación de vanos:
     - n postes generan n-1 vanos, en el mismo orden.
     - Si el poste i pertenece a [c1, c2], el vano i pertenece a c1
-        (es el último vano de c1, no el primero de c2).
+      (es el último vano de c1, no el primero de c2).
 
     Retorna:
         tablas_normales   : list[pd.DataFrame]
@@ -3737,19 +3737,24 @@ def tab_fle_canton_v2(
 
     def asignar_vanos_a_cantones(norm_cantones, cols_dict):
         """
-        Dado que n postes → n-1 vanos (mismo orden),
+        Dado que n postes válidos (no NaN) → n-1 vanos (mismo orden),
         asigna cada vano al cantón del poste i (no i+1).
         Si el poste i tiene [c1,c2], el vano i va a c1.
+        Los postes con lista vacía (NaN original) se saltan sin consumir vano.
         """
         vanos_ids = sorted(cols_dict.keys(),
                             key=lambda x: int(str(x).replace("S", "")))
+
+        # Solo postes con cantón válido
+        postes_validos = [lc for lc in norm_cantones if lc]
+
         canton_vanos = {}
+        # n postes válidos → n-1 vanos
         for i, vano_id in enumerate(vanos_ids):
-            lista_c = norm_cantones[i] if i < len(norm_cantones) else []
-            # el vano pertenece al primer cantón de la lista del poste i
-            c = lista_c[0] if lista_c else None
-            if c is None:
-                continue
+            if i >= len(postes_validos):
+                break
+            lista_c = postes_validos[i]
+            c = lista_c[0]  # primer cantón del poste i
             canton_vanos.setdefault(c, []).append(vano_id)
         return canton_vanos
 
