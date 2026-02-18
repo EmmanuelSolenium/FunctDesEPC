@@ -3737,25 +3737,37 @@ def tab_fle_canton_v2(
 
     def asignar_vanos_a_cantones(norm_cantones, cols_dict):
         """
-        Dado que n postes válidos (no NaN) → n-1 vanos (mismo orden),
-        asigna cada vano al cantón del poste i (no i+1).
-        Si el poste i tiene [c1,c2], el vano i va a c1.
-        Los postes con lista vacía (NaN original) se saltan sin consumir vano.
+        Agrupa postes válidos por cantón, luego asigna n-1 vanos
+        a cada cantón de forma independiente.
+
+        Para cada cantón con k postes válidos → k-1 vanos,
+        tomados en orden secuencial del pool global de vanos.
         """
         vanos_ids = sorted(cols_dict.keys(),
                             key=lambda x: int(str(x).replace("S", "")))
 
-        # Solo postes con cantón válido
-        postes_validos = [lc for lc in norm_cantones if lc]
+        # Agrupar postes válidos por cantón, conservando orden de aparición
+        canton_postes = {}
+        cantones_orden = []
+        for lista_c in norm_cantones:
+            if not lista_c:
+                continue
+            # poste con [c1,c2]: cuenta para c1 (fin) y c2 (inicio)
+            for c in lista_c:
+                if c not in canton_postes:
+                    canton_postes[c] = 0
+                    cantones_orden.append(c)
+                canton_postes[c] += 1
 
+        # Asignar vanos secuencialmente: cada cantón con k postes toma k-1 vanos
         canton_vanos = {}
-        # n postes válidos → n-1 vanos
-        for i, vano_id in enumerate(vanos_ids):
-            if i >= len(postes_validos):
-                break
-            lista_c = postes_validos[i]
-            c = lista_c[0]  # primer cantón del poste i
-            canton_vanos.setdefault(c, []).append(vano_id)
+        vano_idx = 0
+        for c in cantones_orden:
+            n_postes = canton_postes[c]
+            n_vanos = max(n_postes - 1, 0)
+            canton_vanos[c] = vanos_ids[vano_idx: vano_idx + n_vanos]
+            vano_idx += n_vanos
+
         return canton_vanos
 
     def construir_df(canton, vanos_ids, cols_dict, tabla):
