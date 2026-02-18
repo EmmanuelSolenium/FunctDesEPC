@@ -2492,87 +2492,6 @@ def calcular_cs(
     return Ret
 
 
-import pandas as pd
-
-def clasificar_cantones(
-    postes_exportacion,     # Series con identificador del poste (solo referencia)
-    tipo_poste,             # Series ("ANC", "FL", etc.)
-    numero_en_ruta          # Series numérico
-):
-    """
-    Clasifica cada poste en su(s) cantón(es) según reglas definidas.
-
-    Retorna:
-        pd.Series con:
-        - int → pertenece a un solo cantón
-        - list[int, int] → es fin de un cantón e inicio de otro
-    """
-
-    n = len(postes_exportacion)
-
-    # ------------------------------------------------------------
-    # Identificar inicio / fin de cantón por poste
-    # ------------------------------------------------------------
-    inicio = [False] * n
-    fin = [False] * n
-
-    for i in range(n):
-
-        tipo = tipo_poste.iloc[i]
-        nr = numero_en_ruta.iloc[i]
-        es_ultimo = (i == n - 1)
-
-        # --- Regla 1: tipo ANC o FL ---
-        if tipo in ["ANC", "FL"]:
-            inicio[i] = True
-            fin[i] = True
-
-        # --- Regla 2: cambio de ruta ---
-        if nr == 0:
-            inicio[i] = True
-
-        if nr != 0:
-            if es_ultimo:
-                fin[i] = True
-            else:
-                if numero_en_ruta.iloc[i + 1] == 0:
-                    fin[i] = True
-
-        # --------------------------------------------------------
-        # AJUSTE CLAVE:
-        # El último poste NO puede iniciar un cantón nuevo
-        # --------------------------------------------------------
-        if es_ultimo:
-            inicio[i] = False
-
-    # ------------------------------------------------------------
-    # Asignar cantones en orden de exportación
-    # ------------------------------------------------------------
-    canton_actual = 0
-    resultado = [None] * n
-    iniciar_nuevo = True
-
-    for i in range(n):
-
-        if iniciar_nuevo:
-            canton_actual += 1
-            iniciar_nuevo = False
-
-        if inicio[i] and fin[i]:
-            # Fin e inicio simultáneo (NO ocurre en el último poste)
-            resultado[i] = [canton_actual, canton_actual + 1]
-            canton_actual += 1
-            iniciar_nuevo = False
-
-        elif fin[i]:
-            resultado[i] = canton_actual
-            iniciar_nuevo = True
-
-        else:
-            resultado[i] = canton_actual
-
-    return pd.Series(resultado, index=postes_exportacion.index, name="Canton")
-
 
 def clasificar_cantones(
     postes_exportacion,     # Series con identificador del poste (solo referencia)
@@ -3754,3 +3673,81 @@ def tab_fle_canton_v2(
     ]
 
     return tablas_normales, tablas_secundarios
+
+
+def filas_canton_s(
+    lista_tablas,       # list[DataFrame] — una tabla por cantón secundario
+    cantones_s,         # pd.Series en orden de exportación (ej: '1S', NaN, '2S'...)
+    vanos,              # pd.Series en orden de exportación
+    postes_export,      # pd.Series en orden de exportación
+    desnivel            # pd.Series en orden de exportación
+):
+    cantones_s   = pd.Series(cantones_s).reset_index(drop=True)
+    vanos        = pd.Series(vanos).reset_index(drop=True)
+    postes_export = pd.Series(postes_export).reset_index(drop=True)
+    desnivel     = pd.Series(desnivel).reset_index(drop=True)
+
+    # Máscara de postes válidos (no NaN)
+    mascara_valida = cantones_s.notna()
+
+    # Filtrar solo postes válidos
+    cantones_s_val  = cantones_s[mascara_valida].reset_index(drop=True)
+    vanos_val       = vanos[mascara_valida].reset_index(drop=True)
+    postes_val      = postes_export[mascara_valida].reset_index(drop=True)
+    desnivel_val    = desnivel[mascara_valida].reset_index(drop=True)
+
+    # Cantones únicos en orden de aparición
+    cantones_unicos = []
+    for c in cantones_s_val:
+        if isinstance(c, list):
+            for x in c:
+                if x not in cantones_unicos:
+                    cantones_unicos.append(x)
+        else:
+            if c not in cantones_unicos:
+                cantones_unicos.append(c)
+
+    def pertenece(valor, k):
+        if isinstance(valor, list):
+            return k in valor
+        return valor == k
+
+    for df, k in zip(lista_tablas, cantones_unicos):
+
+        # Índices válidos que pertenecen al cantón k
+        idx = [
+            i for i, c in enumerate(cantones_s_val)
+            if pertenece(c, k)
+        ]
+
+        if len(idx) < 2:
+            continue
+
+        postes_canton = postes_val.iloc[idx].values
+
+        # Vano (numeración)
+        fila = ["Vano"] + list(range(1, len(postes_canton)))
+        df, fila = ajustar_df(df, fila)
+        df.loc[len(df)] = fila
+
+        # Longitud (m)
+        fila = ["Longitud (m)"] + vanos_val.iloc[idx[:-1]].tolist()
+        df, fila = ajustar_df(df, fila)
+        df.loc[len(df)] = fila
+
+        # Poste inicial
+        fila = ["Poste inicial"] + list(postes_canton[:-1])
+        df, fila = ajustar_df(df, fila)
+        df.loc[len(df)] = fila
+
+        # Poste final
+        fila = ["Poste final"] + list(postes_canton[1:])
+        df, fila = ajustar_df(df, fila)
+        df.loc[len(df)] = fila
+
+        # Desnivel
+        fila = ["Desnivel"] + desnivel_val.iloc[idx[:-1]].tolist()
+        df, fila = ajustar_df(df, fila)
+        df.loc[len(df)] = fila
+
+    return lista_tablas
