@@ -1570,6 +1570,104 @@ def crear_fase_mensajero(
 
     return carac_postes
 
+def crear_fase_mensajero(
+    carac_postes,
+    postes_orden,
+    postes_export,
+    texto_export,
+    col_fase="Fase",
+    col_mensajero="Mensajero"
+):
+    """
+    Crea las columnas 'Fase' y 'Mensajero' a partir de un texto exportado.
+
+    Reglas:
+    - Si el texto cumple exactamente el formato 'FASE / MENSAJERO':
+        Fase = FASE
+        Mensajero = MENSAJERO
+    - En cualquier otro caso:
+        Fase = texto completo
+        Mensajero = NaN
+    - Datos provenientes de exportación (pueden estar desordenados y repetidos)
+    - Para postes repetidos, se toma el PRIMER valor válido encontrado
+    - Valor válido: no NaN, no "", no "-", no "0"
+    - Si el valor seleccionado (n) es inválido, se hereda el valor n-1
+      (aplica tanto para Fase como para Mensajero)
+    """
+
+    # --------------------------------------------------
+    # Inicialización
+    # --------------------------------------------------
+    carac_postes[col_fase] = None       # None → dtype object, acepta strings
+    carac_postes[col_mensajero] = None  # None → dtype object, acepta strings
+
+    # --------------------------------------------------
+    # Funciones auxiliares
+    # --------------------------------------------------
+    def es_valido(v):
+        if pd.isna(v):
+            return False
+        v_str = str(v).strip()
+        return v_str not in {"", "-", "0"}
+
+    def obtener_fase_mensajero(v):
+        """
+        Aplica la regla de parsing:
+        - Solo si hay exactamente un ' / ' se separa
+        - En otro caso, todo es fase
+        """
+        if not es_valido(v):
+            return np.nan, np.nan
+
+        v_str = str(v).strip()
+
+        if v_str.count(" / ") == 1:
+            f, m = v_str.split(" / ")
+            return f.strip(), m.strip()
+
+        return v_str, np.nan
+
+    def seleccionar_valor_fase_mensajero(idxs):
+        """
+        Devuelve (fase, mensajero) aplicando:
+        - primer valor válido
+        - herencia n-1 si corresponde
+        """
+        for i in idxs:
+            f, m = obtener_fase_mensajero(texto_export.iloc[i])
+
+            if es_valido(f) or es_valido(m):
+                return f, m
+
+            if i > 0:
+                f_ant, m_ant = obtener_fase_mensajero(texto_export.iloc[i - 1])
+                if es_valido(f_ant) or es_valido(m_ant):
+                    return f_ant, m_ant
+
+        return np.nan, np.nan
+
+    # --------------------------------------------------
+    # Iteración por poste final (ordenado)
+    # --------------------------------------------------
+    for poste in postes_orden:
+
+        idxs = np.where(postes_export.values == poste)[0]
+
+        if len(idxs) == 0:
+            continue
+
+        fase_sel, mensajero_sel = seleccionar_valor_fase_mensajero(idxs)
+
+        carac_postes.loc[
+            carac_postes[postes_orden.name] == poste, col_fase
+        ] = fase_sel
+
+        carac_postes.loc[
+            carac_postes[postes_orden.name] == poste, col_mensajero
+        ] = mensajero_sel
+
+    return carac_postes
+
 
 def determinar_tense(
     carac_postes,
@@ -1580,25 +1678,40 @@ def determinar_tense(
     tiro_atras_export,
     tabla_tiro_rotura,
     cable_export,
+    area,
     nombre_columna="Tense"
 ):
     """
     Determina el tipo de tense por poste.
 
     Reglas:
+    - Si area no es "Urbano" ni "Urbana" (case-insensitive) → todos "Normal"
     - Si el primer dígito numérico del armado es 6 o 7 → "Normal"
     - En otro caso:
         * Se obtiene el tiro máximo (adelante / atrás) considerando todas
-            las repeticiones del poste
+        las repeticiones del poste
         * Se obtiene la carga de rotura máxima de los cables asociados al poste
         * Si tiro_max > 0.08 * carga_rotura → "Normal"
-          else → "Reducido"
+        else → "Reducido"
+
+    Parámetros
+    ----------
+    area : str
+        Tipo de área del proyecto. Solo "Urbano" o "Urbana" activa la
+        evaluación completa; cualquier otro valor asigna "Normal" a todos.
     """
 
     # ------------------------------------------------------------
     # Inicialización
     # ------------------------------------------------------------
     carac_postes[nombre_columna] = None  # None → dtype object, acepta strings
+
+    # ------------------------------------------------------------
+    # Atajo: área no urbana → todos Normal
+    # ------------------------------------------------------------
+    if str(area).strip().lower() not in {"urbano", "urbana"}:
+        carac_postes[nombre_columna] = "Normal"
+        return carac_postes
 
     # ------------------------------------------------------------
     # Consolidación de tiros (listas de Series → Series única)
