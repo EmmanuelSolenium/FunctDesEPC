@@ -1591,16 +1591,16 @@ def determinar_tense(
     - Si el primer dígito numérico del armado es 6 o 7 → "Normal"
     - En otro caso:
         * Se obtiene el tiro máximo (adelante / atrás) considerando todas
-          las repeticiones del poste
+            las repeticiones del poste
         * Se obtiene la carga de rotura máxima de los cables asociados al poste
         * Si tiro_max > 0.08 * carga_rotura → "Normal"
-          else → "Reducido"
+            else → "Reducido"
     """
 
     # ------------------------------------------------------------
     # Inicialización
     # ------------------------------------------------------------
-    carac_postes[nombre_columna] = np.nan
+    carac_postes[nombre_columna] = None  # None → dtype object, acepta strings
 
     # ------------------------------------------------------------
     # Consolidación de tiros (listas de Series → Series única)
@@ -1658,7 +1658,9 @@ def determinar_tense(
         # --------------------------------------------------------
         # 1) Evaluación directa por armado
         # --------------------------------------------------------
-        armado = armado_export.loc[idx]
+        # Se usa la primera ocurrencia del poste en postes_export (idxs[0])
+        # para mantener consistencia con la obtención de tiros más abajo.
+        armado = armado_export.iloc[idxs[0]]
         dig = primer_digito_numerico(armado)
 
         if dig in (6, 7):
@@ -1714,7 +1716,6 @@ def determinar_tense(
         ] = tense
 
     return carac_postes
-
 
 
 def calcular_vanos_adelante_atras(
@@ -3835,7 +3836,6 @@ def tablas_por_canton_s(
 from collections import defaultdict
 
 
-
 def calcular_vano_anterior(mec, postes_orden, postes_export, vano_adelante , nombre_col = "Vano anterior"):
     """
     Calcula la columna 'Vano anterior' para cada poste en postes_orden
@@ -3913,3 +3913,5 @@ def calcular_vano_anterior(mec, postes_orden, postes_export, vano_adelante , nom
 
     mec[nombre_col] = postes_orden.reset_index(drop=True).map(resultado)
     return mec
+
+
