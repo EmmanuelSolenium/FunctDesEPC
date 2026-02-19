@@ -1472,7 +1472,6 @@ def calcular_Mut(
 
     return mec
 
-
 def crear_fase_mensajero(
     carac_postes,
     postes_orden,
@@ -1501,8 +1500,8 @@ def crear_fase_mensajero(
     # --------------------------------------------------
     # Inicialización
     # --------------------------------------------------
-    carac_postes[col_fase] = np.nan
-    carac_postes[col_mensajero] = np.nan
+    carac_postes[col_fase] = None       # None → dtype object, acepta strings
+    carac_postes[col_mensajero] = None  # None → dtype object, acepta strings
 
     # --------------------------------------------------
     # Funciones auxiliares
@@ -1571,6 +1570,7 @@ def crear_fase_mensajero(
 
     return carac_postes
 
+
 def determinar_tense(
     carac_postes,
     postes_orden,
@@ -1613,7 +1613,18 @@ def determinar_tense(
     else:
         tiro_atras = tiro_atras_export
 
-    postes_exp = postes_export.values
+    postes_exp = postes_export.reset_index(drop=True).values
+
+    # Mapa poste → cable construido desde postes_export y cable_export
+    # alineadas por posición. Evita usar iloc[i] con índices de postes_export
+    # sobre cable_export que puede tener distinta longitud.
+    cable_export_r = cable_export.reset_index(drop=True)
+    cable_por_poste = {}
+    for _i, _p in enumerate(postes_exp):
+        if _p not in cable_por_poste and _i < len(cable_export_r):
+            _v = cable_export_r.iloc[_i]
+            if pd.notna(_v) and str(_v).strip() not in {"", "-", "0"}:
+                cable_por_poste[_p] = _v
 
     # ------------------------------------------------------------
     # Función auxiliar: primer dígito numérico del armado
@@ -1685,14 +1696,14 @@ def determinar_tense(
         tiro_max = max(tiros)
 
         # --------------------------------------------------------
-        # 3) Carga de rotura máxima de los cables del poste
+        # 3) Carga de rotura del cable del poste (via mapa)
         # --------------------------------------------------------
         cargas = []
 
-        for i in idxs:
-            carga = carga_rotura_cable(cable_export.iloc[i])
-            if carga is not None:
-                cargas.append(carga)
+        nombre_cable = cable_por_poste.get(poste)
+        carga = carga_rotura_cable(nombre_cable)
+        if carga is not None:
+            cargas.append(carga)
 
         if not cargas:
             continue
@@ -1714,6 +1725,7 @@ def determinar_tense(
         ] = tense
 
     return carac_postes
+
 
 def calcular_vanos_adelante_atras(
     carac_postes,
