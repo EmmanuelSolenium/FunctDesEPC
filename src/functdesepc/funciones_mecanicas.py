@@ -3832,3 +3832,84 @@ def tablas_por_canton_s(
     return tablas
 
 
+from collections import defaultdict
+
+
+
+def calcular_vano_anterior(mec, postes_orden, postes_export, vano_adelante , nombre_col = "Vano anterior"):
+    """
+    Calcula la columna 'Vano anterior' para cada poste en postes_orden
+    y la agrega a mec como nombre_col.
+
+    Lógica
+    ------
+    - Poste sin repeticiones en postes_export:
+        vano_anterior = vano_adelante del poste inmediatamente anterior
+        en postes_export. Si es el primero → 0.
+    - Poste con repeticiones en postes_export:
+        Se recogen los vanos anteriores de todas sus ocurrencias
+        (vano_adelante[i-1] para cada índice i donde aparece el poste).
+        Se toma el primer valor distinto de 0 y NaN. Si ninguno
+        cumple → 0.
+
+    Parámetros
+    ----------
+    mec : pd.DataFrame
+        DataFrame de cálculos mecánicos. Se le agrega la columna in-place.
+    postes_orden : pd.Series
+        Postes ordenados y sin repeticiones (índice de mec).
+    nombre_col : str
+        Nombre de la columna que se creará en mec.
+    postes_export : pd.Series
+        Postes en el orden de exportación de Redlin (puede tener repeticiones).
+    vano_adelante : pd.Series
+        Vano adelante de cada poste en postes_export, alineada por posición.
+
+    Retorna
+    -------
+    pd.DataFrame
+        mec con la columna nombre_col agregada.
+
+    Ejemplo
+    -------
+    mec = calcular_vano_anterior(
+        mec,
+        mec["Numero de apoyo"],
+        "Vano anterior",
+        l_postes,
+        est_max[("Topografía", "Vano Adelante")]
+    )
+    """
+    postes_export_r = postes_export.reset_index(drop=True)
+    vano_adelante_r = vano_adelante.reset_index(drop=True)
+
+    # Mapear cada poste a la lista de índices donde aparece en postes_export
+    indices_por_poste = defaultdict(list)
+    for i, poste in postes_export_r.items():
+        indices_por_poste[poste].append(i)
+
+    resultado = {}
+    for poste in postes_orden.reset_index(drop=True):
+        indices = indices_por_poste.get(poste, [])
+
+        if len(indices) == 0:
+            # Poste no encontrado en postes_export
+            resultado[poste] = 0
+
+        elif len(indices) == 1:
+            # Poste único: vano anterior = vano_adelante del elemento anterior
+            i = indices[0]
+            resultado[poste] = 0 if i == 0 else vano_adelante_r.iloc[i - 1]
+
+        else:
+            # Poste repetido: primer vano anterior distinto de 0 y NaN
+            candidatos = [
+                vano_adelante_r.iloc[i - 1]
+                for i in indices
+                if i > 0
+            ]
+            no_cero = [v for v in candidatos if pd.notna(v) and v != 0]
+            resultado[poste] = no_cero[0] if no_cero else 0
+
+    mec[nombre_col] = postes_orden.reset_index(drop=True).map(resultado)
+    return mec
