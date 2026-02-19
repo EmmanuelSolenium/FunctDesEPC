@@ -1571,8 +1571,6 @@ def crear_fase_mensajero(
 
     return carac_postes
 
-
-
 def determinar_tense(
     carac_postes,
     postes_orden,
@@ -1594,7 +1592,7 @@ def determinar_tense(
             las repeticiones del poste
         * Se obtiene la carga de rotura máxima de los cables asociados al poste
         * Si tiro_max > 0.08 * carga_rotura → "Normal"
-            else → "Reducido"
+          else → "Reducido"
     """
 
     # ------------------------------------------------------------
@@ -1716,7 +1714,6 @@ def determinar_tense(
         ] = tense
 
     return carac_postes
-
 
 def calcular_vanos_adelante_atras(
     carac_postes,
