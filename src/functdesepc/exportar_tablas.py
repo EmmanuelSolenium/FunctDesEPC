@@ -440,6 +440,16 @@ def exportar_todo(
     border   = Border(left=medium, right=medium, top=medium, bottom=medium)
     wrap     = Alignment(wrap_text=True)
 
+    # Colores de encabezado por hoja (del template original)
+    header_fills = {
+        "MEC":                           PatternFill("solid", fgColor="12501A"),
+        "RET":                           PatternFill("solid", fgColor="12501A"),
+        "EOLOVANOS":                     PatternFill("solid", fgColor="FE6A0C"),
+        "Caracteristicas de los postes": PatternFill("solid", fgColor="C2D59A"),
+        "VANOS IDEALES DE REGULACIÓN":   PatternFill("solid", fgColor="D6E3BB"),
+    }
+    white_font_sheets = {"MEC", "RET"}
+
     # ── Helpers flechado ─────────────────────────────────────────────────────
     def _write_cell(ws, row, col, value, font=None, alignment=None,
                     border=None, fill=None, number_format=None):
@@ -554,11 +564,19 @@ def exportar_todo(
         ws = wb[sheet_name]
         ws.delete_rows(start_row, ws.max_row - start_row + 1)
 
+        fill = header_fills.get(sheet_name)
+
+        # Encabezado: negrita + color de la hoja
         for col_idx, col_name in enumerate(df.columns, start=1):
             cell = ws.cell(row=start_row, column=col_idx, value=col_name)
             cell.border = border
             cell.alignment = wrap
+            font_color = "FFFFFF" if sheet_name in white_font_sheets else "000000"
+            cell.font = Font(bold=True, color=font_color)
+            if fill:
+                cell.fill = fill
 
+        # Datos
         for row_idx, row in enumerate(df.itertuples(index=False), start=start_row + 1):
             for col_idx, value in enumerate(row, start=1):
                 cell = ws.cell(row=row_idx, column=col_idx, value=_clean(value))
