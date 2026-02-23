@@ -4038,10 +4038,13 @@ def calcular_vano_anterior(mec, postes_orden, postes_export, vano_adelante , nom
 
 
 def conductor_eovanos(eolovanos, mensajero, fase, col_name='Conductor'):
+    mensajero = mensajero.reset_index(drop=True)
+    fase = fase.reset_index(drop=True)
+    
+    eolovanos = eolovanos.reindex(range(len(mensajero)))
     eolovanos[col_name] = [
         f"{m} {f}" if isinstance(m, str) else f
         for m, f in zip(mensajero, fase)
     ]
     return eolovanos
-
 
