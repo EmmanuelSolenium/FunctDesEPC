@@ -4037,3 +4037,17 @@ def calcular_vano_anterior(mec, postes_orden, postes_export, vano_adelante , nom
     return mec
 
 
+def conductor_eovanos(eovanos,mensajero,fase): 
+    #crea la columna conductor de la tabla de Eolovanos 
+    #juntando el cable mensajero y las fases
+    #si no hay mensajero se deja solo la fase 
+    
+    for i in mensajero.index:
+        if mensajero[i] == str:
+            eovanos["Conductor"][i] = mensajero[i] + fase[i]
+            
+        else:            
+            eovanos["Conductor"][i] = fase[i]      
+    
+    return eovanos
+
