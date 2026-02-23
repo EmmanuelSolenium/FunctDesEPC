@@ -4048,3 +4048,63 @@ def conductor_eovanos(eolovanos, mensajero, fase, col_name='Conductor'):
     ]
     return eolovanos
 
+
+
+
+def exportar_calculos(ruta_template, ruta_salida, mec, ret, eovanos, carac_postes, van_reg):
+    """
+    Exporta todos los dataframes al archivo Excel de cálculos mecánicos,
+    preservando los encabezados y formato existente en cada hoja.
+
+    Parámetros
+    ----------
+    ruta_template : str  - Ruta al archivo .xlsx base (con encabezados ya formateados)
+    ruta_salida   : str  - Ruta donde se guarda el archivo resultante
+    mec           : pd.DataFrame
+    ret           : pd.DataFrame
+    eovanos       : pd.DataFrame
+    carac_postes  : pd.DataFrame
+    van_reg       : pd.DataFrame
+    """
+
+    # Configuración de cada hoja: (nombre_hoja, dataframe, fila_inicio_datos)
+    config = [
+        ("MEC",                          mec,          8),
+        ("RET",                          ret,          5),
+        ("EOLOVANOS",                    eovanos,      3),
+        ("Caracteristicas de los postes", carac_postes, 3),
+        ("VANOS IDEALES DE REGULACIÓN",  van_reg,      7),
+    ]
+
+    wb = load_workbook(ruta_template)
+
+    for sheet_name, df, start_row in config:
+        ws = wb[sheet_name]
+
+        # Limpiar filas de datos existentes (desde start_row hacia abajo)
+        ws.delete_rows(start_row, ws.max_row - start_row + 1)
+
+        # Escribir encabezado de columnas en start_row
+        for col_idx, col_name in enumerate(df.columns, start=1):
+            ws.cell(row=start_row, column=col_idx, value=col_name)
+
+        # Escribir filas de datos desde start_row + 1
+        for row_idx, row in enumerate(df.itertuples(index=False), start=start_row + 1):
+            for col_idx, value in enumerate(row, start=1):
+                ws.cell(row=row_idx, column=col_idx, value=value)
+
+    wb.save(ruta_salida)
+    print(f"Archivo guardado en: {ruta_salida}")
+
+
+# ── Ejemplo de uso ────────────────────────────────────────────────────────────
+# exportar_calculos(
+#     ruta_template = "calculos_mecanicos_raw.xlsx",
+#     ruta_salida   = "calculos_mecanicos_output.xlsx",
+#     mec           = mec,
+#     ret           = ret,
+#     eovanos       = eovanos,
+#     carac_postes  = carac_postes,
+#     van_reg       = van_reg,
+# )
+
