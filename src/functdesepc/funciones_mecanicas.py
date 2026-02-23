@@ -4052,7 +4052,6 @@ def conductor_eovanos(eolovanos, mensajero, fase, col_name='Conductor'):
 
 
 def exportar_calculos(ruta_template, ruta_salida, mec, ret, eovanos, carac_postes, van_reg):
-    from openpyxl import load_workbook
     """
     Exporta todos los dataframes al archivo Excel de cálculos mecánicos,
     preservando los encabezados y formato existente en cada hoja.
@@ -4067,14 +4066,23 @@ def exportar_calculos(ruta_template, ruta_salida, mec, ret, eovanos, carac_poste
     carac_postes  : pd.DataFrame
     van_reg       : pd.DataFrame
     """
+    import pandas as pd
+    from openpyxl import load_workbook
 
-    # Configuración de cada hoja: (nombre_hoja, dataframe, fila_inicio_datos)
+    def _clean(value):
+        try:
+            if pd.isna(value):
+                return None
+        except (TypeError, ValueError):
+            pass
+        return value
+
     config = [
-        ("MEC",                          mec,          8),
-        ("RET",                          ret,          5),
-        ("EOLOVANOS",                    eovanos,      3),
+        ("MEC",                           mec,          8),
+        ("RET",                           ret,          5),
+        ("EOLOVANOS",                     eovanos,      3),
         ("Caracteristicas de los postes", carac_postes, 3),
-        ("VANOS IDEALES DE REGULACIÓN",  van_reg,      7),
+        ("VANOS IDEALES DE REGULACIÓN",   van_reg,      7),
     ]
 
     wb = load_workbook(ruta_template)
@@ -4092,7 +4100,7 @@ def exportar_calculos(ruta_template, ruta_salida, mec, ret, eovanos, carac_poste
         # Escribir filas de datos desde start_row + 1
         for row_idx, row in enumerate(df.itertuples(index=False), start=start_row + 1):
             for col_idx, value in enumerate(row, start=1):
-                ws.cell(row=row_idx, column=col_idx, value=value)
+                ws.cell(row=row_idx, column=col_idx, value=_clean(value))
 
     wb.save(ruta_salida)
     print(f"Archivo guardado en: {ruta_salida}")
@@ -4108,4 +4116,3 @@ def exportar_calculos(ruta_template, ruta_salida, mec, ret, eovanos, carac_poste
 #     carac_postes  = carac_postes,
 #     van_reg       = van_reg,
 # )
-
