@@ -4052,6 +4052,7 @@ def conductor_eovanos(eolovanos, mensajero, fase, col_name='Conductor'):
 
 
 def exportar_calculos(ruta_template, ruta_salida, mec, ret, eovanos, carac_postes, van_reg):
+    from openpyxl import load_workbook
     """
     Exporta todos los dataframes al archivo Excel de cálculos mecánicos,
     preservando los encabezados y formato existente en cada hoja.
