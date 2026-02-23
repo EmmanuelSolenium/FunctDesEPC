@@ -4055,7 +4055,7 @@ def exportar_calculos(ruta_template, ruta_salida, mec, ret, eovanos, carac_poste
     from openpyxl import load_workbook
     from openpyxl.styles import Border, Side
 
-    thick = Side(style='thick')
+    thick = Side(style='medium')
     border = Border(left=thick, right=thick, top=thick, bottom=thick)
 
     def _clean(value):
