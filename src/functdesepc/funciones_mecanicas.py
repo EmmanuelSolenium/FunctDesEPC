@@ -4053,9 +4053,10 @@ def conductor_eovanos(eolovanos, mensajero, fase, col_name='Conductor'):
 def exportar_calculos(ruta_template, ruta_salida, mec, ret, eovanos, carac_postes, van_reg):
     import pandas as pd
     from openpyxl import load_workbook
-    from openpyxl.styles import Border, Side
+    from openpyxl.styles import Border, Side, Alignment
 
     thick = Side(style='medium')
+    wrap = Alignment(wrap_text=True)
     border = Border(left=thick, right=thick, top=thick, bottom=thick)
 
     def _clean(value):
@@ -4084,12 +4085,14 @@ def exportar_calculos(ruta_template, ruta_salida, mec, ret, eovanos, carac_poste
         for col_idx, col_name in enumerate(df.columns, start=1):
             cell = ws.cell(row=start_row, column=col_idx, value=col_name)
             cell.border = border
+            cell.alignment = wrap
 
         # Datos
         for row_idx, row in enumerate(df.itertuples(index=False), start=start_row + 1):
             for col_idx, value in enumerate(row, start=1):
                 cell = ws.cell(row=row_idx, column=col_idx, value=_clean(value))
                 cell.border = border
+                cell.alignment = wrap
 
     wb.save(ruta_salida)
     print(f"Archivo guardado en: {ruta_salida}")
