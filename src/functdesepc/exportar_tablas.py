@@ -267,12 +267,12 @@ def exportar_tablas_flechado(
     Exporta las tablas de flechado a un archivo Excel con formato.
 
     Genera n + m hojas:
-      - n hojas para cantones normales  → nombres: "Canton_1", "Canton_2", ...
-      - m hojas para cantones secundarios → nombres: "Canton_1S", "Canton_2S", ...
+    - n hojas para cantones normales  → nombres: "Canton_1", "Canton_2", ...
+    - m hojas para cantones secundarios → nombres: "Canton_1S", "Canton_2S", ...
 
     Cada hoja contiene:
-      - Parte superior: header del cantón (tab_fle[i] o tab_fle_s[i])
-      - Parte inferior: datos de temperatura/flechas (tablas_p[i] o tablas_s[i])
+    - Parte superior: header del cantón (tab_fle[i] o tab_fle_s[i])
+    - Parte inferior: datos de temperatura/flechas (tablas_p[i] o tablas_s[i])
 
     Parámetros
     ----------
@@ -330,114 +330,262 @@ def exportar_tablas_flechado(
     print(f"✅ Archivo guardado: {filepath}  ({len(tab_fle)} cantones + {len(tab_fle_s)} secundarios)")
     return filepath
 
+def exportar_calculos(ruta_template, ruta_salida, mec, ret, eovanos, carac_postes, van_reg):
+    import pandas as pd
+    from openpyxl import load_workbook
+    from openpyxl.styles import Border, Side, Alignment
 
-# ---------------------------------------------------------------------------
-# Previsualización en Colab con HTML estilizado
-# ---------------------------------------------------------------------------
+    thick = Side(style='medium')
+    wrap = Alignment(wrap_text=True)
+    border = Border(left=thick, right=thick, top=thick, bottom=thick)
 
-def _df_to_html_styled(df, caption=""):
-    """Convierte un DataFrame a HTML con estilos inline para Colab."""
-    th_style = (
-        "background-color:#D9E1F2; font-weight:bold; border:1px solid #888; "
-        "padding:4px 8px; text-align:center; font-size:11px;"
-    )
-    td_style = (
-        "border:1px solid #ccc; padding:3px 6px; text-align:center; font-size:11px;"
-    )
-    td_label_style = (
-        "border:1px solid #ccc; padding:3px 6px; text-align:left; font-size:11px; "
-        "background-color:#EEF2FB; font-weight:bold;"
-    )
+    def _clean(value):
+        try:
+            if pd.isna(value):
+                return None
+        except (TypeError, ValueError):
+            pass
+        return value
 
-    html = f'<table style="border-collapse:collapse; margin:4px 0;">'
-    if caption:
-        html += f'<caption style="font-weight:bold; font-size:13px; margin-bottom:4px;">{caption}</caption>'
+    config = [
+        ("MEC",                           mec,          8),
+        ("RET",                           ret,          5),
+        ("EOLOVANOS",                     eovanos,      3),
+        ("Caracteristicas de los postes", carac_postes, 3),
+        ("VANOS IDEALES DE REGULACIÓN",   van_reg,      7),
+    ]
 
-    # Encabezado de columnas
-    html += "<thead><tr>"
-    for col in df.columns:
-        html += f'<th style="{th_style}">{col}</th>'
-    html += "</tr></thead><tbody>"
+    wb = load_workbook(ruta_template)
 
-    # Filas
-    for _, row in df.iterrows():
-        html += "<tr>"
-        for j, val in enumerate(row):
-            # Primera columna = etiqueta
-            style = td_label_style if j == 0 else td_style
-            # Formateo numérico
-            if isinstance(val, float):
-                display_val = f"{val:.4f}" if abs(val) < 100 else f"{val:.2f}"
-            else:
-                display_val = "" if pd.isna(val) else str(val)
-            html += f'<td style="{style}">{display_val}</td>'
-        html += "</tr>"
+    for sheet_name, df, start_row in config:
+        ws = wb[sheet_name]
+        ws.delete_rows(start_row, ws.max_row - start_row + 1)
 
-    html += "</tbody></table>"
-    return html
+        # Encabezado
+        for col_idx, col_name in enumerate(df.columns, start=1):
+            cell = ws.cell(row=start_row, column=col_idx, value=col_name)
+            cell.border = border
+            cell.alignment = wrap
+
+        # Datos
+        for row_idx, row in enumerate(df.itertuples(index=False), start=start_row + 1):
+            for col_idx, value in enumerate(row, start=1):
+                cell = ws.cell(row=row_idx, column=col_idx, value=_clean(value))
+                cell.border = border
+                cell.alignment = wrap
+
+    wb.save(ruta_salida)
+    print(f"Archivo guardado en: {ruta_salida}")
 
 
-def previsualizar_tabla_flechado(tab_fle_i, tablas_i, titulo="Tabla de Flechado"):
+# ── Ejemplo de uso ────────────────────────────────────────────────────────────
+# exportar_calculos(
+#     ruta_template = "calculos_mecanicos_raw.xlsx",
+#     ruta_salida   = "calculos_mecanicos_output.xlsx",
+#     mec           = mec,
+#     ret           = ret,
+#     eovanos       = eovanos,
+#     carac_postes  = carac_postes,
+#     van_reg       = van_reg,
+# )
+
+def exportar_todo(
+    ruta_template,
+    ruta_salida,
+    mec, ret, eovanos, carac_postes, van_reg,
+    tab_fle, tablas_p, tab_fle_s, tablas_s
+):
     """
-    Previsualiza una tabla de flechado completa en Jupyter/Colab.
-
-    Muestra primero el header (tab_fle_i) y luego los datos (tablas_i)
-    con formato HTML estilizado.
+    Exporta en un único archivo Excel las tablas de flechado y los dataframes
+    de cálculos mecánicos, preservando el formato de cada hoja.
 
     Parámetros
     ----------
-    tab_fle_i : pd.DataFrame
-        DataFrame con el header del cantón (una de las listas tab_fle o tab_fle_s).
-    tablas_i : pd.DataFrame
-        DataFrame con los datos de temperatura/flechas (una de las listas tablas_p o tablas_s).
-    titulo : str
-        Título mostrado encima de la tabla (ej. "Cantón 1" o "Cantón 1S").
+    ruta_template : str            - Archivo base con encabezados de MEC, RET, etc.
+    ruta_salida   : str            - Ruta del archivo Excel resultante
+    mec, ret, eovanos, carac_postes, van_reg : pd.DataFrame
+    tab_fle, tablas_p              : listas de DataFrames cantones normales
+    tab_fle_s, tablas_s            : listas de DataFrames cantones secundarios
     """
-    wrapper_style = (
-        "border:2px solid #4472C4; border-radius:6px; padding:12px; "
-        "margin:8px 0; display:inline-block; max-width:100%; overflow-x:auto;"
-    )
-    title_style = (
-        "color:#2F5496; font-size:15px; font-weight:bold; "
-        "font-family:Arial,sans-serif; margin-bottom:8px;"
-    )
-    section_style = "color:#555; font-size:11px; font-weight:bold; margin:6px 0 2px 0;"
+    import pandas as pd
+    from openpyxl import load_workbook
+    from openpyxl.styles import Border, Side, Alignment, Font, PatternFill
+    from openpyxl.utils import get_column_letter
 
-    html_parts = [f'<div style="{wrapper_style}">']
-    html_parts.append(f'<div style="{title_style}">📊 {titulo}</div>')
+    # ── Estilos ──────────────────────────────────────────────────────────────
+    def _thin():
+        return Side(style="thin", color="FF000000")
 
-    # Header
-    html_parts.append(f'<div style="{section_style}">Datos del Cantón</div>')
-    html_parts.append(_df_to_html_styled(tab_fle_i))
+    def _medium_side():
+        return Side(style="medium", color="FF000000")
 
-    # Separador
-    html_parts.append('<hr style="border:none;border-top:1px solid #ccc;margin:8px 0;">')
+    def _border_thin_all():
+        t = _thin()
+        return Border(left=t, right=t, top=t, bottom=t)
 
-    # Datos
-    html_parts.append(f'<div style="{section_style}">Tablas de Flechado</div>')
-    html_parts.append(_df_to_html_styled(tablas_i))
+    def _border_medium_all():
+        m = _medium_side()
+        return Border(left=m, right=m, top=m, bottom=m)
 
-    html_parts.append("</div>")
+    FILL_HEADER  = PatternFill("solid", fgColor="D9E1F2")
+    FILL_DATA    = PatternFill("solid", fgColor="FFFFFF")
+    FONT_BOLD    = Font(bold=True, size=9)
+    FONT_NORMAL  = Font(bold=False, size=9)
+    ALIGN_CENTER = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    ALIGN_LEFT   = Alignment(horizontal="left",   vertical="center", wrap_text=True)
+    NUM_FMT_2DEC = '0.00'
+    NUM_FMT_4DEC = '0.0000'
 
-    display(HTML("".join(html_parts)))
+    medium   = Side(style='medium')
+    border   = Border(left=medium, right=medium, top=medium, bottom=medium)
+    wrap     = Alignment(wrap_text=True)
+
+    # ── Helpers flechado ─────────────────────────────────────────────────────
+    def _write_cell(ws, row, col, value, font=None, alignment=None,
+                    border=None, fill=None, number_format=None):
+        cell = ws.cell(row=row, column=col, value=value)
+        if font:          cell.font = font
+        if alignment:     cell.alignment = alignment
+        if border:        cell.border = border
+        if fill:          cell.fill = fill
+        if number_format: cell.number_format = number_format
+        return cell
+
+    def _merge_and_write(ws, row, col_start, col_end, value,
+                        font=None, alignment=None, border=None, fill=None):
+        if col_start < col_end:
+            ws.merge_cells(start_row=row, start_column=col_start,
+                        end_row=row,   end_column=col_end)
+        _write_cell(ws, row, col_start, value, font=font,
+                    alignment=alignment, border=border, fill=fill)
+
+    def _auto_col_width(ws, min_width=8, max_width=30):
+        for col in ws.columns:
+            max_len = 0
+            col_letter = get_column_letter(col[0].column)
+            for cell in col:
+                try:
+                    if cell.value is not None:
+                        max_len = max(max_len, len(str(cell.value)))
+                except Exception:
+                    pass
+            ws.column_dimensions[col_letter].width = max(min_width, min(max_len + 2, max_width))
+
+    def _escribir_header_tabla(ws, tab_fle_df, start_row=1, start_col=1):
+        b_med  = _border_medium_all()
+        b_thin = _border_thin_all()
+        n_rows, _ = tab_fle_df.shape
+        label_col = start_col
+        data_col_start = start_col + 1
+        for rel_row, (_, row_data) in enumerate(tab_fle_df.iterrows()):
+            abs_row  = start_row + rel_row
+            row_vals = row_data.tolist()
+            label    = row_vals[0] if row_vals else ""
+            data_vals = row_vals[1:]
+            is_vano_row = str(label).strip().lower() in {
+                "vano", "longitud (m)", "poste inicial", "poste final", "desnivel"
+            }
+            b = b_med if is_vano_row else b_thin
+            if pd.notna(label) and str(label).strip():
+                _merge_and_write(ws, abs_row, label_col, label_col + 1,
+                                value=label, font=FONT_BOLD, alignment=ALIGN_LEFT,
+                                border=b, fill=FILL_HEADER)
+            for rel_col, val in enumerate(data_vals):
+                c = data_col_start + 1 + rel_col
+                try:
+                    es_nan = pd.isna(val)
+                except (TypeError, ValueError):
+                    es_nan = False
+                if es_nan:
+                    continue
+                num_fmt = None
+                if isinstance(val, float):
+                    num_fmt = NUM_FMT_4DEC if abs(val) < 10 else NUM_FMT_2DEC
+                _write_cell(ws, abs_row, c, val, font=FONT_NORMAL,
+                            alignment=ALIGN_CENTER, border=b,
+                            fill=FILL_DATA, number_format=num_fmt)
+        return start_row + n_rows
+
+    def _escribir_datos_tabla(ws, tablas_df, start_row=1, start_col=1):
+        b_med  = _border_medium_all()
+        b_thin = _border_thin_all()
+        for rel_col, col_name in enumerate(tablas_df.columns):
+            _write_cell(ws, start_row, start_col + rel_col, col_name,
+                        font=FONT_BOLD, alignment=ALIGN_CENTER,
+                        border=b_med, fill=FILL_HEADER)
+        data_start_row = start_row + 1
+        for rel_row, (_, row_data) in enumerate(tablas_df.iterrows()):
+            abs_row = data_start_row + rel_row
+            for rel_col, val in enumerate(row_data):
+                c = start_col + rel_col
+                try:
+                    es_nan = pd.isna(val)
+                except (TypeError, ValueError):
+                    es_nan = False
+                if es_nan:
+                    continue
+                num_fmt = NUM_FMT_4DEC if isinstance(val, float) else None
+                _write_cell(ws, abs_row, c, val, font=FONT_NORMAL,
+                            alignment=ALIGN_CENTER, border=b_thin,
+                            fill=FILL_DATA, number_format=num_fmt)
+        return data_start_row + len(tablas_df)
+
+    def _clean(value):
+        try:
+            if pd.isna(value):
+                return None
+        except (TypeError, ValueError):
+            pass
+        return value
+
+    # ── 1. Cargar template (contiene hojas MEC, RET, etc. con encabezados) ───
+    wb = load_workbook(ruta_template)
+
+    # ── 2. Escribir dataframes de cálculos mecánicos ────────────────────────
+    config = [
+        ("MEC",                           mec,          8),
+        ("RET",                           ret,          5),
+        ("EOLOVANOS",                     eovanos,      3),
+        ("Caracteristicas de los postes", carac_postes, 3),
+        ("VANOS IDEALES DE REGULACIÓN",   van_reg,      7),
+    ]
+
+    for sheet_name, df, start_row in config:
+        ws = wb[sheet_name]
+        ws.delete_rows(start_row, ws.max_row - start_row + 1)
+
+        for col_idx, col_name in enumerate(df.columns, start=1):
+            cell = ws.cell(row=start_row, column=col_idx, value=col_name)
+            cell.border = border
+            cell.alignment = wrap
+
+        for row_idx, row in enumerate(df.itertuples(index=False), start=start_row + 1):
+            for col_idx, value in enumerate(row, start=1):
+                cell = ws.cell(row=row_idx, column=col_idx, value=_clean(value))
+                cell.border = border
+                cell.alignment = wrap
+
+    # ── 3. Agregar hojas de flechado ─────────────────────────────────────────
+    for i, (header_df, datos_df) in enumerate(zip(tab_fle, tablas_p)):
+        ws = wb.create_sheet(title=f"Canton_{i + 1}")
+        next_row = _escribir_header_tabla(ws, header_df)
+        _escribir_datos_tabla(ws, datos_df, start_row=next_row)
+        _auto_col_width(ws)
+
+    for i, (header_df, datos_df) in enumerate(zip(tab_fle_s, tablas_s)):
+        ws = wb.create_sheet(title=f"Canton_{i + 1}S")
+        next_row = _escribir_header_tabla(ws, header_df)
+        _escribir_datos_tabla(ws, datos_df, start_row=next_row)
+        _auto_col_width(ws)
+
+    wb.save(ruta_salida)
+    print(f"✅ Archivo guardado: {ruta_salida}")
 
 
-def previsualizar_todas(tab_fle, tablas_p, tab_fle_s=None, tablas_s=None):
-    """
-    Previsualiza todas las tablas de flechado en Colab.
-
-    Muestra primero los cantones normales y luego los secundarios.
-
-    Parámetros
-    ----------
-    tab_fle : list[pd.DataFrame]
-    tablas_p : list[pd.DataFrame]
-    tab_fle_s : list[pd.DataFrame] | None
-    tablas_s : list[pd.DataFrame] | None
-    """
-    for i, (header, datos) in enumerate(zip(tab_fle, tablas_p)):
-        previsualizar_tabla_flechado(header, datos, titulo=f"Cantón {i + 1}")
-
-    if tab_fle_s and tablas_s:
-        for i, (header, datos) in enumerate(zip(tab_fle_s, tablas_s)):
-            previsualizar_tabla_flechado(header, datos, titulo=f"Cantón {i + 1}S")
+# ── Ejemplo de uso ────────────────────────────────────────────────────────────
+# exportar_todo(
+#     ruta_template = DATA + "calculos_mecanicos_raw.xlsx",
+#     ruta_salida   = DATA + "calculos_mecanicos.xlsx",
+#     mec=mec, ret=ret, eovanos=eovanos, carac_postes=carac_postes, van_reg=van_reg,
+#     tab_fle=tab_fle, tablas_p=tablas_p, tab_fle_s=tab_fle_s, tablas_s=tablas_s,
+# )
