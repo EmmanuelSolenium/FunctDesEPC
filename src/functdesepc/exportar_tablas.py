@@ -448,7 +448,7 @@ def exportar_todo(
         "Caracteristicas de los postes": PatternFill("solid", fgColor="C2D59A"),
         "VANOS IDEALES DE REGULACIÓN":   PatternFill("solid", fgColor="D6E3BB"),
     }
-    white_font_sheets = {"MEC", "RET"}
+    white_font_sheets = {"MEC", "RET", "EOLOVANOS"}
 
     # ── Helpers flechado ─────────────────────────────────────────────────────
     def _write_cell(ws, row, col, value, font=None, alignment=None,
@@ -462,10 +462,10 @@ def exportar_todo(
         return cell
 
     def _merge_and_write(ws, row, col_start, col_end, value,
-                        font=None, alignment=None, border=None, fill=None):
+                         font=None, alignment=None, border=None, fill=None):
         if col_start < col_end:
             ws.merge_cells(start_row=row, start_column=col_start,
-                        end_row=row,   end_column=col_end)
+                           end_row=row,   end_column=col_end)
         _write_cell(ws, row, col_start, value, font=font,
                     alignment=alignment, border=border, fill=fill)
 
@@ -498,8 +498,8 @@ def exportar_todo(
             b = b_med if is_vano_row else b_thin
             if pd.notna(label) and str(label).strip():
                 _merge_and_write(ws, abs_row, label_col, label_col + 1,
-                                value=label, font=FONT_BOLD, alignment=ALIGN_LEFT,
-                                border=b, fill=FILL_HEADER)
+                                 value=label, font=FONT_BOLD, alignment=ALIGN_LEFT,
+                                 border=b, fill=FILL_HEADER)
             for rel_col, val in enumerate(data_vals):
                 c = data_col_start + 1 + rel_col
                 try:
