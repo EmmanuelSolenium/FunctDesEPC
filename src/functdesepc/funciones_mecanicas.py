@@ -4050,24 +4050,13 @@ def conductor_eovanos(eolovanos, mensajero, fase, col_name='Conductor'):
 
 
 
-
 def exportar_calculos(ruta_template, ruta_salida, mec, ret, eovanos, carac_postes, van_reg):
-    """
-    Exporta todos los dataframes al archivo Excel de cálculos mecánicos,
-    preservando los encabezados y formato existente en cada hoja.
-
-    Parámetros
-    ----------
-    ruta_template : str  - Ruta al archivo .xlsx base (con encabezados ya formateados)
-    ruta_salida   : str  - Ruta donde se guarda el archivo resultante
-    mec           : pd.DataFrame
-    ret           : pd.DataFrame
-    eovanos       : pd.DataFrame
-    carac_postes  : pd.DataFrame
-    van_reg       : pd.DataFrame
-    """
     import pandas as pd
     from openpyxl import load_workbook
+    from openpyxl.styles import Border, Side
+
+    thick = Side(style='thick')
+    border = Border(left=thick, right=thick, top=thick, bottom=thick)
 
     def _clean(value):
         try:
@@ -4089,18 +4078,18 @@ def exportar_calculos(ruta_template, ruta_salida, mec, ret, eovanos, carac_poste
 
     for sheet_name, df, start_row in config:
         ws = wb[sheet_name]
-
-        # Limpiar filas de datos existentes (desde start_row hacia abajo)
         ws.delete_rows(start_row, ws.max_row - start_row + 1)
 
-        # Escribir encabezado de columnas en start_row
+        # Encabezado
         for col_idx, col_name in enumerate(df.columns, start=1):
-            ws.cell(row=start_row, column=col_idx, value=col_name)
+            cell = ws.cell(row=start_row, column=col_idx, value=col_name)
+            cell.border = border
 
-        # Escribir filas de datos desde start_row + 1
+        # Datos
         for row_idx, row in enumerate(df.itertuples(index=False), start=start_row + 1):
             for col_idx, value in enumerate(row, start=1):
-                ws.cell(row=row_idx, column=col_idx, value=_clean(value))
+                cell = ws.cell(row=row_idx, column=col_idx, value=_clean(value))
+                cell.border = border
 
     wb.save(ruta_salida)
     print(f"Archivo guardado en: {ruta_salida}")
