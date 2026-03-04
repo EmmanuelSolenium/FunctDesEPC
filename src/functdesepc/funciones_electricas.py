@@ -256,5 +256,39 @@ def Bandeja_Calc(
 print(e) """
 
 
+def calcular_ue2(energizacion, resistencias, red, compensacion_paralelo):
+    """
+    4 entradas booleanas → 2⁴ = 16 combinaciones posibles.
+    Cada valor de retorno lo defines tú manualmente.
+    """
+    energizacion = False if energizacion == "recierre trifásico" else True
+    resistencias = False if resistencias == "no" else True
+    red = True if red == "compleja" else False
+    compensacion_paralelo = False if compensacion_paralelo == "no" else True
+    
+    tabla = {
+        # (a,     b,     c,     d   ): valor_retorno
+        (False, False, False, False): 3.6,   # 0000
+        (False, False, False, True ): 3.5,   # 0001
+        (False, False, True,  False): 1.9,   # 0010
+        (False, False, True,  True ): 2.5,   # 0011
+        (False, True,  False, False): 2.1,   # 0100
+        (False, True,  False, True ): 2.2,   # 0101
+        (False, True,  True,  False): 1.7,   # 0110
+        (False, True,  True,  True ): 2,   # 0111
+        (True,  False, False, False): 2.9,   # 1000
+        (True,  False, False, True ): 2.8,   # 1001
+        (True,  False, True,  False): 2.7,  # 1010
+        (True,  False, True,  True ): 2.2,  # 1011
+        (True,  True,  False, False): 2.3,  # 1100
+        (True,  True,  False, True ): 1.9,  # 1101
+        (True,  True,  True,  False): 2,  # 1110
+        (True,  True,  True,  True ): 1.2,  # 1111
+    }
+    return tabla[(energizacion, resistencias, red, compensacion_paralelo)]
+
+# Ejemplo de uso
+resultado = calcular_ue2(True, False, True, False)
+print(resultado)  # → "valor_10"
 
 
