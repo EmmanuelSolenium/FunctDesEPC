@@ -174,7 +174,7 @@ def identificar_poste(codigo: str, detallado: bool = False):
         elif d1 == 7:
             armado_general = "Autosoportado (2 circuitos)"
         else:
-            return np.nan
+            armado_general = "Armado normal"
 
         # Fases
         if d2 == 3:
