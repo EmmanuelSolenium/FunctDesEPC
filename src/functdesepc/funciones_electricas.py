@@ -256,6 +256,28 @@ def Bandeja_Calc(
 print(e) """
 
 
+def up2_ue2(tipo_recierre: str, ue2: float) -> float:
+    """
+    Retorna el valor de Up2/Ue2 correspondiente al Ue2 más cercano al ingresado.
+
+    Parámetros:
+        tipo_recierre : "recierre trifásico" → usa tabla 3-phase; cualquier otro → usa tabla reenergización.
+        ue2           : valor numérico de Ue2 a buscar.
+    """
+    import os
+    _root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "data")
+    _cols = ["Ue2", "Up2/Ue2"]
+    up2_3phase = pd.read_csv(os.path.join(_root, "3_phase_reenergization.csv"), sep=";", decimal=",", header=None, names=_cols)
+    up2_reener = pd.read_csv(os.path.join(_root, "reenergization.csv"),          sep=";", decimal=",", header=None, names=_cols)
+
+    tabla = up2_3phase if tipo_recierre == "recierre trifásico" else up2_reener
+
+    idx_cercano = (tabla["Ue2"] - ue2).abs().idxmin()
+    return tabla.loc[idx_cercano, "Up2/Ue2"]
+
+print(up2_ue2("recierre trifásico",1.9))
+
+
 def calcular_ue2(energizacion, resistencias, red, compensacion_paralelo):
     """
     4 entradas booleanas → 2⁴ = 16 combinaciones posibles.
@@ -287,8 +309,8 @@ def calcular_ue2(energizacion, resistencias, red, compensacion_paralelo):
     }
     return tabla[(energizacion, resistencias, red, compensacion_paralelo)]
 
-# Ejemplo de uso
+""" # Ejemplo de uso
 resultado = calcular_ue2(True, False, True, False)
-print(resultado)  # → "valor_10"
+print(resultado)  # → "valor_10" """
 
 
