@@ -2,7 +2,7 @@ import pandas as pd
 import os
 
 # Ruta base: carpeta "data" en el mismo repositorio donde se ejecuta el codigo
-base_dir = os.path.dirname(os.path.abspath(__file__))  # Directorio del script actual
+base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # Raíz del repositorio
 data_dir = os.path.join(base_dir, "data")
 
 # Rutas de los archivos CSV
@@ -44,3 +44,46 @@ plt.legend()
 plt.grid(True)
 plt.tight_layout()
 plt.show() """
+
+
+
+def kcd_b(x):
+    """
+    Factor kcd_b vectorizado con NumPy.
+    Acepta escalares o arrays de NumPy.
+    """
+    x = np.asarray(x, dtype=float)
+    m = (1.0 - 1.1) / (0.9 - 0.5)  # -0.25
+    
+    return np.where(
+        x < 0.5,
+        1.1,
+        np.where(
+            x <= 0.9,
+            1.1 + m * (x - 0.5),
+            1.0
+        )
+    )
+
+
+
+
+def kcd_a(x):
+    """
+    Factor kcd_a vectorizado con NumPy.
+    Acepta escalares o arrays de NumPy.
+    """
+    x = np.asarray(x, dtype=float)
+    m = (1.0 - 1.1) / (1.18 - 0.7)  # ≈ -0.2083
+    
+    return np.where(
+        x < 0.7,
+        1.1,
+        np.where(
+            x <= 1.18,
+            1.1 + m * (x - 0.7),
+            1.0
+        )
+    )
+
+print(kcd_a(1.1))

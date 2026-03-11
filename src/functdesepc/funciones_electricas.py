@@ -275,7 +275,7 @@ def up2_ue2(tipo_recierre: str, ue2: float) -> float:
     idx_cercano = (tabla["Ue2"] - ue2).abs().idxmin()
     return tabla.loc[idx_cercano, "Up2/Ue2"]
 
-print(up2_ue2("recierre trifásico",1.9))
+#print(up2_ue2("recierre trifásico",1.9))
 
 
 def calcular_ue2(energizacion, resistencias, red, compensacion_paralelo):
@@ -314,3 +314,44 @@ resultado = calcular_ue2(True, False, True, False)
 print(resultado)  # → "valor_10" """
 
 
+
+def calcular_kcd_b(x):
+    """
+    Factor kcd_b vectorizado con NumPy.
+    Acepta escalares o arrays de NumPy.
+    """
+    x = np.asarray(x, dtype=float)
+    m = (1.0 - 1.1) / (0.9 - 0.5)  # -0.25
+    
+    return np.where(
+        x < 0.5,
+        1.1,
+        np.where(
+            x <= 0.9,
+            1.1 + m * (x - 0.5),
+            1.0
+        )
+    )
+
+
+
+
+def calcular_kcd_a(x):
+    """
+    Factor kcd_a vectorizado con NumPy.
+    Acepta escalares o arrays de NumPy.
+    """
+    x = np.asarray(x, dtype=float)
+    m = (1.0 - 1.1) / (1.18 - 0.7)  # ≈ -0.2083
+    
+    return np.where(
+        x < 0.7,
+        1.1,
+        np.where(
+            x <= 1.18,
+            1.1 + m * (x - 0.7),
+            1.0
+        )
+    )
+
+#print(kcd_a(1.1))
