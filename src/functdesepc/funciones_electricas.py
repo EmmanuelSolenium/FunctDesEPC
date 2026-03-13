@@ -355,3 +355,36 @@ def calcular_kcd_a(x):
     )
 
 #print(kcd_a(1.1))
+
+def coeficiente_a(tipo_linea: str) -> int:
+    """
+    Retorna el coeficiente A según el tipo de línea eléctrica.
+
+    Parámetros
+    ----------
+    tipo_linea : str
+        Descripción del tipo de línea o configuración.
+
+    Retorna
+    -------
+    int
+        Coeficiente A correspondiente.
+    """
+
+    tabla = {
+        "crucetas aterrizadas": 900,
+        "postes de madera": 2700,
+        "conductor simple": 4500,
+        "haz doble": 7000,
+        "haz cuádruple": 11000,
+        "haz seis u ocho conductores": 17000
+    }
+
+    clave = tipo_linea.lower().strip()
+
+    if clave not in tabla:
+        raise ValueError(
+            f"Tipo de línea no reconocido. Opciones válidas: {list(tabla.keys())}"
+        )
+
+    return tabla[clave]
