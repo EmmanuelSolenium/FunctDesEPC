@@ -388,3 +388,35 @@ def coeficiente_a(tipo_linea: str) -> int:
         )
 
     return tabla[clave]
+
+def constante_Kg(sistema: str) -> float:
+    """
+    Retorna la constante Kg según el tipo de sistema eléctrico.
+
+    Parámetros
+    ----------
+    sistema : str
+        Descripción del sistema eléctrico.
+
+    Retorna
+    -------
+    float
+        Constante Kg correspondiente.
+    """
+
+    tabla = {
+        "tres cables alta resistencia a tierra": 1.73,
+        "sistema en delta": 1.73,
+        "cuatro cables baja resistencia multiple puesta a tierra": 1.25,
+        "cuatro cables alta resistencia multiple puesta a tierra": 1.35,
+        "tres cables baja resistencia a tierra extremos": 1.40
+    }
+
+    clave = sistema.lower().strip()
+
+    if clave not in tabla:
+        raise ValueError(
+            f"Sistema no reconocido. Opciones válidas: {list(tabla.keys())}"
+        )
+
+    return tabla[clave]
