@@ -3724,8 +3724,21 @@ def tab_fle_canton_v2(
         Para cada cantón con k postes válidos → k-1 vanos,
         tomados en orden secuencial del pool global de vanos.
         """
-        vanos_ids = sorted(cols_dict.keys(),
-                            key=lambda x: int(str(x).replace("S", "")))
+        def normalizar_vano_id(x):
+            if pd.isna(x):
+                return -1  # o manejar como quieras
+
+            x_str = str(x).replace("S", "")
+
+            try:
+                return int(float(x_str))  # <-- clave: soporta "1.0"
+            except:
+                return -1  # fallback seguro
+
+        vanos_ids = sorted(
+            cols_dict.keys(),
+            key=lambda x: normalizar_vano_id(x)
+        )
 
         # Agrupar postes válidos por cantón, conservando orden de aparición
         canton_postes = {}
