@@ -3480,7 +3480,8 @@ def limpiar_flechado(tablas_flechado: pd.DataFrame) -> pd.DataFrame:
     col_vano = "N° Vano"
 
     es_string = df[col_tipo].apply(lambda x: isinstance(x, str))
-    es_sec = es_string & df[col_tipo].str.contains("Secundari", case=False, na=False)
+    es_sec = es_string & df[col_tipo].astype(str).str.contains("Secundari", case=False, na=False)
+
 
     # -------------------------
     # PASADA 1 — PRIMARIOS
