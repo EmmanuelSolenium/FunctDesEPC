@@ -1,5 +1,6 @@
 import pandas as pd
 import re
+import io
 
 def cargar_diccionario(archivo, project_filter=None):
     """
@@ -99,21 +100,29 @@ def descargar_excel_drive(file_id, drive_service):
 import os
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseDownload
 
-SCOPES_DRIVE = ['https://www.googleapis.com/auth/drive']
 
+SCOPES = [
+    'https://www.googleapis.com/auth/documents',
+    'https://www.googleapis.com/auth/drive',
+    'https://www.googleapis.com/auth/spreadsheets'
+]
 
-def autenticar_drive(ruta_credenciales):
+def autenticar_servicio(ruta_credenciales):
     """
-    Autentica contra Google Drive usando service account.
+    Autenticación unificada para Google Docs, Drive y Sheets.
     """
     creds = service_account.Credentials.from_service_account_file(
         ruta_credenciales,
-        scopes=SCOPES_DRIVE
+        scopes=SCOPES
     )
 
-    return build('drive', 'v3', credentials=creds)
+    docs_service = build('docs', 'v1', credentials=creds)
+    drive_service = build('drive', 'v3', credentials=creds)
+    sheets_service = build('sheets', 'v4', credentials=creds)
 
+    return docs_service, drive_service, sheets_service
 
 def listar_archivos_drive(drive_service, page_size=10):
     """

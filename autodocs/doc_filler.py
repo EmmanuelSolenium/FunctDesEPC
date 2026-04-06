@@ -3,6 +3,7 @@
 # ==============================
 import sys
 import os
+import io
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
@@ -33,7 +34,7 @@ def main():
         print("✅ Autenticación exitosa")
 
         # 3. ID del archivo en Drive (Diccionario Template.xlsx)
-        file_id = "1y288YViS1i4vMJYr_ObFcAgNY0Y4Ig48"
+        file_id = "1t9utg6qjm4KG9tQec6DzwoR0SYuUy53o"
 
         # 4. Descargar archivo desde Drive
         archivo_excel = funciones_docs.descargar_excel_drive(file_id, drive_service)
@@ -42,11 +43,14 @@ def main():
         # 5. Convertir a diccionario
         diccionario = funciones_docs.cargar_diccionario(archivo_excel)
         print("✅ Diccionario cargado correctamente")
+        print(diccionario)
+
+
 
         # 6. Mostrar resultado
-        print("\n--- DICCIONARIO ---")
-        for k, v in diccionario.items():
-            print(f"{k}: {v}")
+        #print("\n--- DICCIONARIO ---")
+        #for k, v in diccionario.items():
+            #print(f"{k}: {v}")
 
     except Exception as e:
         print("❌ ERROR:")
@@ -58,3 +62,5 @@ def main():
 # ==============================
 if __name__ == "__main__":
     main()
+
+
