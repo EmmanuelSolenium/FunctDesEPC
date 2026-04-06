@@ -1,71 +1,60 @@
+# ==============================
+# AJUSTE DE PATH (para imports)
+# ==============================
 import sys
 import os
 
-# Ruta absoluta del archivo actual (doc_filler.py)
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-
-# Ruta raíz del proyecto (sube un nivel desde /autodocs)
 PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
 
-# Añadir al PYTHONPATH dinámicamente
 if PROJECT_ROOT not in sys.path:
     sys.path.append(PROJECT_ROOT)
 
-# Ahora este import SIEMPRE funciona
-from autodocs.funciones_docs import *
-
 # ==============================
-# LIBRERÍAS GOOGLE (Drive, Docs, Sheets)
+# IMPORTAR FUNCIONES
 # ==============================
-from google.oauth2 import service_account
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload
-
-# Opcional (si usarás autenticación interactiva en lugar de service account)
-from google_auth_oauthlib.flow import InstalledAppFlow
-from google.auth.transport.requests import Request
-import os
-import pickle
-
-# ==============================
-# MANEJO DE DATOS (JSON, CSV, EXCEL)
-# ==============================
-import json
-import csv
-import pandas as pd
-
-# ==============================
-# MANEJO DE ARCHIVOS Y UTILIDADES
-# ==============================
-import io
-import base64
-from datetime import datetime
+from autodocs import funciones_docs
 
 
 # ==============================
-# CONFIGURACIÓN DE SCOPES (permisos API)
+# MAIN
 # ==============================
-SCOPES = [
-    'https://www.googleapis.com/auth/documents',   # Google Docs
-    'https://www.googleapis.com/auth/drive',       # Google Drive
-    'https://www.googleapis.com/auth/spreadsheets' # Google Sheets
-]
+def main():
+    try:
+        # 1. Obtener ruta de credenciales desde variable de entorno
+        ruta_credenciales = funciones_docs.obtener_ruta_credenciales()
+        print("Usando credenciales en:", ruta_credenciales)
+
+        # 2. Autenticación
+        docs_service, drive_service, sheets_service = funciones_docs.autenticar_servicio(
+            ruta_credenciales
+        )
+
+        print("✅ Autenticación exitosa")
+
+        # 3. ID del archivo en Drive (Diccionario Template.xlsx)
+        file_id = "1y288YViS1i4vMJYr_ObFcAgNY0Y4Ig48"
+
+        # 4. Descargar archivo desde Drive
+        archivo_excel = funciones_docs.descargar_excel_drive(file_id, drive_service)
+        print("✅ Archivo descargado desde Drive")
+
+        # 5. Convertir a diccionario
+        diccionario = funciones_docs.cargar_diccionario(archivo_excel)
+        print("✅ Diccionario cargado correctamente")
+
+        # 6. Mostrar resultado
+        print("\n--- DICCIONARIO ---")
+        for k, v in diccionario.items():
+            print(f"{k}: {v}")
+
+    except Exception as e:
+        print("❌ ERROR:")
+        print(e)
+
 
 # ==============================
-# AUTENTICACIÓN (SERVICE ACCOUNT)
+# ENTRY POINT
 # ==============================
-def autenticar_servicio(ruta_credenciales: str):
-    """
-    Autenticación usando Service Account.
-    Retorna servicios de Google Docs, Drive y Sheets.
-    """
-    creds = service_account.Credentials.from_service_account_file(
-        ruta_credenciales,
-        scopes=SCOPES
-    )
-
-    docs_service = build('docs', 'v1', credentials=creds)
-    drive_service = build('drive', 'v3', credentials=creds)
-    sheets_service = build('sheets', 'v4', credentials=creds)
-
-    return docs_service, drive_service, sheets_service
+if __name__ == "__main__":
+    main()

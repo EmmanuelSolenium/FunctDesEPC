@@ -92,3 +92,54 @@ def descargar_excel_drive(file_id, drive_service):
 
     fh.seek(0)
     return fh
+
+# ==============================
+# GOOGLE AUTH + DRIVE
+# ==============================
+import os
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+
+SCOPES_DRIVE = ['https://www.googleapis.com/auth/drive']
+
+
+def autenticar_drive(ruta_credenciales):
+    """
+    Autentica contra Google Drive usando service account.
+    """
+    creds = service_account.Credentials.from_service_account_file(
+        ruta_credenciales,
+        scopes=SCOPES_DRIVE
+    )
+
+    return build('drive', 'v3', credentials=creds)
+
+
+def listar_archivos_drive(drive_service, page_size=10):
+    """
+    Lista archivos visibles por la service account.
+    """
+    results = drive_service.files().list(
+        pageSize=page_size,
+        fields="files(id, name)"
+    ).execute()
+
+    return results.get('files', [])
+
+
+# ==============================
+# UTILIDADES
+# ==============================
+def obtener_ruta_credenciales():
+    """
+    Obtiene la ruta del JSON desde variable de entorno.
+    """
+    ruta = os.getenv("GOOGLE_CREDS")
+
+    if not ruta:
+        raise Exception("Debes definir la variable de entorno GOOGLE_CREDS")
+
+    if not os.path.exists(ruta):
+        raise FileNotFoundError(f"No existe el archivo: {ruta}")
+
+    return ruta
