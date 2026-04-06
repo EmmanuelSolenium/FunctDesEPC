@@ -1,12 +1,22 @@
 import pandas as pd
 import re
 
-def cargar_diccionario(ruta_archivo, project_filter=None):
-    # Leer archivo (soporta csv o excel)
-    if ruta_archivo.endswith(".csv"):
-        df = pd.read_csv(ruta_archivo)
+def cargar_diccionario(archivo, project_filter=None):
+    """
+    archivo puede ser:
+    - ruta local (str)
+    - archivo en memoria (BytesIO desde Drive)
+    """
+
+    # Detectar tipo de entrada
+    if isinstance(archivo, str):
+        if archivo.endswith(".csv"):
+            df = pd.read_csv(archivo)
+        else:
+            df = pd.read_excel(archivo)
     else:
-        df = pd.read_excel(ruta_archivo)
+        # archivo en memoria (Drive)
+        df = pd.read_excel(archivo)
 
     # Usar la primera fila como header real
     df.columns = df.iloc[0]
@@ -31,19 +41,13 @@ def cargar_diccionario(ruta_archivo, project_filter=None):
         tipo = str(row.get("type", "text")).lower()
         alias = str(row.get("alias", "")).strip()
 
-        # limpiar {{ }}
         key = limpiar_placeholder(placeholder)
-
-        # conversión de tipos
         value = convertir_tipo(value, tipo)
 
-        # prioridad: alias > placeholder
         final_key = alias if alias else key
-
         data[final_key] = value
 
     return data
-
 
 def limpiar_placeholder(texto):
     """
@@ -69,3 +73,22 @@ def convertir_tipo(valor, tipo):
         return str(valor)
 
     return valor
+
+
+
+def descargar_excel_drive(file_id, drive_service):
+    """
+    Descarga un archivo de Google Drive usando su file_id
+    y lo carga en memoria como BytesIO.
+    """
+    request = drive_service.files().get_media(fileId=file_id)
+
+    fh = io.BytesIO()
+    downloader = MediaIoBaseDownload(fh, request)
+
+    done = False
+    while not done:
+        status, done = downloader.next_chunk()
+
+    fh.seek(0)
+    return fh
