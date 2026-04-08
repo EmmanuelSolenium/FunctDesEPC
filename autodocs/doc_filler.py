@@ -22,14 +22,8 @@ from autodocs import funciones_docs
 # ==============================
 def main():
     try:
-        # 1. Obtener ruta de credenciales desde variable de entorno
-        ruta_credenciales = funciones_docs.obtener_ruta_credenciales()
-        print("Usando credenciales en:", ruta_credenciales)
-
-        # 2. Autenticación
-        docs_service, drive_service, sheets_service = funciones_docs.autenticar_servicio(
-            ruta_credenciales
-        )
+        # 1. Autenticación OAuth2 (lee GOOGLE_OAUTH_CLIENT desde variables de entorno)
+        docs_service, drive_service, sheets_service = funciones_docs.autenticar_oauth()
 
         print("✅ Autenticación exitosa")
 
@@ -42,8 +36,8 @@ def main():
 
         # 5. Convertir a diccionario
         diccionario = funciones_docs.cargar_diccionario(archivo_excel)
-        print("✅ Diccionario cargado correctamente")
-        print(diccionario)
+        #print("✅ Diccionario cargado correctamente")
+        #print(diccionario) 
 
 
 
