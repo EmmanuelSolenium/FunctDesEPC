@@ -4062,3 +4062,100 @@ def conductor_eovanos(eolovanos, mensajero, fase, col_name='Conductor'):
     ]
     return eolovanos
 
+def resumen_cantones_s(
+    reg_van,
+    postes,
+    cantones,
+    col1="Cantón",
+    col2="Poste Inicial",
+    col3="Poste Final",
+):
+    """
+    Versión de resumen_cantones para cantones secundarios.
+
+    La diferencia respecto a resumen_cantones es que cantones_s puede contener
+    np.nan en los postes que no tienen conductor secundario (caso 1.c de
+    clasificar_cantones_secundarios). Estos valores NaN se filtran antes de
+    construir el DataFrame, evitando el IndexError que ocurre cuando
+    `df["canton"] == NaN` nunca da True y la lista de índices queda vacía.
+
+    Agrega / reemplaza en reg_van las columnas:
+    - Cantón
+    - Poste Inicial
+    - Poste Final
+
+    Cada fila representa un cantón secundario.
+    """
+
+    # ------------------------------------------------------------
+    # Expandir relación poste–cantón, filtrando NaN
+    # ------------------------------------------------------------
+    def es_nan(v):
+        try:
+            return isinstance(v, float) and np.isnan(v)
+        except (TypeError, ValueError):
+            return False
+
+    registros = []
+
+    for idx, c in cantones.items():
+        if isinstance(c, list):
+            for ci in c:
+                if not es_nan(ci):
+                    registros.append((ci, idx))
+        else:
+            if es_nan(c):          # poste sin conductor secundario → ignorar
+                continue
+            registros.append((c, idx))
+
+    # Si no quedaron cantones secundarios válidos, devolver reg_van sin cambios
+    if not registros:
+        return reg_van
+
+    df = pd.DataFrame(registros, columns=["canton", "idx"]).sort_values("idx")
+
+    # ------------------------------------------------------------
+    # Cantones únicos en orden de exportación
+    # ------------------------------------------------------------
+    cantones_ordenados = []
+    for c in df["canton"]:
+        if c not in cantones_ordenados:
+            cantones_ordenados.append(c)
+
+    # ------------------------------------------------------------
+    # Poste inicial y final por cantón
+    # ------------------------------------------------------------
+    cant_out = []
+    poste_ini = []
+    poste_fin = []
+
+    for c in cantones_ordenados:
+        idxs = df.loc[df["canton"] == c, "idx"].tolist()
+        if not idxs:               # salvaguarda extra (no debería ocurrir)
+            continue
+        cant_out.append(c)
+        poste_ini.append(postes.loc[idxs[0]])
+        poste_fin.append(postes.loc[idxs[-1]])
+
+    n = len(cant_out)
+
+    # ------------------------------------------------------------
+    # Ajustar tamaño de reg_van
+    # ------------------------------------------------------------
+    if len(reg_van) > n:
+        reg_van = reg_van.iloc[:n].copy()
+    elif len(reg_van) < n:
+        filas_extra = n - len(reg_van)
+        reg_van = pd.concat(
+            [reg_van, pd.DataFrame(np.nan, index=range(filas_extra), columns=reg_van.columns)],
+            ignore_index=True
+        )
+
+    # ------------------------------------------------------------
+    # Asignar columnas (sin borrar las demás)
+    # ------------------------------------------------------------
+    reg_van[col1] = cant_out
+    reg_van[col2] = poste_ini
+    reg_van[col3] = poste_fin
+
+    return reg_van
