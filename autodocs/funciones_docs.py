@@ -239,6 +239,359 @@ def reemplazar_textos(doc_id, diccionario, docs_service):
 
 
 # ==============================
+# CONDICIONALES EN GOOGLE DOCS
+# ==============================
+
+def procesar_condicionales(doc_id, diccionario, docs_service):
+    """
+    Procesa bloques condicionales {% if variable %}...{% endif %} en un Google Doc.
+
+    - Si la variable es True  → elimina solo las etiquetas, conserva el contenido
+    - Si la variable es False → elimina el bloque completo incluyendo etiquetas
+    - Soporta {% else %} opcional
+    - Opera de atrás hacia adelante para no desplazar índices
+
+    Args:
+        doc_id       (str):  ID del documento de Google Docs.
+        diccionario  (dict): Diccionario unificado generado por cargar_diccionario().
+        docs_service:        Servicio autenticado de Google Docs API.
+
+    Returns:
+        dict: {"procesados": [...], "omitidos": [...]}
+    """
+    import re
+
+    # -------------------------------------------------------
+    # 1. Obtener el documento y reconstruir texto plano
+    #    con mapa de índices reales de la Docs API
+    # -------------------------------------------------------
+    documento = docs_service.documents().get(documentId=doc_id).execute()
+    contenido = documento.get("body", {}).get("content", [])
+
+    texto_plano, mapa_indices = _extraer_texto_con_indices(contenido)
+
+    # -------------------------------------------------------
+    # 2. Encontrar todos los bloques {% if %}...{% endif %}
+    # -------------------------------------------------------
+    patron = re.compile(
+        r"\{%-?\s*if\s+(\w+)\s*-?%\}"  # {% if variable %}
+        r"(.*?)"                         # contenido interno
+        r"\{%-?\s*endif\s*-?%\}",       # {% endif %}
+        re.DOTALL
+    )
+
+    bloques = list(patron.finditer(texto_plano))
+
+    if not bloques:
+        print("ℹ️  No se encontraron bloques condicionales en el documento.")
+        return {"procesados": [], "omitidos": []}
+
+    procesados        = []
+    omitidos          = []
+    rangos_a_eliminar = []  # lista de (start_doc, end_doc) en índices de Docs API
+
+    for bloque in bloques:
+        nombre_variable  = bloque.group(1).strip()
+        contenido_bloque = bloque.group(2)
+
+        # Buscar la variable en el diccionario
+        entrada = diccionario.get(nombre_variable)
+        if entrada is None:
+            omitidos.append({
+                "variable": nombre_variable,
+                "razon":    "variable no encontrada en el diccionario"
+            })
+            continue
+
+        valor        = entrada.get("value")
+        es_verdadero = _evaluar_booleano(valor)
+
+        # Posiciones en el texto plano
+        inicio_bloque = bloque.start()    # inicio de {% if %}
+        fin_bloque    = bloque.end()      # fin de {% endif %}
+        fin_if        = bloque.start(2)   # fin de la etiqueta {% if variable %}
+        inicio_endif  = bloque.end(2)     # inicio de {% endif %}
+
+        # Detectar si hay {% else %}
+        patron_else = re.compile(r"\{%-?\s*else\s*-?%\}")
+        match_else  = patron_else.search(contenido_bloque)
+
+        if match_else:
+            inicio_else_abs = bloque.start(2) + match_else.start()
+            fin_else_abs    = bloque.start(2) + match_else.end()
+
+            if es_verdadero:
+                # Conservar rama if → eliminar etiqueta {% if %} y desde {% else %} hasta fin
+                rangos_a_eliminar.append((_idx(inicio_bloque, mapa_indices), _idx(fin_if, mapa_indices)))
+                rangos_a_eliminar.append((_idx(inicio_else_abs, mapa_indices), _idx(fin_bloque, mapa_indices)))
+            else:
+                # Conservar rama else → eliminar desde {% if %} hasta fin de {% else %}, y {% endif %}
+                rangos_a_eliminar.append((_idx(inicio_bloque, mapa_indices), _idx(fin_else_abs, mapa_indices)))
+                rangos_a_eliminar.append((_idx(inicio_endif, mapa_indices), _idx(fin_bloque, mapa_indices)))
+
+        else:
+            if es_verdadero:
+                # Conservar contenido → eliminar solo las dos etiquetas
+                rangos_a_eliminar.append((_idx(inicio_bloque, mapa_indices), _idx(fin_if, mapa_indices)))
+                rangos_a_eliminar.append((_idx(inicio_endif, mapa_indices), _idx(fin_bloque, mapa_indices)))
+            else:
+                # Eliminar bloque completo
+                rangos_a_eliminar.append((_idx(inicio_bloque, mapa_indices), _idx(fin_bloque, mapa_indices)))
+
+        procesados.append({
+            "variable":     nombre_variable,
+            "valor":        valor,
+            "es_verdadero": es_verdadero,
+            "tiene_else":   match_else is not None
+        })
+
+    # -------------------------------------------------------
+    # 3. Ejecutar eliminaciones de atrás hacia adelante
+    # -------------------------------------------------------
+    if rangos_a_eliminar:
+        rangos_validos = sorted(
+            [(s, e) for s, e in rangos_a_eliminar if s is not None and e is not None and s < e],
+            key=lambda r: r[0],
+            reverse=True
+        )
+
+        requests = [
+            {"deleteContentRange": {"range": {"startIndex": s, "endIndex": e}}}
+            for s, e in rangos_validos
+        ]
+
+        if requests:
+            docs_service.documents().batchUpdate(
+                documentId=doc_id,
+                body={"requests": requests}
+            ).execute()
+
+    # -------------------------------------------------------
+    # 4. Log de resultados
+    # -------------------------------------------------------
+    print(f"✅ Condicionales procesadas: {len(procesados)}")
+    for p in procesados:
+        icono    = "✔" if p["es_verdadero"] else "✘"
+        else_str = " (con else)" if p["tiene_else"] else ""
+        print(f"   {icono} {{% if {p['variable']} %}} → {p['valor']}{else_str}")
+
+    if omitidos:
+        print(f"⚠️  Omitidos: {len(omitidos)}")
+        for o in omitidos:
+            print(f"   {o['variable']}: {o['razon']}")
+
+    return {"procesados": procesados, "omitidos": omitidos}
+
+
+# ==============================
+# HELPERS INTERNOS
+# ==============================
+
+def _extraer_texto_con_indices(contenido):
+    """
+    Recorre el body del documento y construye:
+    - texto_plano  (str):  todo el texto concatenado
+    - mapa_indices (list): posición N en texto_plano → índice real en Docs API
+    """
+    texto_plano  = ""
+    mapa_indices = []
+
+    def recorrer(elementos):
+        nonlocal texto_plano, mapa_indices
+        for elemento in elementos:
+            if "paragraph" in elemento:
+                for run in elemento["paragraph"].get("elements", []):
+                    contenido_run = run.get("textRun", {}).get("content", "")
+                    start_index   = run.get("startIndex", 0)
+                    for i, char in enumerate(contenido_run):
+                        mapa_indices.append(start_index + i)
+                        texto_plano += char
+            elif "table" in elemento:
+                for fila in elemento["table"].get("tableRows", []):
+                    for celda in fila.get("tableCells", []):
+                        recorrer(celda.get("content", []))
+
+    recorrer(contenido)
+    return texto_plano, mapa_indices
+
+
+def _idx(pos, mapa_indices):
+    """Convierte posición en texto plano a índice real de Docs API."""
+    if pos < 0 or pos >= len(mapa_indices):
+        return None
+    return mapa_indices[pos]
+
+
+def _evaluar_booleano(valor):
+    """Convierte el valor de la variable condicional a booleano."""
+    if valor is None:
+        return False
+    if isinstance(valor, bool):
+        return valor
+    return str(valor).strip().lower() in ("true", "1", "si", "yes", "sí")
+
+
+# ==============================
+# IMÁGENES EN GOOGLE DOCS
+# ==============================
+
+def reemplazar_imagenes(doc_id, diccionario, docs_service, drive_service):
+    """
+    Reemplaza placeholders de tipo 'image' en un Google Doc.
+
+    Flujo por cada imagen:
+        1. Hace el archivo de Drive temporalmente público
+        2. Localiza el placeholder en el documento y obtiene su índice
+        3. Borra el texto del placeholder
+        4. Inserta la imagen en esa posición usando la URL pública
+        5. Revoca el acceso público inmediatamente
+
+    Opera de atrás hacia adelante para no desplazar índices.
+
+    Args:
+        doc_id        (str):  ID del documento de Google Docs.
+        diccionario   (dict): Diccionario unificado generado por cargar_diccionario().
+        docs_service:         Servicio autenticado de Google Docs API.
+        drive_service:        Servicio autenticado de Google Drive API.
+
+    Returns:
+        dict: {"reemplazados": [...], "omitidos": [...]}
+    """
+    reemplazados = []
+    omitidos     = []
+
+    # Filtrar solo entradas de tipo image
+    entradas_imagen = [
+        (alias, entrada)
+        for alias, entrada in diccionario.items()
+        if entrada.get("type") == "image"
+    ]
+
+    if not entradas_imagen:
+        print("ℹ️  No se encontraron entradas de tipo 'image' para reemplazar.")
+        return {"reemplazados": [], "omitidos": omitidos}
+
+    for alias, entrada in entradas_imagen:
+        placeholder = entrada.get("placeholder", "").strip()
+        valor       = entrada["value"]
+        raw_file_id = valor.get("file_id")
+        if not raw_file_id:
+            omitidos.append({"alias": alias, "razon": "file_id vacío o no definido"})
+            continue
+        file_id = extraer_id_gdoc(raw_file_id)
+        width_pt    = valor.get("width_pt",  DEFAULT_IMAGE_WIDTH_PT)
+        height_pt   = valor.get("height_pt", DEFAULT_IMAGE_HEIGHT_PT)
+
+        if not placeholder:
+            omitidos.append({"alias": alias, "razon": "placeholder vacío"})
+            continue
+
+        permission_id = None
+
+        try:
+            # -------------------------------------------------
+            # 1. Hacer el archivo público temporalmente
+            # -------------------------------------------------
+            permiso = drive_service.permissions().create(
+                fileId=file_id,
+                body={"type": "anyone", "role": "reader"},
+                fields="id"
+            ).execute()
+            permission_id = permiso.get("id")
+
+            url_publica = f"https://drive.google.com/uc?export=download&id={file_id}"
+
+            # -------------------------------------------------
+            # 2. Leer el documento y localizar el placeholder
+            # -------------------------------------------------
+            documento = docs_service.documents().get(documentId=doc_id).execute()
+            contenido = documento.get("body", {}).get("content", [])
+            texto_plano, mapa_indices = _extraer_texto_con_indices(contenido)
+
+            pos = texto_plano.find(placeholder)
+            if pos == -1:
+                omitidos.append({"alias": alias, "razon": "placeholder no encontrado en el documento"})
+                continue
+
+            # Índices reales en la Docs API
+            start_idx = _idx(pos, mapa_indices)
+            end_idx   = _idx(pos + len(placeholder), mapa_indices)
+
+            if start_idx is None or end_idx is None:
+                omitidos.append({"alias": alias, "razon": "no se pudo mapear el índice del placeholder"})
+                continue
+
+            # -------------------------------------------------
+            # 3. Borrar el placeholder e insertar la imagen
+            #    en un solo batchUpdate
+            # -------------------------------------------------
+            docs_service.documents().batchUpdate(
+                documentId=doc_id,
+                body={"requests": [
+                    # Primero borrar el texto del placeholder
+                    {
+                        "deleteContentRange": {
+                            "range": {
+                                "startIndex": start_idx,
+                                "endIndex":   end_idx
+                            }
+                        }
+                    },
+                    # Luego insertar la imagen en la misma posición
+                    {
+                        "insertInlineImage": {
+                            "location":  {"index": start_idx},
+                            "uri":       url_publica,
+                            "objectSize": {
+                                "width":  {"magnitude": width_pt,  "unit": "PT"},
+                                "height": {"magnitude": height_pt, "unit": "PT"}
+                            }
+                        }
+                    }
+                ]}
+            ).execute()
+
+            reemplazados.append({
+                "alias":       alias,
+                "placeholder": placeholder,
+                "file_id":     file_id,
+                "width_pt":    width_pt,
+                "height_pt":   height_pt
+            })
+
+        except Exception as e:
+            omitidos.append({
+                "alias": alias,
+                "razon": f"error al procesar: {str(e)}"
+            })
+
+        finally:
+            # -------------------------------------------------
+            # 4. Revocar permiso público siempre, incluso si hubo error
+            # -------------------------------------------------
+            if permission_id:
+                try:
+                    drive_service.permissions().delete(
+                        fileId=file_id,
+                        permissionId=permission_id
+                    ).execute()
+                except Exception:
+                    pass  # Si falla la revocación no interrumpimos el flujo
+
+    # Log de resultados
+    print(f"✅ Imágenes reemplazadas: {len(reemplazados)}")
+    for r in reemplazados:
+        print(f"   {r['placeholder']} → {r['file_id']} ({r['width_pt']}x{r['height_pt']} pt)")
+
+    if omitidos:
+        print(f"⚠️  Omitidos: {len(omitidos)}")
+        for o in omitidos:
+            print(f"   {o['alias']}: {o['razon']}")
+
+    return {"reemplazados": reemplazados, "omitidos": omitidos}
+
+
+# ==============================
 # GOOGLE AUTH
 # ==============================
 import os
