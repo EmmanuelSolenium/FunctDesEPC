@@ -135,37 +135,31 @@ def identificar_poste(codigo: str, detallado: bool = False):
     """
     Identifica el tipo de poste según el código de armado de AFINIA.
 
+    Extrae el patrón MTF?###-# del texto recibido, ignorando cualquier
+    prefijo, sufijo o texto adicional (ej: "MT332-1 (PROY)", " MT334-1").
+
     Si detallado=False → retorna solo las siglas del tipo de poste: FL, AL, ANG, ANC.
     Si detallado=True  → retorna un diccionario con información completa.
-    Si el código no es válido → retorna np.nan
+    Si no se encuentra el patrón → retorna np.nan
     """
+    import re
 
     try:
-        # --- Validación básica ---
-        if not isinstance(codigo, str) or "-" not in codigo:
+        if not isinstance(codigo, str):
             return np.nan
 
-        parte_armado, parte_tension = codigo.split("-")
-
-        # Letras y números
-        letras = ''.join(c for c in parte_armado if c.isalpha())
-        numeros = ''.join(c for c in parte_armado if c.isdigit())
-
-        if len(numeros) != 3 or len(letras) < 2:
+        # Extraer patrón MTF?###-# donde F es opcional
+        match = re.search(r'MT(F?)(\d{3})-(\d)', codigo, re.IGNORECASE)
+        if not match:
             return np.nan
 
-        # --- Interpretación de letras ---
-        nivel_tension = letras[:2]
-        if nivel_tension == "BT":
-            nivel = "Baja Tensión"
-        elif nivel_tension == "MT":
-            nivel = "Media Tensión"
-        else:
-            return np.nan  # nivel no reconocido
+        tiene_f   = match.group(1).upper() == "F"
+        numeros   = match.group(2)
+        tension_d = match.group(3)
 
-        tipo_cable = "Forrado" if (len(letras) == 3 and letras[2] == "F") else "Desnudo"
+        tipo_cable = "Forrado" if tiene_f else "Desnudo"
+        nivel      = "Media Tensión"
 
-        # --- Interpretación de dígitos ---
         d1, d2, d3 = map(int, numeros)
 
         # Armado general
@@ -187,44 +181,44 @@ def identificar_poste(codigo: str, detallado: bool = False):
         # Tipo de poste
         if d3 == 1:
             sigla_poste = "FL"
-            tipo_poste = "Fin de Línea"
+            tipo_poste  = "Fin de Línea"
         elif d3 == 2:
             sigla_poste = "AL"
-            tipo_poste = "Alineación"
+            tipo_poste  = "Alineación"
         elif d3 == 3:
             sigla_poste = "ANG"
-            tipo_poste = "Ángulo"
+            tipo_poste  = "Ángulo"
         elif d3 in (4, 5):
             sigla_poste = "ANC"
-            tipo_poste = "Anclaje"
+            tipo_poste  = "Anclaje"
         else:
             return np.nan
 
         # Tensión del circuito
-        if parte_tension == "1":
+        if tension_d == "1":
             tension = "13.2 kV"
-        elif parte_tension == "2":
+        elif tension_d == "2":
             tension = "34.5 kV"
         else:
             return np.nan
 
-        # --- Salida ---
         if not detallado:
             return sigla_poste
 
         return {
-            "Código": codigo,
-            "Sigla": sigla_poste,
-            "Tipo de Poste": tipo_poste,
+            "Código":         match.group(0),
+            "Sigla":          sigla_poste,
+            "Tipo de Poste":  tipo_poste,
             "Nivel de Tensión": nivel,
-            "Tipo de Cable": tipo_cable,
+            "Tipo de Cable":  tipo_cable,
             "Armado General": armado_general,
-            "Fases": fases,
-            "Tensión del Circuito": tension
+            "Fases":          fases,
+            "Tensión":        tension,
         }
 
     except Exception:
         return np.nan
+
 
 
 def calcular_cantones(armados, rutas, postes, vanos_adelante, detallado=False):
