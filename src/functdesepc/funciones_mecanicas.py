@@ -4331,3 +4331,183 @@ def min_canton_s(
     van_reg[col] = serie_min.values
 
     return van_reg
+
+def longitud_canton_s(
+    reg_van,
+    cantones,
+    longitudes,
+    col="Longitud Total del cantón"
+):
+    """
+    Versión de longitud_canton para cantones secundarios.
+    Filtra NaN en cantones antes de procesar.
+    """
+
+    def es_nan(v):
+        try:
+            return isinstance(v, float) and np.isnan(v)
+        except (TypeError, ValueError):
+            return False
+
+    # ------------------------------------------------------------
+    # Expandir relación poste – cantón, filtrando NaN
+    # ------------------------------------------------------------
+    registros = []
+
+    for idx, c in cantones.items():
+        if isinstance(c, list):
+            for ci in c:
+                if not es_nan(ci):
+                    registros.append((ci, idx))
+        else:
+            if es_nan(c):
+                continue
+            registros.append((c, idx))
+
+    if not registros:
+        return reg_van
+
+    df = pd.DataFrame(registros, columns=["canton", "idx"]).sort_values("idx")
+
+    # ------------------------------------------------------------
+    # Cantones únicos en orden de aparición
+    # ------------------------------------------------------------
+    cantones_ordenados = []
+    for c in df["canton"]:
+        if c not in cantones_ordenados:
+            cantones_ordenados.append(c)
+
+    # ------------------------------------------------------------
+    # Calcular longitud total por cantón (hasta n-1)
+    # ------------------------------------------------------------
+    valores = []
+
+    for c in cantones_ordenados:
+        idxs = df.loc[df["canton"] == c, "idx"].tolist()
+
+        if len(idxs) <= 1:
+            valores.append(0)
+        else:
+            valores.append(longitudes.loc[idxs[:-1]].sum())
+
+    serie_longitud = pd.Series(valores, name=col)
+
+    # ------------------------------------------------------------
+    # Ajustar tamaño del dataframe
+    # ------------------------------------------------------------
+    n_df = len(reg_van)
+    n_col = len(serie_longitud)
+
+    if n_df > n_col:
+        reg_van = reg_van.iloc[:n_col].copy()
+    elif n_df < n_col:
+        filas_extra = pd.DataFrame(
+            np.nan,
+            index=range(n_df, n_col),
+            columns=reg_van.columns
+        )
+        reg_van = pd.concat([reg_van, filas_extra], ignore_index=True)
+
+    reg_van[col] = serie_longitud.values
+
+    return reg_van
+
+
+def agregar_vano_regulacion_s(
+    van_reg,
+    cantones,
+    vanos,
+    desniveles=None,
+    usar_k_truxa=True,
+    col="Vano de Regulación"
+):
+    """
+    Versión de agregar_vano_regulacion para cantones secundarios.
+    Filtra NaN en cantones antes de procesar.
+    """
+
+    def es_nan(v):
+        try:
+            return isinstance(v, float) and np.isnan(v)
+        except (TypeError, ValueError):
+            return False
+
+    # ------------------------------------------------------------
+    # Expandir relación poste – cantón, filtrando NaN
+    # ------------------------------------------------------------
+    registros = []
+
+    for idx, c in cantones.items():
+        if isinstance(c, list):
+            for ci in c:
+                if not es_nan(ci):
+                    registros.append((ci, idx))
+        else:
+            if es_nan(c):
+                continue
+            registros.append((c, idx))
+
+    if not registros:
+        return van_reg
+
+    df = pd.DataFrame(registros, columns=["canton", "idx"]).sort_values("idx")
+
+    # ------------------------------------------------------------
+    # Cantones únicos en orden de aparición
+    # ------------------------------------------------------------
+    cantones_ordenados = []
+    for c in df["canton"]:
+        if c not in cantones_ordenados:
+            cantones_ordenados.append(c)
+
+    # ------------------------------------------------------------
+    # Calcular vano de regulación por cantón
+    # ------------------------------------------------------------
+    valores = []
+
+    for c in cantones_ordenados:
+        idxs = df.loc[df["canton"] == c, "idx"].tolist()
+
+        if len(idxs) <= 1:
+            valores.append(np.nan)
+            continue
+
+        idxs_validos = idxs[:-1]
+
+        a = vanos.loc[idxs_validos].values
+
+        if desniveles is None:
+            b = None
+        else:
+            b = desniveles.loc[idxs_validos].values
+
+        ar = vano_regulacion(
+            vanos_m=a,
+            desniveles_m=b,
+            usar_k_truxa=usar_k_truxa
+        )
+
+        valores.append(ar)
+
+    serie_vr = pd.Series(valores, name=col)
+
+    # ------------------------------------------------------------
+    # Ajustar tamaño del dataframe
+    # ------------------------------------------------------------
+    n_df = len(van_reg)
+    n_col = len(serie_vr)
+
+    if n_df > n_col:
+        van_reg = van_reg.iloc[:n_col].copy()
+    elif n_df < n_col:
+        filas_extra = pd.DataFrame(
+            np.nan,
+            index=range(n_df, n_col),
+            columns=van_reg.columns
+        )
+        van_reg = pd.concat([van_reg, filas_extra], ignore_index=True)
+
+    van_reg[col] = serie_vr.values
+
+    return van_reg
+
