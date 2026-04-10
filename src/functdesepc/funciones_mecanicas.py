@@ -4511,3 +4511,79 @@ def agregar_vano_regulacion_s(
 
     return van_reg
 
+
+
+
+import utm as utm_lib
+
+def agregar_coordenadas(
+    carac_postes: pd.DataFrame,
+    postes_orden: pd.Series,
+    postes_export: pd.Series,
+    zona_banda: pd.Series,
+    x: pd.Series,
+    y: pd.Series
+) -> pd.DataFrame:
+    """
+    Convierte coordenadas UTM a geográficas (WGS84) y las agrega a carac_postes,
+    respetando el orden de postes únicos definido en postes_orden.
+
+    Parámetros:
+        carac_postes:  DataFrame destino (un poste por fila, ordenado y sin repeticiones).
+        postes_orden:  Serie con los nombres de poste únicos y ordenados
+                       (ej: carac_postes["Numero de apoyo"] o mec["Numero de apoyo"]).
+        postes_export: Serie con los nombres de poste tal como vienen del archivo de entrada
+                       (puede tener repeticiones y estar desordenada).
+        zona_banda:    Serie con la zona UTM (ej: "18P"), alineada con postes_export.
+        x:             Serie con coordenadas Este en UTM, alineada con postes_export.
+        y:             Serie con coordenadas Norte en UTM, alineada con postes_export.
+
+    Retorna:
+        DataFrame carac_postes con columnas 'X' e 'Y' añadidas.
+    """
+
+    def utm_a_geo(zb, xe, yn):
+        try:
+            if pd.isna(zb) or pd.isna(xe) or pd.isna(yn):
+                return None, None
+            zb = str(zb).strip()
+            numero_zona = int(''.join(filter(str.isdigit, zb)))
+            letra_banda = ''.join(filter(str.isalpha, zb)).upper()
+            hemisferio_norte = letra_banda >= 'N' if letra_banda else True
+            lat, lon = utm_lib.to_latlon(
+                float(xe), float(yn),
+                numero_zona,
+                northern=hemisferio_norte
+            )
+            return round(lon, 6), round(lat, 6)
+        except Exception:
+            return None, None
+
+    # Construir tabla auxiliar alineada con postes_export (resetear índices)
+    df_export = pd.DataFrame({
+        "poste":      postes_export.reset_index(drop=True).values,
+        "zona_banda": zona_banda.reset_index(drop=True).values,
+        "x":          x.reset_index(drop=True).values,
+        "y":          y.reset_index(drop=True).values,
+    })
+
+    # Quedarse con la primera aparición de cada poste (eliminar repeticiones)
+    df_unicos = df_export.drop_duplicates(subset="poste", keep="first")
+
+    # Mapa poste → (lon, lat)
+    mapa_coords = {}
+    for _, fila in df_unicos.iterrows():
+        lon, lat = utm_a_geo(fila["zona_banda"], fila["x"], fila["y"])
+        mapa_coords[fila["poste"]] = (lon, lat)
+
+    # Asignar coordenadas en el orden definido por postes_orden
+    lons, lats = [], []
+    for poste in postes_orden.values:
+        lon, lat = mapa_coords.get(poste, (None, None))
+        lons.append(lon)
+        lats.append(lat)
+
+    carac_postes["X"] = lons
+    carac_postes["Y"] = lats
+
+    return carac_postes
