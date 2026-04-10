@@ -4159,3 +4159,181 @@ def resumen_cantones_s(
     reg_van[col3] = poste_fin
 
     return reg_van
+
+
+def max_canton_s(
+    van_reg,
+    cantones,
+    lista,
+    col
+):
+    """
+    Versión de max_canton para cantones secundarios.
+    Filtra valores NaN en cantones antes de procesar,
+    evitando el TypeError al ordenar str con float.
+    """
+
+    def es_nan(v):
+        try:
+            return isinstance(v, float) and np.isnan(v)
+        except (TypeError, ValueError):
+            return False
+
+    # ------------------------------------------------------------
+    # Expandir relación poste–cantón, filtrando NaN
+    # ------------------------------------------------------------
+    pares = []
+
+    for idx, c in cantones.items():
+        if isinstance(c, list):
+            for ci in c:
+                if not es_nan(ci):
+                    pares.append((ci, idx))
+        else:
+            if es_nan(c):
+                continue
+            pares.append((c, idx))
+
+    if not pares:
+        return van_reg
+
+    df = pd.DataFrame(pares, columns=["canton", "idx"])
+
+    # ------------------------------------------------------------
+    # Calcular máximo por cantón (regla n-1)
+    # ------------------------------------------------------------
+    resultados = []
+
+    cantones_ordenados = sorted(df["canton"].unique())
+
+    for canton in cantones_ordenados:
+
+        idxs = df[df["canton"] == canton]["idx"].tolist()
+
+        if len(idxs) < 2:
+            resultados.append(np.nan)
+            continue
+
+        idxs_validos = idxs[:-1]
+
+        valores = lista.loc[idxs_validos].dropna()
+
+        if valores.empty:
+            resultados.append(np.nan)
+        else:
+            resultados.append(valores.max())
+
+    # ------------------------------------------------------------
+    # Ajustar tamaño del DataFrame
+    # ------------------------------------------------------------
+    n_out = len(resultados)
+    n_df = len(van_reg)
+
+    if n_df < n_out:
+        filas_extra = n_out - n_df
+        df_extra = pd.DataFrame(
+            np.nan,
+            index=range(filas_extra),
+            columns=van_reg.columns
+        )
+        van_reg = pd.concat([van_reg, df_extra], ignore_index=True)
+    elif n_df > n_out:
+        van_reg = van_reg.iloc[:n_out].copy()
+
+    # ------------------------------------------------------------
+    # Asignar columna de salida
+    # ------------------------------------------------------------
+    van_reg[col] = resultados
+
+    return van_reg
+
+
+def min_canton_s(
+    van_reg,
+    cantones,
+    lista,
+    col
+):
+    """
+    Versión de min_canton para cantones secundarios.
+    Filtra valores NaN en cantones antes de procesar,
+    evitando errores al comparar str con float.
+    """
+
+    def es_nan(v):
+        try:
+            return isinstance(v, float) and np.isnan(v)
+        except (TypeError, ValueError):
+            return False
+
+    # ------------------------------------------------------------
+    # Expandir relación poste–cantón, filtrando NaN
+    # ------------------------------------------------------------
+    registros = []
+
+    for idx, c in cantones.items():
+        if isinstance(c, list):
+            for ci in c:
+                if not es_nan(ci):
+                    registros.append((ci, idx))
+        else:
+            if es_nan(c):
+                continue
+            registros.append((c, idx))
+
+    if not registros:
+        return van_reg
+
+    df = pd.DataFrame(registros, columns=["canton", "idx"]).sort_values("idx")
+
+    # ------------------------------------------------------------
+    # Cantones únicos en orden de aparición
+    # ------------------------------------------------------------
+    cantones_ordenados = []
+    for c in df["canton"]:
+        if c not in cantones_ordenados:
+            cantones_ordenados.append(c)
+
+    # ------------------------------------------------------------
+    # Calcular mínimos por cantón (regla n-1 + exclusión de ceros)
+    # ------------------------------------------------------------
+    valores = []
+
+    for c in cantones_ordenados:
+        idxs = df.loc[df["canton"] == c, "idx"].tolist()
+
+        if len(idxs) <= 1:
+            valores.append(np.nan)
+            continue
+
+        idxs_validos = idxs[:-1]
+        datos = lista.loc[idxs_validos].astype(float)
+
+        datos_no_cero = datos[datos != 0]
+
+        if datos_no_cero.empty:
+            valores.append(np.nan)
+        else:
+            valores.append(datos_no_cero.min())
+
+    serie_min = pd.Series(valores, name=col)
+
+    # ------------------------------------------------------------
+    # Ajustar tamaño del dataframe
+    # ------------------------------------------------------------
+    n_df = len(van_reg)
+    n_col = len(serie_min)
+
+    if n_df > n_col:
+        van_reg = van_reg.iloc[:n_col].copy()
+    elif n_df < n_col:
+        filas_extra = pd.DataFrame(
+            np.nan,
+            index=range(n_df, n_col),
+            columns=van_reg.columns
+        )
+        van_reg = pd.concat([van_reg, filas_extra], ignore_index=True)
+
+    van_reg[col] = serie_min.values
+
+    return van_reg
