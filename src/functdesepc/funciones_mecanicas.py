@@ -4729,7 +4729,63 @@ def agregar_cantones(
     return carac_postes
 
 
+def numero_perforaciones(
+    carac_postes,
+    postes_orden,
+    postes_export,
+    armado_primario_export,
+    armado_secundario_export,
+    nombre_columna="Número de Perforaciones"
+):
+    """
+    Calcula el número de perforaciones por poste sumando las del armado primario y secundario.
 
+    Regla (tercer dígito del código MT(F)###-#):
+        - 5 → 2 perforaciones
+        - cualquier otro → 1 perforación
+        - sin armado (NaN o inválido) → 0 perforaciones
+
+    Ejemplo: MT335-2 → 1 perf. + MT131-1 → 1 perf. = 2... 
+             MT335-2 → 1 + MT335-1 → 1 = 2
+             MT335-2 (3er dig=5→2) + MT131-1 (3er dig=1→1) = 3
+
+    Parámetros:
+        carac_postes:            DataFrame destino (un poste por fila, ordenado y sin repeticiones).
+        postes_orden:            Serie con los nombres de poste únicos y ordenados.
+        postes_export:           Serie con los nombres de poste del archivo de entrada.
+        armado_primario_export:  Serie con códigos de armado primario, alineada con postes_export.
+        armado_secundario_export:Serie con códigos de armado secundario, alineada con postes_export.
+        nombre_columna:          Nombre de la columna que se añadirá a carac_postes.
+
+    Retorna:
+        DataFrame carac_postes con la columna de perforaciones añadida.
+    """
+
+    def perforaciones_armado(codigo):
+        try:
+            if not isinstance(codigo, str) or str(codigo).strip() in ("", "-", "0"):
+                return 0
+            match = re.search(r'MT(F?)(\d{3})-(\d)', codigo, re.IGNORECASE)
+            if not match:
+                return 0
+            tercer_digito = int(match.group(2)[2])
+            return 2 if tercer_digito == 5 else 1
+        except Exception:
+            return 0
+
+    postes_exp  = postes_export.reset_index(drop=True).values
+    armado_prim = armado_primario_export.reset_index(drop=True).values
+    armado_sec  = armado_secundario_export.reset_index(drop=True).values
+
+    # Mapa poste → total perforaciones (primera ocurrencia)
+    mapa = {}
+    for i, poste in enumerate(postes_exp):
+        if poste not in mapa:
+            mapa[poste] = perforaciones_armado(armado_prim[i]) + perforaciones_armado(armado_sec[i])
+
+    carac_postes[nombre_columna] = [mapa.get(p, np.nan) for p in postes_orden.values]
+
+    return carac_postes
 
 
 
