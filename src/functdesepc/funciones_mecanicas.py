@@ -4815,3 +4815,37 @@ def numero_reconectadores(
     ]
 
     return carac_postes
+
+def agregar_coordenada_z(
+    carac_postes,
+    postes_orden,
+    postes_export,
+    desnivel_export,
+    nombre_columna="Z"
+):
+    """
+    Agrega a carac_postes la coordenada Z tomada directamente del desnivel por poste.
+
+    Parámetros:
+        carac_postes:    DataFrame destino (un poste por fila, ordenado y sin repeticiones).
+        postes_orden:    Serie con los nombres de poste únicos y ordenados.
+        postes_export:   Serie con los nombres de poste del archivo de entrada.
+        desnivel_export: Serie con los valores de desnivel, alineada con postes_export.
+        nombre_columna:  Nombre de la columna que se añadirá a carac_postes.
+
+    Retorna:
+        DataFrame carac_postes con la columna Z añadida.
+    """
+
+    postes_exp  = postes_export.reset_index(drop=True).values
+    desnivel_r  = desnivel_export.reset_index(drop=True).values
+
+    # Mapa poste → desnivel (primera ocurrencia)
+    mapa = {}
+    for i, poste in enumerate(postes_exp):
+        if poste not in mapa:
+            mapa[poste] = desnivel_r[i]
+
+    carac_postes[nombre_columna] = [mapa.get(p, np.nan) for p in postes_orden.values]
+
+    return carac_postes
