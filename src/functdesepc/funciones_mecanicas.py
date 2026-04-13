@@ -4684,3 +4684,52 @@ def numero_fases(carac_postes, postes_orden, postes_export, armado_export, nombr
     carac_postes[nombre_columna] = [mapa.get(p, np.nan) for p in postes_orden.values]
 
     return carac_postes
+
+
+def agregar_cantones(
+    carac_postes,
+    postes_orden,
+    postes_export,
+    cantones,
+    cantones_s,
+    col_canton="Cantón",
+    col_canton_s="Cantón Secundario"
+):
+    """
+    Agrega a carac_postes las columnas de cantón principal y secundario por poste.
+
+    Parámetros:
+        carac_postes:  DataFrame destino (un poste por fila, ordenado y sin repeticiones).
+        postes_orden:  Serie con los nombres de poste únicos y ordenados.
+        postes_export: Serie con los nombres de poste del archivo de entrada (con repeticiones y desorden).
+        cantones:      Serie resultado de clasificar_cantones(), alineada con postes_export.
+        cantones_s:    Serie resultado de clasificar_cantones_secundarios(), alineada con postes_export.
+        col_canton:    Nombre de la columna de cantón principal en carac_postes.
+        col_canton_s:  Nombre de la columna de cantón secundario en carac_postes.
+
+    Retorna:
+        DataFrame carac_postes con las columnas de cantón añadidas.
+    """
+
+    postes_exp = postes_export.reset_index(drop=True).values
+    cantones_r = cantones.reset_index(drop=True).values
+    cantones_s_r = cantones_s.reset_index(drop=True).values
+
+    # Mapa poste → cantón principal y secundario (primera ocurrencia)
+    mapa_c  = {}
+    mapa_cs = {}
+    for i, poste in enumerate(postes_exp):
+        if poste not in mapa_c:
+            mapa_c[poste]  = cantones_r[i]
+            mapa_cs[poste] = cantones_s_r[i]
+
+    carac_postes[col_canton]   = [mapa_c.get(p,  np.nan) for p in postes_orden.values]
+    carac_postes[col_canton_s] = [mapa_cs.get(p, np.nan) for p in postes_orden.values]
+
+    return carac_postes
+
+
+
+
+
+
