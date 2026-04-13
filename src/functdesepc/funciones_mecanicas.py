@@ -4788,4 +4788,30 @@ def numero_perforaciones(
     return carac_postes
 
 
+def numero_reconectadores(
+    carac_postes,
+    postes_orden,
+    postes_reco,
+    nombre_columna="Número de Reconectadores"
+):
+    """
+    Agrega a carac_postes la cantidad de reconectadores por poste.
 
+    Parámetros:
+        carac_postes:  DataFrame destino (un poste por fila, ordenado y sin repeticiones).
+        postes_orden:  Serie con los nombres de poste únicos y ordenados.
+        postes_reco:   Serie o lista con los nombres de los postes que tienen reconectador.
+        nombre_columna:Nombre de la columna que se añadirá a carac_postes.
+
+    Retorna:
+        DataFrame carac_postes con la columna de reconectadores añadida.
+    """
+
+    conjunto_reco = set(postes_reco)
+
+    carac_postes[nombre_columna] = [
+        1 if p in conjunto_reco else None
+        for p in postes_orden.values
+    ]
+
+    return carac_postes
