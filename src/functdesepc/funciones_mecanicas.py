@@ -4849,3 +4849,110 @@ def agregar_coordenada_z(
     carac_postes[nombre_columna] = [mapa.get(p, np.nan) for p in postes_orden.values]
 
     return carac_postes
+
+
+
+
+def agregar_origen(
+    carac_postes,
+    postes_orden,
+    postes_export,
+    x_export,
+    y_export,
+    vano_adelante_export,
+    nombre_columna="Origen"
+):
+    """
+    Determina el origen cardinal de cada poste según la dirección de la línea
+    que lo conecta con el poste anterior en el orden de exportación.
+
+    Lógica:
+        - Si existe un poste anterior con vano > 0, se traza la línea entre ambos
+          y se calcula el ángulo mínimo respecto a los 4 semiejes (N, S, E, O).
+        - Si no existe poste anterior (primer poste de una ruta), se toma el
+          origen del poste siguiente.
+
+    Parámetros:
+        carac_postes:        DataFrame destino (un poste por fila, ordenado y sin repeticiones).
+        postes_orden:        Serie con los nombres de poste únicos y ordenados.
+        postes_export:       Serie con los nombres de poste del archivo de entrada.
+        x_export:            Serie con coordenadas Este UTM, alineada con postes_export.
+        y_export:            Serie con coordenadas Norte UTM, alineada con postes_export.
+        vano_adelante_export:Serie con el vano adelante de cada poste, alineada con postes_export.
+        nombre_columna:      Nombre de la columna que se añadirá a carac_postes.
+
+    Retorna:
+        DataFrame carac_postes con la columna de origen añadida.
+    """
+
+    SEMIEJES = {
+        "E": 0,          # eje X positivo
+        "N": 90,         # eje Y positivo
+        "O": 180,        # eje X negativo
+        "S": 270,        # eje Y negativo
+    }
+
+    def angulo_minimo_cardinal(dx, dy):
+        """
+        Calcula el cardinal cuyo semieje forma el menor ángulo con el vector (dx, dy).
+        Considera tanto el ángulo normal como el negativo (sentido horario).
+        """
+        angulo_vec = math.degrees(math.atan2(dy, dx)) % 360
+
+        min_ang = None
+        cardinal = None
+
+        for c, ref in SEMIEJES.items():
+            # Ángulo normal (antihorario)
+            diff_normal = abs((angulo_vec - ref + 180) % 360 - 180)
+            # Ángulo negativo (horario)
+            diff_horario = abs((ref - angulo_vec + 180) % 360 - 180)
+            # Mínimo entre ambos
+            diff = min(diff_normal, diff_horario)
+
+            if min_ang is None or diff < min_ang:
+                min_ang = diff
+                cardinal = c
+
+        return cardinal
+
+    # Resetear índices para alineación posicional
+    postes_exp  = postes_export.reset_index(drop=True)
+    x_exp       = x_export.reset_index(drop=True)
+    y_exp       = y_export.reset_index(drop=True)
+    vano_exp    = vano_adelante_export.reset_index(drop=True)
+
+    n = len(postes_exp)
+
+    # Calcular origen en orden de exportación
+    origen_export = [None] * n
+
+    for i in range(n):
+        # Buscar poste anterior con vano válido hacia el actual
+        if i > 0 and not pd.isna(vano_exp.iloc[i - 1]) and vano_exp.iloc[i - 1] != 0:
+            dx = x_exp.iloc[i] - x_exp.iloc[i - 1]
+            dy = y_exp.iloc[i] - y_exp.iloc[i - 1]
+            origen_export[i] = angulo_minimo_cardinal(dx, dy)
+        else:
+            origen_export[i] = None  # sin poste anterior válido, se resuelve después
+
+    # Resolver postes sin origen anterior: tomar el origen del siguiente
+    for i in range(n - 1, -1, -1):
+        if origen_export[i] is None:
+            # Buscar hacia adelante el primer origen disponible
+            for j in range(i + 1, n):
+                if origen_export[j] is not None:
+                    origen_export[i] = origen_export[j]
+                    break
+
+    # Mapa poste → origen (primera ocurrencia)
+    mapa = {}
+    for i, poste in enumerate(postes_exp.values):
+        if poste not in mapa:
+            mapa[poste] = origen_export[i]
+
+    carac_postes[nombre_columna] = [mapa.get(p, np.nan) for p in postes_orden.values]
+
+    return carac_postes
+
+    
