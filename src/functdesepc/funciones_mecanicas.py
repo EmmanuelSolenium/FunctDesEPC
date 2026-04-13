@@ -4956,3 +4956,10 @@ def agregar_origen(
     return carac_postes
 
     
+
+def formatear_float(v):
+    try:
+        f = float(v)
+        return f"{f:.10g}"
+    except:
+        return v
