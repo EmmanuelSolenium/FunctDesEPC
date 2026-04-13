@@ -4641,3 +4641,46 @@ def tipo_armado(carac_postes, postes_orden, postes_export, armado_export, nombre
     carac_postes[nombre_columna] = [mapa.get(p, np.nan) for p in postes_orden.values]
 
     return carac_postes
+
+
+def numero_fases(carac_postes, postes_orden, postes_export, armado_export, nombre_columna="Número de Fases"):
+    """
+    Determina el número de fases por poste según el segundo dígito numérico del código de armado.
+
+    Código MT(F)###-#: el segundo dígito indica el número de fases.
+    Ejemplo: MTF631-1 → 3 fases.
+
+    Parámetros:
+        carac_postes:   DataFrame destino (un poste por fila, ordenado y sin repeticiones).
+        postes_orden:   Serie con los nombres de poste únicos y ordenados.
+        postes_export:  Serie con los nombres de poste del archivo de entrada (con repeticiones y desorden).
+        armado_export:  Serie con los códigos de armado, alineada con postes_export.
+        nombre_columna: Nombre de la columna que se añadirá a carac_postes.
+
+    Retorna:
+        DataFrame carac_postes con la columna de número de fases añadida.
+    """
+
+    def extraer_fases(codigo):
+        try:
+            if not isinstance(codigo, str):
+                return np.nan
+            match = re.search(r'MT(F?)(\d{3})-(\d)', codigo, re.IGNORECASE)
+            if not match:
+                return np.nan
+            return int(match.group(2)[1])
+        except Exception:
+            return np.nan
+
+    postes_exp = postes_export.reset_index(drop=True).values
+    armado_exp = armado_export.reset_index(drop=True).values
+
+    # Mapa poste → número de fases (primera ocurrencia)
+    mapa = {}
+    for i, poste in enumerate(postes_exp):
+        if poste not in mapa:
+            mapa[poste] = extraer_fases(armado_exp[i])
+
+    carac_postes[nombre_columna] = [mapa.get(p, np.nan) for p in postes_orden.values]
+
+    return carac_postes
