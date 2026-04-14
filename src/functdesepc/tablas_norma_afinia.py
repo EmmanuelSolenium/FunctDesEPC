@@ -654,3 +654,16 @@ c_ret_1_2_90 = expandir_rangos_carga_multiindex(c_ret_1_2_90)
 
 """ 
 print(c_ret_3_8_90.columns,c_ret_1_2_90.columns,c_retenida_1_2.columns,c_retenida_3_8.columns) """
+
+
+
+ancla = pd.DataFrame(
+    {
+        ("3/8\"", "Suelo Normal"): {"H (m)": 1.88, "a (m)": 0.40, "b (m)": 0.25, "c (m)": 0.30, "Carga máxima (daN)": 8975, "Refuerzo (parrilla)": '3/8"@10cm'},
+        ("3/8\"", "Suelo Flojo"):  {"H (m)": 1.94, "a (m)": 0.65, "b (m)": 0.25, "c (m)": 0.30, "Carga máxima (daN)": 4770, "Refuerzo (parrilla)": '3/8"@10cm'},
+        ("1/2\"", "Suelo Normal"): {"H (m)": 1.88, "a (m)": 0.40, "b (m)": 0.25, "c (m)": 0.30, "Carga máxima (daN)": 8975, "Refuerzo (parrilla)": '3/8"@10cm'},
+        ("1/2\"", "Suelo Flojo"):  {"H (m)": 1.78, "a (m)": 1.45, "b (m)": 0.25, "c (m)": 1.50, "Carga máxima (daN)": 8160, "Refuerzo (parrilla)": '1/2"@20cm'},
+    }
+)
+
+ancla.columns = pd.MultiIndex.from_tuples(ancla.columns, names=["Diametro cable", "Tipo de suelo"])
