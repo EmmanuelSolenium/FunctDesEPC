@@ -4787,3 +4787,24 @@ def formatear_float(v):
         return f"{f:.10g}"
     except:
         return v
+
+
+
+
+
+def agregar_calibre_retenida(ret, calibre="3/8", col_referencia="Fuerza Residual Fres (daN)", nombre_columna="Calibre Retenida"):
+    """
+    Agrega a ret la columna de calibre de retenida.
+    Solo asigna el calibre a los postes que tienen retenida (celdas con valor en col_referencia).
+
+    Parámetros:
+        ret:            DataFrame de retenidas.
+        calibre:        String con el calibre (ej: "3/8", "1/2").
+        col_referencia: Columna usada para detectar postes con retenida.
+        nombre_columna: Nombre de la columna que se añadirá a ret.
+
+    Retorna:
+        DataFrame ret con la columna de calibre añadida.
+    """
+    ret[nombre_columna] = ret[col_referencia].apply(lambda v: calibre if pd.notna(v) else None)
+    return ret
