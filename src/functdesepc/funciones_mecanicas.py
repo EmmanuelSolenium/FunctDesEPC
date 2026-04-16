@@ -4811,7 +4811,7 @@ def agregar_calibre_retenida(ret, calibre="3/8", col_referencia="Fuerza Residual
 
 
 
-def agregar_tipo_retenida(ret, carac_postes, col_referencia="Fuerza Residual Fres (daN)", nombre_columna="Tipo de Retenida"):
+def agregar_tipo_retenida(ret, carac_postes, col_referencia="Fuerza Residual Fres (daN)", nombre_columna="TIPO DE RETENIDAS"):
     """
     Agrega a ret la columna con el tipo de retenida por poste.
 
@@ -4835,3 +4835,53 @@ def agregar_tipo_retenida(ret, carac_postes, col_referencia="Fuerza Residual Fre
 
     ret[nombre_columna] = [clasificar(i) for i in range(len(ret))]
     return ret
+
+
+def agregar_configuracion_retenida(
+    ret,
+    postes_orden,
+    postes_export,
+    rt001, rt002, rt003, rt004, rt005, rt006,
+    col_referencia="Fuerza Residual Fres (daN)",
+    nombre_columna="Configuración de la Retenida"
+):
+    """
+    Identifica la configuración de retenida por poste (RT001–RT006) y la agrega a ret.
+    Solo aplica a postes con retenida. Los demás quedan vacíos.
+
+    Parámetros:
+        ret:            DataFrame de retenidas.
+        postes_orden:   Serie con nombres de poste únicos y ordenados.
+        postes_export:  Serie con nombres de poste del archivo de entrada.
+        rt001..rt006:   Series con cantidad de cada tipo de retenida, alineadas con postes_export.
+        col_referencia: Columna usada para detectar postes con retenida.
+        nombre_columna: Nombre de la columna que se añadirá a ret.
+
+    Retorna:
+        DataFrame ret con la columna de configuración añadida.
+    """
+
+    rts = {"RT001": rt001, "RT002": rt002, "RT003": rt003,
+           "RT004": rt004, "RT005": rt005, "RT006": rt006}
+
+    postes_exp = postes_export.reset_index(drop=True).values
+
+    # Mapa poste → configuración (primera ocurrencia con valor > 0)
+    mapa = {}
+    for i, poste in enumerate(postes_exp):
+        if poste not in mapa:
+            for nombre, serie in rts.items():
+                val = serie.reset_index(drop=True).iloc[i]
+                if pd.notna(val) and val > 0:
+                    mapa[poste] = nombre
+                    break
+
+    ret[nombre_columna] = [
+        mapa.get(p, None) if pd.notna(ret[col_referencia].iloc[i]) else None
+        for i, p in enumerate(postes_orden.values)
+    ]
+
+    return ret
+
+
+
