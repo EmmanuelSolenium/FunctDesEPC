@@ -4941,7 +4941,70 @@ def agregar_fuerza_maxima_ancla(
 
     return ret
 
+def llenar_dimension_ancla(
+    dimension_ancla,
+    postes_orden,
+    postes_export,
+    calibre_retenida,
+    tipo_suelo,
+    tabla_ancla,
+    col_referencia="Fuerza Residual Fres (daN)",
+    ret=None
+):
+    """
+    Llena la tabla dimension_ancla con los valores de a, b, c e Y por poste
+    consultando la tabla ancla según calibre y tipo de suelo.
 
+    Parámetros:
+        dimension_ancla:  DataFrame con columnas a, b, c, Y a llenar.
+        postes_orden:     Serie con nombres de poste únicos y ordenados.
+        postes_export:    Serie con nombres de poste del archivo de entrada.
+        calibre_retenida: String ("3/8", "1/2") o pd.Series con calibre por poste.
+        tipo_suelo:       String: "normal" → Suelo Normal, "flojo" → Suelo Flojo,
+                          cualquier otro valor → asume Suelo Normal.
+        tabla_ancla:      DataFrame MultiIndex con columnas (Diametro cable, Tipo de suelo).
+        col_referencia:   Columna de ret usada para detectar postes con retenida.
+        ret:              DataFrame ret (necesario para detectar postes con retenida).
+
+    Retorna:
+        DataFrame dimension_ancla con las columnas a, b, c e Y llenas.
+    """
+
+    def obtener_valores(calibre):
+        try:
+            diametro = f'{calibre}"'
+            suelo_lower = str(tipo_suelo).strip().lower()
+            suelo = "Suelo Flojo" if suelo_lower == "flojo" else "Suelo Normal"
+            col = (diametro, suelo)
+            return {
+                "a (base Mayor)":  tabla_ancla.loc["a (m)",  col],
+                "b (altura)":      tabla_ancla.loc["b (m)",  col],
+                "c (Base menor)":  tabla_ancla.loc["c (m)",  col],
+                "Y (profundidad)": tabla_ancla.loc["H (m)",  col],
+            }
+        except Exception:
+            return {"a (base Mayor)": None, "b (altura)": None, "c (Base menor)": None, "Y (profundidad)": None}
+
+    postes_exp = postes_export.reset_index(drop=True).values
+
+    # Mapa poste → calibre (primera ocurrencia)
+    mapa_calibre = {}
+    for i, poste in enumerate(postes_exp):
+        if poste not in mapa_calibre:
+            if isinstance(calibre_retenida, pd.Series):
+                mapa_calibre[poste] = calibre_retenida.reset_index(drop=True).iloc[i]
+            else:
+                mapa_calibre[poste] = calibre_retenida
+
+    for i, poste in enumerate(postes_orden.values):
+        tiene_retenida = ret is not None and pd.notna(ret[col_referencia].iloc[i])
+        if not tiene_retenida:
+            continue
+        valores = obtener_valores(mapa_calibre.get(poste))
+        for col, val in valores.items():
+            dimension_ancla.loc[i, col] = val
+
+    return dimension_ancla
 
 
 
