@@ -4904,7 +4904,8 @@ def agregar_fuerza_maxima_ancla(
         postes_orden:     Serie con nombres de poste únicos y ordenados.
         postes_export:    Serie con nombres de poste del archivo de entrada.
         calibre_retenida: String ("3/8", "1/2") o pd.Series con calibre por poste.
-        tipo_suelo:       String ("Suelo Normal" o "Suelo Flojo").
+        tipo_suelo:       String: "normal" → Suelo Normal, "flojo" → Suelo Flojo,
+                          cualquier otro valor → asume Suelo Normal.
         tabla_ancla:      DataFrame MultiIndex con columnas (Diametro cable, Tipo de suelo).
         col_referencia:   Columna usada para detectar postes con retenida.
         nombre_columna:   Nombre de la columna que se añadirá a ret.
@@ -4916,7 +4917,9 @@ def agregar_fuerza_maxima_ancla(
     def obtener_carga(calibre):
         try:
             diametro = f'{calibre}"'
-            return tabla_ancla.loc["Carga máxima (daN)", (diametro, tipo_suelo)]
+            suelo_lower = str(tipo_suelo).strip().lower()
+            suelo = "Suelo Flojo" if suelo_lower == "flojo" else "Suelo Normal"
+            return tabla_ancla.loc["Carga máxima (daN)", (diametro, suelo)]
         except Exception:
             return np.nan
 
@@ -4937,3 +4940,8 @@ def agregar_fuerza_maxima_ancla(
     ]
 
     return ret
+
+
+
+
+
