@@ -4843,7 +4843,7 @@ def agregar_configuracion_retenida(
     postes_export,
     rt001, rt002, rt003, rt004, rt005, rt006,
     col_referencia="Fuerza Residual Fres (daN)",
-    nombre_columna="Configuración de la Retenida"
+    nombre_columna="CONFIGURACION DE LAS RETENIDAS"
 ):
     """
     Identifica la configuración de retenida por poste (RT001–RT006) y la agrega a ret.
@@ -4885,3 +4885,55 @@ def agregar_configuracion_retenida(
 
 
 
+def agregar_fuerza_maxima_ancla(
+    ret,
+    postes_orden,
+    postes_export,
+    calibre_retenida,
+    tipo_suelo,
+    tabla_ancla,
+    col_referencia="Fuerza Residual Fres (daN)",
+    nombre_columna="Fuerza maxima del Ancla (daN)"
+):
+    """
+    Agrega a ret la fuerza máxima del ancla por poste con retenida,
+    consultando la tabla ancla según calibre y tipo de suelo.
+
+    Parámetros:
+        ret:              DataFrame de retenidas.
+        postes_orden:     Serie con nombres de poste únicos y ordenados.
+        postes_export:    Serie con nombres de poste del archivo de entrada.
+        calibre_retenida: String ("3/8", "1/2") o pd.Series con calibre por poste.
+        tipo_suelo:       String ("Suelo Normal" o "Suelo Flojo").
+        tabla_ancla:      DataFrame MultiIndex con columnas (Diametro cable, Tipo de suelo).
+        col_referencia:   Columna usada para detectar postes con retenida.
+        nombre_columna:   Nombre de la columna que se añadirá a ret.
+
+    Retorna:
+        DataFrame ret con la columna de fuerza máxima del ancla añadida.
+    """
+
+    def obtener_carga(calibre):
+        try:
+            diametro = f'{calibre}"'
+            return tabla_ancla.loc["Carga máxima (daN)", (diametro, tipo_suelo)]
+        except Exception:
+            return np.nan
+
+    postes_exp = postes_export.reset_index(drop=True).values
+
+    # Mapa poste → calibre (primera ocurrencia)
+    mapa_calibre = {}
+    for i, poste in enumerate(postes_exp):
+        if poste not in mapa_calibre:
+            if isinstance(calibre_retenida, pd.Series):
+                mapa_calibre[poste] = calibre_retenida.reset_index(drop=True).iloc[i]
+            else:
+                mapa_calibre[poste] = calibre_retenida
+
+    ret[nombre_columna] = [
+        obtener_carga(mapa_calibre.get(p)) if pd.notna(ret[col_referencia].iloc[i]) else None
+        for i, p in enumerate(postes_orden.values)
+    ]
+
+    return ret
