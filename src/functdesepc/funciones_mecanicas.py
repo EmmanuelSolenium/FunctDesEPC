@@ -4809,3 +4809,29 @@ def agregar_calibre_retenida(ret, calibre="3/8", col_referencia="Fuerza Residual
     ret[nombre_columna] = ret[col_referencia].apply(lambda v: calibre if pd.notna(v) else None)
     return ret
 
+
+
+def agregar_tipo_retenida(ret, carac_postes, col_referencia="Fuerza Residual Fres (daN)", nombre_columna="Tipo de Retenida"):
+    """
+    Agrega a ret la columna con el tipo de retenida por poste.
+
+    Parámetros:
+        ret:            DataFrame de retenidas.
+        carac_postes:   DataFrame con las columnas 'Bisectora' y 'Conjunto a 90º'.
+        col_referencia: Columna usada para detectar postes con retenida.
+        nombre_columna: Nombre de la columna que se añadirá a ret.
+
+    Retorna:
+        DataFrame ret con la columna de tipo de retenida añadida.
+    """
+    def clasificar(i):
+        if pd.isna(ret[col_referencia].iloc[i]):
+            return None
+        if carac_postes["Bisectora"].iloc[i] == "X":
+            return "Bisectora"
+        elif carac_postes["Conjunto a 90º"].iloc[i] == "X":
+            return "Conjunto a 90º"
+        return None
+
+    ret[nombre_columna] = [clasificar(i) for i in range(len(ret))]
+    return ret
