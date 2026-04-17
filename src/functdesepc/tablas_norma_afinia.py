@@ -667,4 +667,3 @@ ancla = pd.DataFrame(
 )
 
 ancla.columns = pd.MultiIndex.from_tuples(ancla.columns, names=["Diametro cable", "Tipo de suelo"])
-
