@@ -28,7 +28,7 @@ from openpyxl.styles import (
     Font, Alignment, Border, Side, PatternFill, numbers
 )
 from openpyxl.utils import get_column_letter
-from IPython.display import display, HTML
+
 
 
 # ---------------------------------------------------------------------------
@@ -606,4 +606,360 @@ def exportar_todo(
 #     ruta_salida   = DATA + "calculos_mecanicos.xlsx",
 #     mec=mec, ret=ret, eovanos=eovanos, carac_postes=carac_postes, van_reg=van_reg,
 #     tab_fle=tab_fle, tablas_p=tablas_p, tab_fle_s=tab_fle_s, tablas_s=tablas_s,
+# )
+
+"""
+exportar_tablas_afinia.py
+=========================
+Función exportar_todo_afinia: similar a exportar_todo pero:
+  - Excluye los dataframes: mec, ret, carac_postes
+  - Incluye eovanos, van_reg (presentes en exportar_todo)
+  - Incluye además todos los dataframes del bloque "Tablas formato nuevo AFINIA":
+        datos_iniciales_red_mt, informacion_del_apoyo, calculo_esfuerzos_apoyo,
+        analisis_hipotesis_normales, analisis_hipotesis_anormales,
+        calculo_poste_retenidas, validacion_poste_retenidas,
+        tipo_retenidas_ancla, dimension_ancla
+  - Las hojas de flechado (cantones normales y secundarios) se mantienen igual.
+
+Uso típico:
+-----------
+    from exportar_tablas_afinia import exportar_todo_afinia
+
+    exportar_todo_afinia(
+        ruta_template = DATA + "plantilla_calculos.xlsx",
+        ruta_salida   = DATA + "calculos_mecanicos_afinia.xlsx",
+        eovanos                    = eovanos,
+        van_reg                    = van_reg,
+        tab_fle                    = tab_fle,
+        tablas_p                   = tablas_p,
+        tab_fle_s                  = tab_fle_s,
+        tablas_s                   = tablas_s,
+        datos_iniciales_red_mt     = datos_iniciales_red_mt,
+        informacion_del_apoyo      = informacion_del_apoyo,
+        calculo_esfuerzos_apoyo    = calculo_esfuerzos_apoyo,
+        analisis_hipotesis_normales  = analisis_hipotesis_normales,
+        analisis_hipotesis_anormales = analisis_hipotesis_anormales,
+        calculo_poste_retenidas    = calculo_poste_retenidas,
+        validacion_poste_retenidas = validacion_poste_retenidas,
+        tipo_retenidas_ancla       = tipo_retenidas_ancla,
+        dimension_ancla            = dimension_ancla,
+    )
+"""
+
+import pandas as pd
+from openpyxl import load_workbook
+from openpyxl.styles import (
+    Border, Side, Alignment, Font, PatternFill
+)
+from openpyxl.utils import get_column_letter
+
+
+def exportar_todo_afinia(
+    ruta_template,
+    ruta_salida,
+    # ── Hojas heredadas de exportar_todo (sin mec, ret ni carac_postes) ──
+    eovanos,
+    van_reg,
+    # ── Hojas de flechado ─────────────────────────────────────────────────
+    tab_fle,
+    tablas_p,
+    tab_fle_s,
+    tablas_s,
+    # ── Tablas formato nuevo AFINIA ───────────────────────────────────────
+    datos_iniciales_red_mt,
+    informacion_del_apoyo,
+    calculo_esfuerzos_apoyo,
+    analisis_hipotesis_normales,
+    analisis_hipotesis_anormales,
+    calculo_poste_retenidas,
+    validacion_poste_retenidas,
+    tipo_retenidas_ancla,
+    dimension_ancla,
+):
+    """
+    Exporta en un único archivo Excel:
+
+    Hojas del template (preservando encabezados originales):
+      - EOLOVANOS            ← eovanos
+      - VANOS IDEALES DE REGULACIÓN ← van_reg
+
+    Hojas nuevas AFINIA (creadas desde cero con formato estándar):
+      - Datos Iniciales Red MT
+      - Información del Apoyo
+      - Cálculo Esfuerzos Apoyo
+      - Análisis Hipótesis Normales
+      - Análisis Hipótesis Anormales
+      - Cálculo Poste Retenidas
+      - Validación Poste Retenidas
+      - Tipo Retenidas y Ancla
+      - Dimensión Ancla
+
+    Hojas de flechado (cantones normales y secundarios):
+      - Canton_1, Canton_2, ...
+      - Canton_1S, Canton_2S, ...
+
+    Parámetros
+    ----------
+    ruta_template : str   – Archivo base con las hojas EOLOVANOS, VANOS IDEALES…
+    ruta_salida   : str   – Ruta del archivo Excel resultante
+    eovanos, van_reg : pd.DataFrame
+    tab_fle, tablas_p : list[pd.DataFrame]   – Cantones normales
+    tab_fle_s, tablas_s : list[pd.DataFrame] – Cantones secundarios
+    datos_iniciales_red_mt, informacion_del_apoyo, calculo_esfuerzos_apoyo,
+    analisis_hipotesis_normales, analisis_hipotesis_anormales,
+    calculo_poste_retenidas, validacion_poste_retenidas,
+    tipo_retenidas_ancla, dimension_ancla : pd.DataFrame – Tablas formato AFINIA
+    """
+
+    # ── Estilos ──────────────────────────────────────────────────────────────
+    def _thin():
+        return Side(style="thin", color="FF000000")
+
+    def _medium_side():
+        return Side(style="medium", color="FF000000")
+
+    def _border_thin_all():
+        t = _thin()
+        return Border(left=t, right=t, top=t, bottom=t)
+
+    def _border_medium_all():
+        m = _medium_side()
+        return Border(left=m, right=m, top=m, bottom=m)
+
+    FILL_HEADER  = PatternFill("solid", fgColor="D9E1F2")   # azul claro
+    FILL_AFINIA  = PatternFill("solid", fgColor="C2D59A")   # verde AFINIA
+    FILL_DATA    = PatternFill("solid", fgColor="FFFFFF")
+    FONT_BOLD    = Font(bold=True, size=9)
+    FONT_NORMAL  = Font(bold=False, size=9)
+    ALIGN_CENTER = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    ALIGN_LEFT   = Alignment(horizontal="left",   vertical="center", wrap_text=True)
+    NUM_FMT_2DEC = '0.00'
+    NUM_FMT_4DEC = '0.0000'
+
+    medium = Side(style='medium')
+    border = Border(left=medium, right=medium, top=medium, bottom=medium)
+    wrap   = Alignment(wrap_text=True)
+
+    # Colores de encabezado para hojas del template
+    header_fills = {
+        "EOLOVANOS":                   PatternFill("solid", fgColor="FE6A0C"),
+        "VANOS IDEALES DE REGULACIÓN": PatternFill("solid", fgColor="D6E3BB"),
+    }
+    white_font_sheets = {"EOLOVANOS"}
+
+    # ── Helpers flechado ─────────────────────────────────────────────────────
+    def _write_cell(ws, row, col, value, font=None, alignment=None,
+                    border=None, fill=None, number_format=None):
+        cell = ws.cell(row=row, column=col, value=value)
+        if font:          cell.font = font
+        if alignment:     cell.alignment = alignment
+        if border:        cell.border = border
+        if fill:          cell.fill = fill
+        if number_format: cell.number_format = number_format
+        return cell
+
+    def _merge_and_write(ws, row, col_start, col_end, value,
+                         font=None, alignment=None, border=None, fill=None):
+        if col_start < col_end:
+            ws.merge_cells(start_row=row, start_column=col_start,
+                           end_row=row,   end_column=col_end)
+        _write_cell(ws, row, col_start, value, font=font,
+                    alignment=alignment, border=border, fill=fill)
+
+    def _auto_col_width(ws, min_width=8, max_width=30):
+        for col in ws.columns:
+            max_len = 0
+            col_letter = get_column_letter(col[0].column)
+            for cell in col:
+                try:
+                    if cell.value is not None:
+                        max_len = max(max_len, len(str(cell.value)))
+                except Exception:
+                    pass
+            ws.column_dimensions[col_letter].width = max(min_width, min(max_len + 2, max_width))
+
+    def _escribir_header_tabla(ws, tab_fle_df, start_row=1, start_col=1):
+        b_med  = _border_medium_all()
+        b_thin = _border_thin_all()
+        n_rows, _ = tab_fle_df.shape
+        label_col = start_col
+        data_col_start = start_col + 1
+        for rel_row, (_, row_data) in enumerate(tab_fle_df.iterrows()):
+            abs_row  = start_row + rel_row
+            row_vals = row_data.tolist()
+            label    = row_vals[0] if row_vals else ""
+            data_vals = row_vals[1:]
+            is_vano_row = str(label).strip().lower() in {
+                "vano", "longitud (m)", "poste inicial", "poste final", "desnivel"
+            }
+            b = b_med if is_vano_row else b_thin
+            if pd.notna(label) and str(label).strip():
+                _merge_and_write(ws, abs_row, label_col, label_col + 1,
+                                 value=label, font=FONT_BOLD, alignment=ALIGN_LEFT,
+                                 border=b, fill=FILL_HEADER)
+            for rel_col, val in enumerate(data_vals):
+                c = data_col_start + 1 + rel_col
+                try:
+                    es_nan = pd.isna(val)
+                except (TypeError, ValueError):
+                    es_nan = False
+                if es_nan:
+                    continue
+                num_fmt = None
+                if isinstance(val, float):
+                    num_fmt = NUM_FMT_4DEC if abs(val) < 10 else NUM_FMT_2DEC
+                _write_cell(ws, abs_row, c, val, font=FONT_NORMAL,
+                            alignment=ALIGN_CENTER, border=b,
+                            fill=FILL_DATA, number_format=num_fmt)
+        return start_row + n_rows
+
+    def _escribir_datos_tabla(ws, tablas_df, start_row=1, start_col=1):
+        b_med  = _border_medium_all()
+        b_thin = _border_thin_all()
+        for rel_col, col_name in enumerate(tablas_df.columns):
+            _write_cell(ws, start_row, start_col + rel_col, col_name,
+                        font=FONT_BOLD, alignment=ALIGN_CENTER,
+                        border=b_med, fill=FILL_HEADER)
+        data_start_row = start_row + 1
+        for rel_row, (_, row_data) in enumerate(tablas_df.iterrows()):
+            abs_row = data_start_row + rel_row
+            for rel_col, val in enumerate(row_data):
+                c = start_col + rel_col
+                try:
+                    es_nan = pd.isna(val)
+                except (TypeError, ValueError):
+                    es_nan = False
+                if es_nan:
+                    continue
+                num_fmt = NUM_FMT_4DEC if isinstance(val, float) else None
+                _write_cell(ws, abs_row, c, val, font=FONT_NORMAL,
+                            alignment=ALIGN_CENTER, border=b_thin,
+                            fill=FILL_DATA, number_format=num_fmt)
+        return data_start_row + len(tablas_df)
+
+    def _clean(value):
+        try:
+            if pd.isna(value):
+                return None
+        except (TypeError, ValueError):
+            pass
+        return value
+
+    def _escribir_df_afinia(ws, df, fill_header=None):
+        """
+        Escribe un DataFrame completo en una hoja desde la fila 1.
+        Fila 1 = encabezados con formato; filas siguientes = datos.
+        """
+        if fill_header is None:
+            fill_header = FILL_AFINIA
+
+        for col_idx, col_name in enumerate(df.columns, start=1):
+            cell = ws.cell(row=1, column=col_idx, value=col_name)
+            cell.border = border
+            cell.alignment = wrap
+            cell.font = Font(bold=True, size=9)
+            cell.fill = fill_header
+
+        for row_idx, row in enumerate(df.itertuples(index=False), start=2):
+            for col_idx, value in enumerate(row, start=1):
+                cell = ws.cell(row=row_idx, column=col_idx, value=_clean(value))
+                cell.border = border
+                cell.alignment = wrap
+                cell.font = FONT_NORMAL
+
+        _auto_col_width(ws)
+
+    # ── 1. Cargar template ────────────────────────────────────────────────────
+    wb = load_workbook(ruta_template)
+
+    # ── 2. Escribir hojas heredadas del template (EOLOVANOS y VAN_REG) ───────
+    config_template = [
+        ("EOLOVANOS",                   eovanos,  3),
+        ("VANOS IDEALES DE REGULACIÓN", van_reg,  7),
+    ]
+
+    for sheet_name, df, start_row in config_template:
+        ws = wb[sheet_name]
+        ws.delete_rows(start_row, ws.max_row - start_row + 1)
+
+        fill = header_fills.get(sheet_name)
+        for col_idx, col_name in enumerate(df.columns, start=1):
+            cell = ws.cell(row=start_row, column=col_idx, value=col_name)
+            cell.border = border
+            cell.alignment = wrap
+            font_color = "FFFFFF" if sheet_name in white_font_sheets else "000000"
+            cell.font = Font(bold=True, color=font_color)
+            if fill:
+                cell.fill = fill
+
+        for row_idx, row in enumerate(df.itertuples(index=False), start=start_row + 1):
+            for col_idx, value in enumerate(row, start=1):
+                cell = ws.cell(row=row_idx, column=col_idx, value=_clean(value))
+                cell.border = border
+                cell.alignment = wrap
+
+    # ── 3. Agregar hojas de tablas formato nuevo AFINIA ──────────────────────
+    tablas_afinia = [
+        ("Datos Iniciales Red MT",        datos_iniciales_red_mt),
+        ("Información del Apoyo",         informacion_del_apoyo),
+        ("Cálculo Esfuerzos Apoyo",       calculo_esfuerzos_apoyo),
+        ("Análisis Hip. Normales",        analisis_hipotesis_normales),
+        ("Análisis Hip. Anormales",       analisis_hipotesis_anormales),
+        ("Cálculo Poste Retenidas",       calculo_poste_retenidas),
+        ("Validación Poste Retenidas",    validacion_poste_retenidas),
+        ("Tipo Retenidas y Ancla",        tipo_retenidas_ancla),
+        ("Dimensión Ancla",               dimension_ancla),
+    ]
+
+    for sheet_name, df in tablas_afinia:
+        # Si la hoja ya existe en el template, reutilizarla; si no, crearla
+        if sheet_name in wb.sheetnames:
+            ws = wb[sheet_name]
+            ws.delete_rows(1, ws.max_row)
+        else:
+            ws = wb.create_sheet(title=sheet_name)
+        _escribir_df_afinia(ws, df)
+
+    # ── 4. Agregar hojas de flechado (cantones normales y secundarios) ────────
+    for i, (header_df, datos_df) in enumerate(zip(tab_fle, tablas_p)):
+        ws = wb.create_sheet(title=f"Canton_{i + 1}")
+        next_row = _escribir_header_tabla(ws, header_df)
+        _escribir_datos_tabla(ws, datos_df, start_row=next_row)
+        _auto_col_width(ws)
+
+    for i, (header_df, datos_df) in enumerate(zip(tab_fle_s, tablas_s)):
+        ws = wb.create_sheet(title=f"Canton_{i + 1}S")
+        next_row = _escribir_header_tabla(ws, header_df)
+        _escribir_datos_tabla(ws, datos_df, start_row=next_row)
+        _auto_col_width(ws)
+
+    wb.save(ruta_salida)
+    print(
+        f"✅ Archivo guardado: {ruta_salida}\n"
+        f"   • Hojas template    : EOLOVANOS, VANOS IDEALES DE REGULACIÓN\n"
+        f"   • Tablas AFINIA     : {len(tablas_afinia)} hojas\n"
+        f"   • Cantones normales : {len(tab_fle)}\n"
+        f"   • Cantones secund.  : {len(tab_fle_s)}"
+    )
+
+
+# ── Ejemplo de uso ────────────────────────────────────────────────────────────
+# exportar_todo_afinia(
+#     ruta_template              = DATA + "plantilla_calculos.xlsx",
+#     ruta_salida                = DATA + "calculos_mecanicos_afinia.xlsx",
+#     eovanos                    = eovanos,
+#     van_reg                    = van_reg,
+#     tab_fle                    = tab_fle,
+#     tablas_p                   = tablas_p,
+#     tab_fle_s                  = tab_fle_s,
+#     tablas_s                   = tablas_s,
+#     datos_iniciales_red_mt     = datos_iniciales_red_mt,
+#     informacion_del_apoyo      = informacion_del_apoyo,
+#     calculo_esfuerzos_apoyo    = calculo_esfuerzos_apoyo,
+#     analisis_hipotesis_normales  = analisis_hipotesis_normales,
+#     analisis_hipotesis_anormales = analisis_hipotesis_anormales,
+#     calculo_poste_retenidas    = calculo_poste_retenidas,
+#     validacion_poste_retenidas = validacion_poste_retenidas,
+#     tipo_retenidas_ancla       = tipo_retenidas_ancla,
+#     dimension_ancla            = dimension_ancla,
 # )
