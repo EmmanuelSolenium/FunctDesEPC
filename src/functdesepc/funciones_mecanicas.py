@@ -1982,8 +1982,8 @@ def identificar_retenida(
     """
 
     # Inicialización
-    carac_postes[col_bisectora] = np.nan
-    carac_postes[col_90] = np.nan
+    carac_postes[col_bisectora] = None
+    carac_postes[col_90] = None
 
     def es_valido(v):
         if pd.isna(v):
@@ -4339,7 +4339,6 @@ def agregar_vano_regulacion_s(
     return van_reg
 
 
-
 def agregar_coordenadas(
     carac_postes: pd.DataFrame,
     postes_orden: pd.Series,
@@ -4371,11 +4370,10 @@ def agregar_coordenadas(
             zb = str(zb).strip()
             numero_zona = int(''.join(filter(str.isdigit, zb)))
             letra_banda = ''.join(filter(str.isalpha, zb)).upper()
-            hemisferio_norte = letra_banda >= 'N' if letra_banda else True
             lat, lon = utm_lib.to_latlon(
                 float(xe), float(yn),
                 numero_zona,
-                northern=hemisferio_norte
+                letra_banda                  # ← fix: zona letra en lugar de northern=
             )
             return round(lon, 6), round(lat, 6)
         except Exception:
@@ -4406,6 +4404,8 @@ def agregar_coordenadas(
     carac_postes["Y"] = pd.array(lats, dtype="Float64")
 
     return carac_postes
+
+
 
 
 def tipo_armado(carac_postes, postes_orden, postes_export, armado_export, nombre_columna="Tipo de Armado"):
