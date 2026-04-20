@@ -4338,8 +4338,6 @@ def agregar_vano_regulacion_s(
 
     return van_reg
 
-
-
 def agregar_coordenadas(
     carac_postes: pd.DataFrame,
     postes_orden: pd.Series,
@@ -4354,10 +4352,8 @@ def agregar_coordenadas(
 
     Parámetros:
         carac_postes:  DataFrame destino (un poste por fila, ordenado y sin repeticiones).
-        postes_orden:  Serie con los nombres de poste únicos y ordenados
-                       (ej: carac_postes["Numero de apoyo"] o mec["Numero de apoyo"]).
-        postes_export: Serie con los nombres de poste tal como vienen del archivo de entrada
-                       (puede tener repeticiones y estar desordenada).
+        postes_orden:  Serie con los nombres de poste únicos y ordenados.
+        postes_export: Serie con los nombres de poste tal como vienen del archivo de entrada.
         zona_banda:    Serie con la zona UTM (ej: "18P"), alineada con postes_export.
         x:             Serie con coordenadas Este en UTM, alineada con postes_export.
         y:             Serie con coordenadas Norte en UTM, alineada con postes_export.
@@ -4383,7 +4379,6 @@ def agregar_coordenadas(
         except Exception:
             return None, None
 
-    # Construir tabla auxiliar alineada con postes_export (resetear índices)
     df_export = pd.DataFrame({
         "poste":      postes_export.reset_index(drop=True).values,
         "zona_banda": zona_banda.reset_index(drop=True).values,
@@ -4391,24 +4386,22 @@ def agregar_coordenadas(
         "y":          y.reset_index(drop=True).values,
     })
 
-    # Quedarse con la primera aparición de cada poste (eliminar repeticiones)
     df_unicos = df_export.drop_duplicates(subset="poste", keep="first")
 
-    # Mapa poste → (lon, lat)
     mapa_coords = {}
     for _, fila in df_unicos.iterrows():
         lon, lat = utm_a_geo(fila["zona_banda"], fila["x"], fila["y"])
         mapa_coords[fila["poste"]] = (lon, lat)
 
-    # Asignar coordenadas en el orden definido por postes_orden
     lons, lats = [], []
     for poste in postes_orden.values:
         lon, lat = mapa_coords.get(poste, (None, None))
         lons.append(lon)
         lats.append(lat)
 
-    carac_postes["X"] = lons
-    carac_postes["Y"] = lats
+    carac_postes = carac_postes.drop(columns=["X", "Y"], errors="ignore")
+    carac_postes["X"] = pd.array(lons, dtype="Float64")
+    carac_postes["Y"] = pd.array(lats, dtype="Float64")
 
     return carac_postes
 
