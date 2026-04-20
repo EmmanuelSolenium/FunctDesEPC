@@ -872,6 +872,12 @@ def exportar_todo_afinia(
     # ── 1. Cargar template ────────────────────────────────────────────────────
     wb = load_workbook(ruta_template)
 
+    # Eliminar hojas del template que esta función no exporta
+    hojas_excluidas = ["MEC", "RET", "Caracteristicas de los postes"]
+    for nombre in hojas_excluidas:
+        if nombre in wb.sheetnames:
+            del wb[nombre]
+
     # ── 2. Escribir hojas heredadas del template (EOLOVANOS y VAN_REG) ───────
     config_template = [
         ("EOLOVANOS",                   eovanos,  3),
@@ -911,14 +917,20 @@ def exportar_todo_afinia(
         ("Dimensión Ancla",               dimension_ancla),
     ]
 
+    hojas_escritas = []
+    hojas_omitidas = []
     for sheet_name, df in tablas_afinia:
-        # Si la hoja ya existe en el template, reutilizarla; si no, crearla
+        # Omitir hojas cuyo DataFrame no tenga filas (ej. proyectos sin retenidas)
+        if df is None or len(df) == 0:
+            hojas_omitidas.append(sheet_name)
+            continue
         if sheet_name in wb.sheetnames:
             ws = wb[sheet_name]
             ws.delete_rows(1, ws.max_row)
         else:
             ws = wb.create_sheet(title=sheet_name)
         _escribir_df_afinia(ws, df)
+        hojas_escritas.append(sheet_name)
 
     # ── 4. Agregar hojas de flechado (cantones normales y secundarios) ────────
     for i, (header_df, datos_df) in enumerate(zip(tab_fle, tablas_p)):
@@ -934,10 +946,14 @@ def exportar_todo_afinia(
         _auto_col_width(ws)
 
     wb.save(ruta_salida)
+    omitidas_str = (
+        f"\n   ⚠️  Hojas omitidas (sin datos): {', '.join(hojas_omitidas)}"
+        if hojas_omitidas else ""
+    )
     print(
         f"✅ Archivo guardado: {ruta_salida}\n"
         f"   • Hojas template    : EOLOVANOS, VANOS IDEALES DE REGULACIÓN\n"
-        f"   • Tablas AFINIA     : {len(tablas_afinia)} hojas\n"
+        f"   • Tablas AFINIA     : {len(hojas_escritas)} hojas{omitidas_str}\n"
         f"   • Cantones normales : {len(tab_fle)}\n"
         f"   • Cantones secund.  : {len(tab_fle_s)}"
     )
