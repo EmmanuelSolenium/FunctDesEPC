@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import re 
 import math 
+import utm as utm_lib
 def kgf_a_daN(F_kgf, g=9.8066500):
     """
     Convierte kilogramo-fuerza (kgf) a decanewton (daN).
@@ -364,7 +365,7 @@ def construir_c2t1(
     for valor in c1t1:
         valores_validos = (
             ref.loc[ref["key"] == valor, "value"]
-            .replace([0, "-", ""], pd.NA)
+            .replace([0, "-", ""], pd.NA).infer_objects(copy=False)
             .dropna()
             .unique()
         )
@@ -412,7 +413,7 @@ def construir_c2t1_vano(
     for valor in c1t1:
         valores_validos = (
             ref.loc[ref["key"] == valor, "value"]
-            .replace([0, "-", ""], pd.NA)
+            .replace([0, "-", ""], pd.NA).infer_objects(copy=False)
             .dropna()
         )
 
@@ -525,7 +526,7 @@ def extraer_series_por_indice(
         # Normalización de valores inválidos
         serie_limpia = (
             serie
-            .replace([0, "-", ""], pd.NA)
+            .replace([0, "-", ""], pd.NA).infer_objects(copy=False)
             .dropna()
         )
 
