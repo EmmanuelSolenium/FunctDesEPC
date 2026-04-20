@@ -4338,6 +4338,8 @@ def agregar_vano_regulacion_s(
 
     return van_reg
 
+
+
 def agregar_coordenadas(
     carac_postes: pd.DataFrame,
     postes_orden: pd.Series,
