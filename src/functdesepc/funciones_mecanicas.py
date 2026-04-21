@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import re 
 import math 
+import utm as utm_lib
 def kgf_a_daN(F_kgf, g=9.8066500):
     """
     Convierte kilogramo-fuerza (kgf) a decanewton (daN).
@@ -364,7 +365,7 @@ def construir_c2t1(
     for valor in c1t1:
         valores_validos = (
             ref.loc[ref["key"] == valor, "value"]
-            .replace([0, "-", ""], pd.NA)
+            .replace([0, "-", ""], pd.NA).infer_objects(copy=False)
             .dropna()
             .unique()
         )
@@ -412,7 +413,7 @@ def construir_c2t1_vano(
     for valor in c1t1:
         valores_validos = (
             ref.loc[ref["key"] == valor, "value"]
-            .replace([0, "-", ""], pd.NA)
+            .replace([0, "-", ""], pd.NA).infer_objects(copy=False)
             .dropna()
         )
 
@@ -525,7 +526,7 @@ def extraer_series_por_indice(
         # Normalización de valores inválidos
         serie_limpia = (
             serie
-            .replace([0, "-", ""], pd.NA)
+            .replace([0, "-", ""], pd.NA).infer_objects(copy=False)
             .dropna()
         )
 
@@ -1982,8 +1983,8 @@ def identificar_retenida(
     """
 
     # Inicialización
-    carac_postes[col_bisectora] = np.nan
-    carac_postes[col_90] = np.nan
+    carac_postes[col_bisectora] = None
+    carac_postes[col_90] = None
 
     def es_valido(v):
         if pd.isna(v):
@@ -4339,7 +4340,6 @@ def agregar_vano_regulacion_s(
     return van_reg
 
 
-
 def agregar_coordenadas(
     carac_postes: pd.DataFrame,
     postes_orden: pd.Series,
@@ -4354,10 +4354,8 @@ def agregar_coordenadas(
 
     Parámetros:
         carac_postes:  DataFrame destino (un poste por fila, ordenado y sin repeticiones).
-        postes_orden:  Serie con los nombres de poste únicos y ordenados
-                       (ej: carac_postes["Numero de apoyo"] o mec["Numero de apoyo"]).
-        postes_export: Serie con los nombres de poste tal como vienen del archivo de entrada
-                       (puede tener repeticiones y estar desordenada).
+        postes_orden:  Serie con los nombres de poste únicos y ordenados.
+        postes_export: Serie con los nombres de poste tal como vienen del archivo de entrada.
         zona_banda:    Serie con la zona UTM (ej: "18P"), alineada con postes_export.
         x:             Serie con coordenadas Este en UTM, alineada con postes_export.
         y:             Serie con coordenadas Norte en UTM, alineada con postes_export.
@@ -4373,17 +4371,15 @@ def agregar_coordenadas(
             zb = str(zb).strip()
             numero_zona = int(''.join(filter(str.isdigit, zb)))
             letra_banda = ''.join(filter(str.isalpha, zb)).upper()
-            hemisferio_norte = letra_banda >= 'N' if letra_banda else True
             lat, lon = utm_lib.to_latlon(
                 float(xe), float(yn),
                 numero_zona,
-                northern=hemisferio_norte
+                letra_banda                  # ← fix: zona letra en lugar de northern=
             )
             return round(lon, 6), round(lat, 6)
         except Exception:
             return None, None
 
-    # Construir tabla auxiliar alineada con postes_export (resetear índices)
     df_export = pd.DataFrame({
         "poste":      postes_export.reset_index(drop=True).values,
         "zona_banda": zona_banda.reset_index(drop=True).values,
@@ -4391,26 +4387,26 @@ def agregar_coordenadas(
         "y":          y.reset_index(drop=True).values,
     })
 
-    # Quedarse con la primera aparición de cada poste (eliminar repeticiones)
     df_unicos = df_export.drop_duplicates(subset="poste", keep="first")
 
-    # Mapa poste → (lon, lat)
     mapa_coords = {}
     for _, fila in df_unicos.iterrows():
         lon, lat = utm_a_geo(fila["zona_banda"], fila["x"], fila["y"])
         mapa_coords[fila["poste"]] = (lon, lat)
 
-    # Asignar coordenadas en el orden definido por postes_orden
     lons, lats = [], []
     for poste in postes_orden.values:
         lon, lat = mapa_coords.get(poste, (None, None))
         lons.append(lon)
         lats.append(lat)
 
-    carac_postes["X"] = lons
-    carac_postes["Y"] = lats
+    carac_postes = carac_postes.drop(columns=["X", "Y"], errors="ignore")
+    carac_postes["X"] = pd.array(lons, dtype="Float64")
+    carac_postes["Y"] = pd.array(lats, dtype="Float64")
 
     return carac_postes
+
+
 
 
 def tipo_armado(carac_postes, postes_orden, postes_export, armado_export, nombre_columna="Tipo de Armado"):
@@ -4792,7 +4788,7 @@ def formatear_float(v):
 
 
 
-def agregar_calibre_retenida(ret, calibre="3/8", col_referencia="Fuerza Residual Fres (daN)", nombre_columna="Calibre Retenida"):
+def agregar_calibre_retenida(ret, calibre="3/8", col_referencia="Fuerza Residual Fres (daN)", nombre_columna="CABLE DE LA RETENIDA "):
     """
     Agrega a ret la columna de calibre de retenida.
     Solo asigna el calibre a los postes que tienen retenida (celdas con valor en col_referencia).
@@ -4808,3 +4804,203 @@ def agregar_calibre_retenida(ret, calibre="3/8", col_referencia="Fuerza Residual
     """
     ret[nombre_columna] = ret[col_referencia].apply(lambda v: calibre if pd.notna(v) else None)
     return ret
+
+
+
+def agregar_tipo_retenida(ret, carac_postes, col_referencia="Fuerza Residual Fres (daN)", nombre_columna="TIPO DE RETENIDAS"):
+    """
+    Agrega a ret la columna con el tipo de retenida por poste.
+
+    Parámetros:
+        ret:            DataFrame de retenidas.
+        carac_postes:   DataFrame con las columnas 'Bisectora' y 'Conjunto a 90º'.
+        col_referencia: Columna usada para detectar postes con retenida.
+        nombre_columna: Nombre de la columna que se añadirá a ret.
+
+    Retorna:
+        DataFrame ret con la columna de tipo de retenida añadida.
+    """
+    def clasificar(i):
+        if pd.isna(ret[col_referencia].iloc[i]):
+            return None
+        if carac_postes["Bisectora"].iloc[i] == "X":
+            return "Bisectora"
+        elif carac_postes["Conjunto a 90º"].iloc[i] == "X":
+            return "Conjunto a 90º"
+        return None
+
+    ret[nombre_columna] = [clasificar(i) for i in range(len(ret))]
+    return ret
+
+
+def agregar_configuracion_retenida(
+    ret,
+    postes_orden,
+    postes_export,
+    rt001, rt002, rt003, rt004, rt005, rt006,
+    col_referencia="Fuerza Residual Fres (daN)",
+    nombre_columna="CONFIGURACION DE LAS RETENIDAS"
+):
+    """
+    Identifica la configuración de retenida por poste (RT001–RT006) y la agrega a ret.
+    Solo aplica a postes con retenida. Los demás quedan vacíos.
+
+    Parámetros:
+        ret:            DataFrame de retenidas.
+        postes_orden:   Serie con nombres de poste únicos y ordenados.
+        postes_export:  Serie con nombres de poste del archivo de entrada.
+        rt001..rt006:   Series con cantidad de cada tipo de retenida, alineadas con postes_export.
+        col_referencia: Columna usada para detectar postes con retenida.
+        nombre_columna: Nombre de la columna que se añadirá a ret.
+
+    Retorna:
+        DataFrame ret con la columna de configuración añadida.
+    """
+
+    rts = {"RT001": rt001, "RT002": rt002, "RT003": rt003,
+           "RT004": rt004, "RT005": rt005, "RT006": rt006}
+
+    postes_exp = postes_export.reset_index(drop=True).values
+
+    # Mapa poste → configuración (primera ocurrencia con valor > 0)
+    mapa = {}
+    for i, poste in enumerate(postes_exp):
+        if poste not in mapa:
+            for nombre, serie in rts.items():
+                val = serie.reset_index(drop=True).iloc[i]
+                if pd.notna(val) and val > 0:
+                    mapa[poste] = nombre
+                    break
+
+    ret[nombre_columna] = [
+        mapa.get(p, None) if pd.notna(ret[col_referencia].iloc[i]) else None
+        for i, p in enumerate(postes_orden.values)
+    ]
+
+    return ret
+
+
+
+def agregar_fuerza_maxima_ancla(
+    ret,
+    postes_orden,
+    postes_export,
+    calibre_retenida,
+    tipo_suelo,
+    tabla_ancla,
+    col_referencia="Fuerza Residual Fres (daN)",
+    nombre_columna="Fuerza maxima del Ancla (daN)"
+):
+    """
+    Agrega a ret la fuerza máxima del ancla por poste con retenida,
+    consultando la tabla ancla según calibre y tipo de suelo.
+
+    Parámetros:
+        ret:              DataFrame de retenidas.
+        postes_orden:     Serie con nombres de poste únicos y ordenados.
+        postes_export:    Serie con nombres de poste del archivo de entrada.
+        calibre_retenida: String ("3/8", "1/2") o pd.Series con calibre por poste.
+        tipo_suelo:       String: "normal" → Suelo Normal, "flojo" → Suelo Flojo,
+                          cualquier otro valor → asume Suelo Normal.
+        tabla_ancla:      DataFrame MultiIndex con columnas (Diametro cable, Tipo de suelo).
+        col_referencia:   Columna usada para detectar postes con retenida.
+        nombre_columna:   Nombre de la columna que se añadirá a ret.
+
+    Retorna:
+        DataFrame ret con la columna de fuerza máxima del ancla añadida.
+    """
+
+    def obtener_carga(calibre):
+        try:
+            diametro = f'{calibre}"'
+            suelo_lower = str(tipo_suelo).strip().lower()
+            suelo = "Suelo Flojo" if suelo_lower == "flojo" else "Suelo Normal"
+            return tabla_ancla.loc["Carga máxima (daN)", (diametro, suelo)]
+        except Exception:
+            return np.nan
+
+    postes_exp = postes_export.reset_index(drop=True).values
+
+    # Mapa poste → calibre (primera ocurrencia)
+    mapa_calibre = {}
+    for i, poste in enumerate(postes_exp):
+        if poste not in mapa_calibre:
+            if isinstance(calibre_retenida, pd.Series):
+                mapa_calibre[poste] = calibre_retenida.reset_index(drop=True).iloc[i]
+            else:
+                mapa_calibre[poste] = calibre_retenida
+
+    ret[nombre_columna] = [
+        obtener_carga(mapa_calibre.get(p)) if pd.notna(ret[col_referencia].iloc[i]) else None
+        for i, p in enumerate(postes_orden.values)
+    ]
+
+    return ret
+
+def llenar_dimension_ancla(
+    dimension_ancla,
+    postes_orden,
+    postes_export,
+    calibre_retenida,
+    tipo_suelo,
+    tabla_ancla,
+    col_referencia="Fuerza Residual Fres (daN)",
+    ret=None
+):
+    """
+    Llena la tabla dimension_ancla con los valores de a, b, c e Y por poste
+    consultando la tabla ancla según calibre y tipo de suelo.
+
+    Parámetros:
+        dimension_ancla:  DataFrame con columnas a, b, c, Y a llenar.
+        postes_orden:     Serie con nombres de poste únicos y ordenados.
+        postes_export:    Serie con nombres de poste del archivo de entrada.
+        calibre_retenida: String ("3/8", "1/2") o pd.Series con calibre por poste.
+        tipo_suelo:       String: "normal" → Suelo Normal, "flojo" → Suelo Flojo,
+                          cualquier otro valor → asume Suelo Normal.
+        tabla_ancla:      DataFrame MultiIndex con columnas (Diametro cable, Tipo de suelo).
+        col_referencia:   Columna de ret usada para detectar postes con retenida.
+        ret:              DataFrame ret (necesario para detectar postes con retenida).
+
+    Retorna:
+        DataFrame dimension_ancla con las columnas a, b, c e Y llenas.
+    """
+
+    def obtener_valores(calibre):
+        try:
+            diametro = f'{calibre}"'
+            suelo_lower = str(tipo_suelo).strip().lower()
+            suelo = "Suelo Flojo" if suelo_lower == "flojo" else "Suelo Normal"
+            col = (diametro, suelo)
+            return {
+                "a (base Mayor)":  tabla_ancla.loc["a (m)",  col],
+                "b (altura)":      tabla_ancla.loc["b (m)",  col],
+                "c (Base menor)":  tabla_ancla.loc["c (m)",  col],
+                "Y (profundidad)": tabla_ancla.loc["H (m)",  col],
+            }
+        except Exception:
+            return {"a (base Mayor)": None, "b (altura)": None, "c (Base menor)": None, "Y (profundidad)": None}
+
+    postes_exp = postes_export.reset_index(drop=True).values
+
+    # Mapa poste → calibre (primera ocurrencia)
+    mapa_calibre = {}
+    for i, poste in enumerate(postes_exp):
+        if poste not in mapa_calibre:
+            if isinstance(calibre_retenida, pd.Series):
+                mapa_calibre[poste] = calibre_retenida.reset_index(drop=True).iloc[i]
+            else:
+                mapa_calibre[poste] = calibre_retenida
+
+    for i, poste in enumerate(postes_orden.values):
+        tiene_retenida = ret is not None and pd.notna(ret[col_referencia].iloc[i])
+        if not tiene_retenida:
+            continue
+        valores = obtener_valores(mapa_calibre.get(poste))
+        for col, val in valores.items():
+            dimension_ancla.loc[i, col] = val
+
+    return dimension_ancla
+
+
+
