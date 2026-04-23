@@ -20,13 +20,14 @@ from autodocs import funciones_docs
 # CONFIGURACIÓN
 # Reemplaza cada URL con el enlace de compartir del archivo en Drive
 # (clic derecho → Compartir → Copiar enlace)
+#
+# NOTA: No hay URL_TABLAS global. Cada parámetro de tipo 'tabla' debe
+# tener su propia URL en la columna 'Valor' del diccionario, lo que
+# permite que cada tabla apunte a un Excel distinto.
 # ==============================
 
 # Excel con el diccionario de datos
 URL_DICCIONARIO = "https://docs.google.com/spreadsheets/d/14VDGM9Yg0YyHByRdFT3526CmMbB-Ur4d/edit?usp=drive_link&ouid=109812277537374132162&rtpof=true&sd=true"
-
-# Excel con las tablas de cálculo (calculos_mecanicos_afinia.xlsx)
-URL_TABLAS = "https://docs.google.com/spreadsheets/d/1FynLotvSGmvBviL_52H1fyQWuqYg3c0L/edit?usp=drive_link&ouid=109812277537374132162&rtpof=true&sd=true"
 
 # Documento plantilla de Google Docs
 URL_PLANTILLA = "https://docs.google.com/document/d/1s2k-y_WqI0HZhA10gaSgSj6RN_5sN5RTVyQ58INydv4/edit?usp=drive_link"
@@ -54,8 +55,19 @@ def main():
         print("Diccionario descargado desde Drive")
 
         # 3. Construir el diccionario unificado
+        #    Cada entrada de tipo 'tabla' debe tener su URL en la columna 'Valor'
         diccionario = funciones_docs.cargar_diccionario(archivo_excel)
         print("Diccionario cargado correctamente")
+
+        # DEBUG TEMPORAL
+        tablas_con_valor = {k: v for k, v in diccionario.items() 
+                            if v.get("type") == "table" and v.get("value") is not None}
+        tablas_sin_valor = {k: v for k, v in diccionario.items() 
+                            if v.get("type") == "table" and v.get("value") is None}
+        print(f"DEBUG: tablas con URL: {len(tablas_con_valor)}")
+        print(f"DEBUG: tablas sin URL: {len(tablas_sin_valor)}")
+        for alias, entrada in list(tablas_con_valor.items())[:3]:
+            print(f"  {alias} | {str(entrada['value'])[:80]}")
 
         # 4. Extraer IDs desde las URLs
         doc_id_plantilla   = funciones_docs.extraer_id_gdoc(URL_PLANTILLA)

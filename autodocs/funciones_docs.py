@@ -46,13 +46,22 @@ def cargar_diccionario(archivo, project_filter=None):
     """
 
     if isinstance(archivo, str):
-        df = pd.read_csv(archivo) if archivo.endswith(".csv") else pd.read_excel(archivo)
+        if archivo.endswith(".csv"):
+            df = pd.read_csv(archivo)
+        else:
+            df = pd.read_excel(archivo, header=None)
     else:
-        df = pd.read_excel(archivo)
+        df = pd.read_excel(archivo, header=None)
 
-    # Primera fila es el header real
-    df.columns = df.iloc[0]
-    df = df[1:].reset_index(drop=True)
+    # Detectar fila de encabezado: buscar la primera fila con 'Nombre del dato'
+    header_idx = 0
+    for i, row in df.iterrows():
+        if any(str(v).strip().lower() == "nombre del dato" for v in row.values):
+            header_idx = i
+            break
+
+    df.columns = df.iloc[header_idx]
+    df = df[header_idx + 1:].reset_index(drop=True)
 
     # Normalizar nombres de columnas
     df.columns = [str(col).strip().lower() for col in df.columns]
@@ -240,11 +249,6 @@ def reemplazar_textos(doc_id, diccionario, docs_service):
     for r in reemplazados_encontrados:
         print(f"   {r['placeholder']} → '{r['value']}' ({r['ocurrencias']} ocurrencia/s)")
 
-    if omitidos:
-        print(f"⚠️  Omitidos: {len(omitidos)}")
-        for o in omitidos:
-            print(f"   {o['alias']}: {o['razon']}")
-
     return {
         "reemplazados": reemplazados_encontrados,
         "omitidos":     omitidos
@@ -387,11 +391,6 @@ def procesar_condicionales(doc_id, diccionario, docs_service):
         icono    = "✔" if p["es_verdadero"] else "✘"
         else_str = " (con else)" if p["tiene_else"] else ""
         print(f"   {icono} {{% if {p['variable']} %}} → {p['valor']}{else_str}")
-
-    if omitidos:
-        print(f"⚠️  Omitidos: {len(omitidos)}")
-        for o in omitidos:
-            print(f"   {o['variable']}: {o['razon']}")
 
     return {"procesados": procesados, "omitidos": omitidos}
 
@@ -596,17 +595,13 @@ def reemplazar_imagenes(doc_id, diccionario, docs_service, drive_service):
     for r in reemplazados:
         print(f"   {r['placeholder']} → {r['file_id']} ({r['width_pt']}x{r['height_pt']} pt)")
 
-    if omitidos:
-        print(f"⚠️  Omitidos: {len(omitidos)}")
-        for o in omitidos:
-            print(f"   {o['alias']}: {o['razon']}")
-
     return {"reemplazados": reemplazados, "omitidos": omitidos}
 
 
 # ==============================
 # TABLAS EN GOOGLE DOCS
 # ==============================
+
 
 def reemplazar_tablas(doc_id, diccionario, docs_service, drive_service):
     """
@@ -665,11 +660,15 @@ def reemplazar_tablas(doc_id, diccionario, docs_service, drive_service):
         url_tabla   = valor.get("file_id")
         sheet_name  = valor.get("sheet")
 
+        print(f"\nDEBUG tabla [{alias}]: url={str(url_tabla)[:70]} | sheet={sheet_name} | placeholder={placeholder}")
+
         if not url_tabla:
+            print(f"  → OMITIDA: URL de tabla vacía")
             omitidos.append({"alias": alias, "razon": "URL de tabla vacía"})
             continue
 
         if not placeholder:
+            print(f"  → OMITIDA: placeholder vacío")
             omitidos.append({"alias": alias, "razon": "placeholder vacío"})
             continue
 
@@ -677,6 +676,7 @@ def reemplazar_tablas(doc_id, diccionario, docs_service, drive_service):
             # -------------------------------------------------
             # 1. Leer el documento fresco
             # -------------------------------------------------
+            print(f"  [1] Leyendo documento...")
             documento = docs_service.documents().get(documentId=doc_id).execute()
             contenido = documento.get("body", {}).get("content", [])
             texto_plano, mapa_indices = _extraer_texto_con_indices(contenido)
@@ -684,6 +684,7 @@ def reemplazar_tablas(doc_id, diccionario, docs_service, drive_service):
             # -------------------------------------------------
             # 2. Encontrar el bloque {% table alias %}...{% end_table alias %}
             # -------------------------------------------------
+            print(f"  [2] Buscando bloque {{% table {alias} %}}...")
             patron_bloque = re.compile(
                 r"\{%-?\s*table\s+" + re.escape(alias) + r"\s*-?%\}"
                 r"(.*?)"
@@ -692,19 +693,20 @@ def reemplazar_tablas(doc_id, diccionario, docs_service, drive_service):
             )
             match_bloque = patron_bloque.search(texto_plano)
             if not match_bloque:
+                print(f"  → OMITIDA: bloque no encontrado en el documento")
                 omitidos.append({"alias": alias, "razon": f"bloque {{% table {alias} %}} no encontrado"})
                 continue
 
             inicio_bloque = match_bloque.start()
             fin_bloque    = match_bloque.end()
+            print(f"  [2] Bloque encontrado en posición {inicio_bloque}-{fin_bloque}")
 
             # -------------------------------------------------
             # 3. Localizar la tabla plantilla dentro del bloque
-            #    (primer objeto tabla en ese rango de índices)
             # -------------------------------------------------
+            print(f"  [3] Buscando tabla plantilla en el bloque...")
             start_bloque_doc = _idx(inicio_bloque, mapa_indices)
-            # Usar el último índice disponible si fin_bloque está fuera del mapa
-            end_bloque_doc = _idx(fin_bloque - 1, mapa_indices)
+            end_bloque_doc   = _idx(fin_bloque - 1, mapa_indices)
             if end_bloque_doc is None:
                 end_bloque_doc = mapa_indices[-1] if mapa_indices else 0
 
@@ -712,41 +714,52 @@ def reemplazar_tablas(doc_id, diccionario, docs_service, drive_service):
                 contenido, start_bloque_doc, end_bloque_doc
             )
             if not tabla_plantilla:
+                print(f"  → OMITIDA: tabla plantilla no encontrada en el bloque")
                 omitidos.append({"alias": alias, "razon": "tabla plantilla no encontrada en el bloque"})
                 continue
+            print(f"  [3] Tabla plantilla encontrada")
 
             # -------------------------------------------------
             # 4. Extraer formato de la plantilla
             # -------------------------------------------------
+            print(f"  [4] Extrayendo formato de plantilla...")
             formato_plantilla = _extraer_formato_plantilla(tabla_plantilla)
             n_cols_plantilla  = formato_plantilla["n_cols"]
+            print(f"  [4] Formato extraído: {formato_plantilla['n_rows']} filas x {n_cols_plantilla} cols")
 
             # -------------------------------------------------
             # 5. Descargar datos desde Excel o Google Sheets
             # -------------------------------------------------
+            print(f"  [5] Descargando datos de la tabla...")
             header_row = valor.get("header_row")
             df = _cargar_datos_tabla(url_tabla, sheet_name, drive_service, header_row)
             if df is None or df.empty:
+                print(f"  → OMITIDA: no se pudieron cargar los datos")
                 omitidos.append({"alias": alias, "razon": "no se pudieron cargar los datos de la tabla"})
                 continue
 
             n_filas = len(df) + 1   # +1 por encabezados
             n_cols  = len(df.columns)
+            print(f"  [5] Datos cargados: {n_filas} filas x {n_cols} cols")
 
             # -------------------------------------------------
             # 6. Localizar el placeholder {{ alias }} en el bloque
             # -------------------------------------------------
+            print(f"  [6] Buscando placeholder '{placeholder}' en el bloque...")
             pos_placeholder = texto_plano.find(placeholder, inicio_bloque, fin_bloque)
             if pos_placeholder == -1:
+                print(f"  → OMITIDA: placeholder no encontrado en el bloque")
                 omitidos.append({"alias": alias, "razon": f"placeholder {placeholder} no encontrado en el bloque"})
                 continue
 
             idx_placeholder_start = _idx(pos_placeholder, mapa_indices)
             idx_placeholder_end   = _idx(pos_placeholder + len(placeholder), mapa_indices)
+            print(f"  [6] Placeholder en índices {idx_placeholder_start}-{idx_placeholder_end}")
 
             # -------------------------------------------------
             # 7. Insertar tabla vacía en la posición del placeholder
             # -------------------------------------------------
+            print(f"  [7] Insertando tabla nueva ({n_filas}x{n_cols})...")
             docs_service.documents().batchUpdate(
                 documentId=doc_id,
                 body={"requests": [
@@ -763,28 +776,31 @@ def reemplazar_tablas(doc_id, diccionario, docs_service, drive_service):
                     }}
                 ]}
             ).execute()
+            print(f"  [7] Tabla insertada")
 
             # -------------------------------------------------
-            # 8. Leer el documento de nuevo para obtener
-            #    el índice real de la tabla recién insertada
+            # 8. Leer el documento de nuevo para obtener índice real
             # -------------------------------------------------
+            print(f"  [8] Localizando tabla recién insertada...")
             documento2  = docs_service.documents().get(documentId=doc_id).execute()
             contenido2  = documento2.get("body", {}).get("content", [])
             texto2, mi2 = _extraer_texto_con_indices(contenido2)
 
-            # La tabla nueva está en la posición del placeholder anterior
             tabla_nueva = _encontrar_tabla_en_rango(
                 contenido2,
                 idx_placeholder_start - 1,
                 idx_placeholder_start + (n_filas * n_cols * 10)
             )
             if not tabla_nueva:
+                print(f"  → OMITIDA: no se pudo localizar la tabla recién insertada")
                 omitidos.append({"alias": alias, "razon": "no se pudo localizar la tabla recién insertada"})
                 continue
+            print(f"  [8] Tabla nueva localizada en índice {tabla_nueva.get('startIndex')}")
 
             # -------------------------------------------------
             # 9. Llenar la tabla con datos y aplicar formato
             # -------------------------------------------------
+            print(f"  [9] Aplicando contenido y formato...")
             requests_formato = []
             requests_formato += _generar_requests_contenido(tabla_nueva, df)
             requests_formato += _generar_requests_formato(
@@ -796,11 +812,12 @@ def reemplazar_tablas(doc_id, diccionario, docs_service, drive_service):
                     documentId=doc_id,
                     body={"requests": requests_formato}
                 ).execute()
+            print(f"  [9] Formato aplicado ({len(requests_formato)} requests)")
 
             # -------------------------------------------------
-            # 10. Aplicar merges (requieren requests separados
-            #     porque cada merge invalida índices anteriores)
+            # 10. Aplicar merges
             # -------------------------------------------------
+            print(f"  [10] Aplicando merges...")
             requests_merges = _generar_requests_merges(
                 tabla_nueva, formato_plantilla, n_filas, n_cols, n_cols_plantilla
             )
@@ -809,26 +826,24 @@ def reemplazar_tablas(doc_id, diccionario, docs_service, drive_service):
                     documentId=doc_id,
                     body={"requests": [merge_request]}
                 ).execute()
+            print(f"  [10] Merges aplicados ({len(requests_merges)})")
 
             # -------------------------------------------------
             # 11. Eliminar plantilla y etiquetas
-            #     Leer documento actualizado para índices frescos
             # -------------------------------------------------
+            print(f"  [11] Limpiando plantilla y etiquetas...")
             documento3  = docs_service.documents().get(documentId=doc_id).execute()
             contenido3  = documento3.get("body", {}).get("content", [])
             texto3, mi3 = _extraer_texto_con_indices(contenido3)
 
-            # Encontrar y eliminar bloque completo de atrás hacia adelante
             match3 = patron_bloque.search(texto3)
             if match3:
-                # Localizar tabla plantilla para eliminarla
                 start3 = _idx(match3.start(), mi3)
                 end3   = _idx(match3.end() - 1, mi3)
                 tabla_plantilla3 = _encontrar_tabla_en_rango(contenido3, start3, end3)
 
                 requests_limpieza = []
 
-                # Etiqueta {% end_table %}
                 pos_end_tag = texto3.find(
                     "{%", match3.start(1) + len(match3.group(1)) - 1
                 )
@@ -842,20 +857,16 @@ def reemplazar_tablas(doc_id, diccionario, docs_service, drive_service):
                         }
                     })
 
-                # Tabla plantilla
                 if tabla_plantilla3:
-                    tabla_start = tabla_plantilla3["startIndex"]
-                    tabla_end   = tabla_plantilla3["endIndex"]
                     requests_limpieza.append({
                         "deleteContentRange": {
                             "range": {
-                                "startIndex": tabla_start,
-                                "endIndex":   tabla_end
+                                "startIndex": tabla_plantilla3["startIndex"],
+                                "endIndex":   tabla_plantilla3["endIndex"]
                             }
                         }
                     })
 
-                # Etiqueta {% table %}
                 pos_start_tag_end = texto3.find("%}", match3.start()) + 2
                 requests_limpieza.append({
                     "deleteContentRange": {
@@ -866,7 +877,6 @@ def reemplazar_tablas(doc_id, diccionario, docs_service, drive_service):
                     }
                 })
 
-                # Ejecutar de atrás hacia adelante
                 requests_limpieza.sort(
                     key=lambda r: r["deleteContentRange"]["range"]["startIndex"],
                     reverse=True
@@ -876,24 +886,29 @@ def reemplazar_tablas(doc_id, diccionario, docs_service, drive_service):
                         documentId=doc_id,
                         body={"requests": requests_limpieza}
                     ).execute()
+            print(f"  [11] Limpieza completada")
 
             reemplazados.append({
                 "alias":   alias,
                 "n_filas": n_filas,
                 "n_cols":  n_cols
             })
+            print(f"  ✅ Tabla [{alias}] reemplazada exitosamente")
 
         except Exception as e:
+            import traceback
+            print(f"  ❌ ERROR en tabla [{alias}]: {str(e)}")
+            traceback.print_exc()
             omitidos.append({"alias": alias, "razon": f"error: {str(e)}"})
 
-    print(f"✅ Tablas reemplazadas: {len(reemplazados)}")
+    print(f"\n✅ Tablas reemplazadas: {len(reemplazados)}")
     for r in reemplazados:
         print(f"   {r['alias']} → {r['n_filas']} filas x {r['n_cols']} columnas")
 
     if omitidos:
-        print(f"⚠️  Omitidos: {len(omitidos)}")
+        print(f"⚠️  Tablas omitidas: {len(omitidos)}")
         for o in omitidos:
-            print(f"   {o['alias']}: {o['razon']}")
+            print(f"   {o['alias']} → {o['razon']}")
 
     return {"reemplazados": reemplazados, "omitidos": omitidos}
 
@@ -905,7 +920,13 @@ def reemplazar_tablas(doc_id, diccionario, docs_service, drive_service):
 def _cargar_datos_tabla(url, sheet_name, drive_service, header_row=None):
     """
     Descarga datos desde Excel en Drive o Google Sheets.
-    Detecta el tipo por la URL y actúa diferente en cada caso.
+
+    Estrategia de descarga:
+        1. Intenta get_media (para .xlsx subidos a Drive)
+        2. Si falla con 403/fileNotExportable, intenta export_media (para Sheets nativos)
+
+    Esto resuelve el caso en que la URL tiene 'docs.google.com/spreadsheets'
+    pero el archivo es un .xlsx subido (no un Google Sheets nativo).
 
     Args:
         url         (str): URL del archivo en Drive o Google Sheets.
@@ -917,25 +938,31 @@ def _cargar_datos_tabla(url, sheet_name, drive_service, header_row=None):
     import io
     import pandas as pd
     from googleapiclient.http import MediaIoBaseDownload
+    from googleapiclient.errors import HttpError
 
-    es_sheets = "docs.google.com/spreadsheets" in url
-    file_id   = extraer_id_gdoc(url)
+    file_id = extraer_id_gdoc(url)
 
-    fh = io.BytesIO()
+    def _descargar(request):
+        fh = io.BytesIO()
+        downloader = MediaIoBaseDownload(fh, request)
+        done = False
+        while not done:
+            _, done = downloader.next_chunk()
+        fh.seek(0)
+        return fh
 
-    if es_sheets:
-        request = drive_service.files().export_media(
-            fileId=file_id,
-            mimeType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
-    else:
-        request = drive_service.files().get_media(fileId=file_id)
-
-    downloader = MediaIoBaseDownload(fh, request)
-    done = False
-    while not done:
-        _, done = downloader.next_chunk()
-    fh.seek(0)
+    # Intentar primero get_media (funciona con .xlsx subidos a Drive)
+    try:
+        fh = _descargar(drive_service.files().get_media(fileId=file_id))
+    except HttpError as e:
+        if e.resp.status in (403, 400):
+            # El archivo es un Google Sheets nativo → usar export_media
+            fh = _descargar(drive_service.files().export_media(
+                fileId=file_id,
+                mimeType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            ))
+        else:
+            raise
 
     # header es 0-based en pandas, header_row es 1-based
     pandas_header = (header_row - 1) if header_row and header_row > 1 else 0
@@ -948,6 +975,7 @@ def _cargar_datos_tabla(url, sheet_name, drive_service, header_row=None):
     # Convertir todo a string para inserción en Docs
     df = df.fillna("").astype(str)
     return df
+
 
 
 def _encontrar_tabla_en_rango(contenido, start_idx, end_idx):
@@ -1086,6 +1114,10 @@ def _generar_requests_contenido(tabla_nueva, df):
     for fi, (fila_doc, fila_datos) in enumerate(zip(filas, todas_las_filas)):
         celdas_doc = fila_doc.get("tableCells", [])
         for ci, (celda_doc, valor) in enumerate(zip(celdas_doc, fila_datos)):
+            texto = str(valor)
+            if not texto:  # saltar celdas vacías — la API rechaza insertText con texto=""
+                continue
+
             parrafos = celda_doc.get("content", [])
             if not parrafos:
                 continue
@@ -1098,12 +1130,11 @@ def _generar_requests_contenido(tabla_nueva, df):
             requests.append({
                 "insertText": {
                     "location": {"index": idx_insercion},
-                    "text":     str(valor)
+                    "text":     texto
                 }
             })
 
     return requests
-
 
 def _generar_requests_formato(tabla_nueva, formato_plantilla, n_filas, n_cols):
     """
