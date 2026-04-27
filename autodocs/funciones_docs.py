@@ -21,6 +21,16 @@ TIPO_MAP = {
     "imagen / tabla": "image",  # se trata como imagen por ahora
 }
 
+# ==============================
+# VERBOSE / LOGGING
+# ==============================
+VERBOSE = False
+
+def _log(*args, **kwargs):
+    """Imprime solo si VERBOSE está activado."""
+    if VERBOSE:
+        print(*args, **kwargs)
+
 
 # ==============================
 # CARGA DEL DICCIONARIO DESDE EXCEL
@@ -225,7 +235,7 @@ def reemplazar_textos(doc_id, diccionario, docs_service):
         })
 
     if not requests:
-        print("⚠️  No se encontraron entradas de tipo 'text' para reemplazar.")
+        _log("⚠️  No se encontraron entradas de tipo 'text' para reemplazar.")
         return {"reemplazados": [], "omitidos": omitidos}
 
     resultado = docs_service.documents().batchUpdate(
@@ -245,9 +255,9 @@ def reemplazar_textos(doc_id, diccionario, docs_service):
 
     reemplazados_encontrados = [r for r in reemplazados if r.get("ocurrencias", 0) > 0]
 
-    print(f"✅ Texto reemplazado: {len(reemplazados_encontrados)} placeholders")
+    _log(f"✅ Texto reemplazado: {len(reemplazados_encontrados)} placeholders")
     for r in reemplazados_encontrados:
-        print(f"   {r['placeholder']} → '{r['value']}' ({r['ocurrencias']} ocurrencia/s)")
+        _log(f"   {r['placeholder']} → '{r['value']}' ({r['ocurrencias']} ocurrencia/s)")
 
     return {
         "reemplazados": reemplazados_encontrados,
@@ -300,7 +310,7 @@ def procesar_condicionales(doc_id, diccionario, docs_service):
     bloques = list(patron.finditer(texto_plano))
 
     if not bloques:
-        print("ℹ️  No se encontraron bloques condicionales en el documento.")
+        _log("ℹ️  No se encontraron bloques condicionales en el documento.")
         return {"procesados": [], "omitidos": []}
 
     procesados        = []
@@ -386,11 +396,11 @@ def procesar_condicionales(doc_id, diccionario, docs_service):
     # -------------------------------------------------------
     # 4. Log de resultados
     # -------------------------------------------------------
-    print(f"✅ Condicionales procesadas: {len(procesados)}")
+    _log(f"✅ Condicionales procesadas: {len(procesados)}")
     for p in procesados:
         icono    = "✔" if p["es_verdadero"] else "✘"
         else_str = " (con else)" if p["tiene_else"] else ""
-        print(f"   {icono} {{% if {p['variable']} %}} → {p['valor']}{else_str}")
+        _log(f"   {icono} {{% if {p['variable']} %}} → {p['valor']}{else_str}")
 
     return {"procesados": procesados, "omitidos": omitidos}
 
@@ -480,7 +490,7 @@ def reemplazar_imagenes(doc_id, diccionario, docs_service, drive_service):
     ]
 
     if not entradas_imagen:
-        print("ℹ️  No se encontraron entradas de tipo 'image' para reemplazar.")
+        _log("ℹ️  No se encontraron entradas de tipo 'image' para reemplazar.")
         return {"reemplazados": [], "omitidos": omitidos}
 
     for alias, entrada in entradas_imagen:
@@ -591,9 +601,15 @@ def reemplazar_imagenes(doc_id, diccionario, docs_service, drive_service):
                     pass  # Si falla la revocación no interrumpimos el flujo
 
     # Log de resultados
-    print(f"✅ Imágenes reemplazadas: {len(reemplazados)}")
+    _log(f"✅ Imágenes reemplazadas: {len(reemplazados)}")
     for r in reemplazados:
-        print(f"   {r['placeholder']} → {r['file_id']} ({r['width_pt']}x{r['height_pt']} pt)")
+        _log(f"   {r['placeholder']} → {r['file_id']} ({r['width_pt']}x{r['height_pt']} pt)")
+
+    omitidos_reales = [o for o in omitidos if o.get("razon") != "placeholder no encontrado en el documento"]
+    if omitidos_reales:
+        _log(f"⚠️  Imágenes omitidas: {len(omitidos_reales)}")
+        for o in omitidos_reales:
+            _log(f"   {o['alias']}: {o['razon']}")
 
     return {"reemplazados": reemplazados, "omitidos": omitidos}
 
@@ -603,31 +619,33 @@ def reemplazar_imagenes(doc_id, diccionario, docs_service, drive_service):
 # ==============================
 
 
+
+
+
+
+
+# ==============================
+# TABLAS EN GOOGLE DOCS
+# ==============================
+
 def reemplazar_tablas(doc_id, diccionario, docs_service, drive_service):
     """
     Reemplaza placeholders de tipo 'table' en un Google Doc.
 
-    Sintaxis en el documento:
+    Enfoque: sin copiar formato. Lee los datos del Excel/Sheets y los pega
+    en una tabla nueva con formato predeterminado de Google Docs.
+
+    Sintaxis en el documento (sin tabla plantilla):
         {% table alias %}
-        [tabla plantilla con formato]
         {{ alias }}
         {% end_table alias %}
 
     Flujo por cada tabla:
         1. Encuentra el bloque {% table %}...{% end_table %}
-        2. Extrae el formato de la tabla plantilla (merges, colores, bordes, fuentes)
-        3. Descarga los datos desde Excel o Google Sheets
-        4. Inserta tabla nueva en la posición del placeholder
-        5. Aplica formato copiado de la plantilla
-        6. Aplica merges según las reglas definidas
-        7. Elimina plantilla, placeholder y etiquetas
-
-    Reglas de merge:
-        - Merge de fila completa → se replica abarcando todas las columnas nuevas
-        - Merge parcial → se replica en las mismas posiciones, columnas extra independientes
-
-    Reglas de formato cuando datos tienen más columnas que la plantilla:
-        - Columnas extra heredan formato de la última columna de la plantilla
+        2. Descarga los datos desde Excel o Google Sheets (URL en el diccionario)
+        3. Elimina todo el contenido del bloque (tags + placeholder)
+        4. Inserta una tabla nueva en esa posición
+        5. Llena las celdas con los datos (encabezados en fila 1, datos en el resto)
 
     Args:
         doc_id        (str):  ID del documento de Google Docs.
@@ -651,7 +669,7 @@ def reemplazar_tablas(doc_id, diccionario, docs_service, drive_service):
     ]
 
     if not entradas_tabla:
-        print("ℹ️  No se encontraron entradas de tipo 'table' para reemplazar.")
+        _log("ℹ️  No se encontraron entradas de tipo 'table' para reemplazar.")
         return {"reemplazados": [], "omitidos": omitidos}
 
     for alias, entrada in entradas_tabla:
@@ -659,32 +677,35 @@ def reemplazar_tablas(doc_id, diccionario, docs_service, drive_service):
         valor       = entrada["value"]
         url_tabla   = valor.get("file_id")
         sheet_name  = valor.get("sheet")
-
-        print(f"\nDEBUG tabla [{alias}]: url={str(url_tabla)[:70]} | sheet={sheet_name} | placeholder={placeholder}")
+        header_row  = valor.get("header_row")
 
         if not url_tabla:
-            print(f"  → OMITIDA: URL de tabla vacía")
             omitidos.append({"alias": alias, "razon": "URL de tabla vacía"})
             continue
 
         if not placeholder:
-            print(f"  → OMITIDA: placeholder vacío")
             omitidos.append({"alias": alias, "razon": "placeholder vacío"})
             continue
 
         try:
             # -------------------------------------------------
-            # 1. Leer el documento fresco
+            # 1. Descargar datos y formato desde Excel o Google Sheets
             # -------------------------------------------------
-            print(f"  [1] Leyendo documento...")
+            df, cell_formats, merges = _cargar_datos_tabla(url_tabla, sheet_name, drive_service, header_row)
+            if df is None or df.empty:
+                omitidos.append({"alias": alias, "razon": "no se pudieron cargar los datos"})
+                continue
+
+            n_filas = len(df) + 1   # +1 por fila de encabezados
+            n_cols  = len(df.columns)
+
+            # -------------------------------------------------
+            # 2. Leer documento y localizar el bloque {% table %}
+            # -------------------------------------------------
             documento = docs_service.documents().get(documentId=doc_id).execute()
             contenido = documento.get("body", {}).get("content", [])
             texto_plano, mapa_indices = _extraer_texto_con_indices(contenido)
 
-            # -------------------------------------------------
-            # 2. Encontrar el bloque {% table alias %}...{% end_table alias %}
-            # -------------------------------------------------
-            print(f"  [2] Buscando bloque {{% table {alias} %}}...")
             patron_bloque = re.compile(
                 r"\{%-?\s*table\s+" + re.escape(alias) + r"\s*-?%\}"
                 r"(.*?)"
@@ -693,623 +714,268 @@ def reemplazar_tablas(doc_id, diccionario, docs_service, drive_service):
             )
             match_bloque = patron_bloque.search(texto_plano)
             if not match_bloque:
-                print(f"  → OMITIDA: bloque no encontrado en el documento")
                 omitidos.append({"alias": alias, "razon": f"bloque {{% table {alias} %}} no encontrado"})
                 continue
 
-            inicio_bloque = match_bloque.start()
-            fin_bloque    = match_bloque.end()
-            print(f"  [2] Bloque encontrado en posición {inicio_bloque}-{fin_bloque}")
+            inicio_bloque = _idx(match_bloque.start(), mapa_indices)
+            fin_bloque    = _idx(match_bloque.end() - 1, mapa_indices)
+            if fin_bloque is None:
+                fin_bloque = mapa_indices[-1] if mapa_indices else 0
+            fin_bloque += 1  # endIndex es exclusivo en la API
 
             # -------------------------------------------------
-            # 3. Localizar la tabla plantilla dentro del bloque
+            # 3. Eliminar todo el bloque e insertar tabla vacía
+            #    en un solo batchUpdate
             # -------------------------------------------------
-            print(f"  [3] Buscando tabla plantilla en el bloque...")
-            start_bloque_doc = _idx(inicio_bloque, mapa_indices)
-            end_bloque_doc   = _idx(fin_bloque - 1, mapa_indices)
-            if end_bloque_doc is None:
-                end_bloque_doc = mapa_indices[-1] if mapa_indices else 0
-
-            tabla_plantilla = _encontrar_tabla_en_rango(
-                contenido, start_bloque_doc, end_bloque_doc
-            )
-            if not tabla_plantilla:
-                print(f"  → OMITIDA: tabla plantilla no encontrada en el bloque")
-                omitidos.append({"alias": alias, "razon": "tabla plantilla no encontrada en el bloque"})
-                continue
-            print(f"  [3] Tabla plantilla encontrada")
-
-            # -------------------------------------------------
-            # 4. Extraer formato de la plantilla
-            # -------------------------------------------------
-            print(f"  [4] Extrayendo formato de plantilla...")
-            formato_plantilla = _extraer_formato_plantilla(tabla_plantilla)
-            n_cols_plantilla  = formato_plantilla["n_cols"]
-            print(f"  [4] Formato extraído: {formato_plantilla['n_rows']} filas x {n_cols_plantilla} cols")
-
-            # -------------------------------------------------
-            # 5. Descargar datos desde Excel o Google Sheets
-            # -------------------------------------------------
-            print(f"  [5] Descargando datos de la tabla...")
-            header_row = valor.get("header_row")
-            df = _cargar_datos_tabla(url_tabla, sheet_name, drive_service, header_row)
-            if df is None or df.empty:
-                print(f"  → OMITIDA: no se pudieron cargar los datos")
-                omitidos.append({"alias": alias, "razon": "no se pudieron cargar los datos de la tabla"})
-                continue
-
-            n_filas = len(df) + 1   # +1 por encabezados
-            n_cols  = len(df.columns)
-            print(f"  [5] Datos cargados: {n_filas} filas x {n_cols} cols")
-
-            # -------------------------------------------------
-            # 6. Localizar el placeholder {{ alias }} en el bloque
-            # -------------------------------------------------
-            print(f"  [6] Buscando placeholder '{placeholder}' en el bloque...")
-            pos_placeholder = texto_plano.find(placeholder, inicio_bloque, fin_bloque)
-            if pos_placeholder == -1:
-                print(f"  → OMITIDA: placeholder no encontrado en el bloque")
-                omitidos.append({"alias": alias, "razon": f"placeholder {placeholder} no encontrado en el bloque"})
-                continue
-
-            idx_placeholder_start = _idx(pos_placeholder, mapa_indices)
-            idx_placeholder_end   = _idx(pos_placeholder + len(placeholder), mapa_indices)
-            print(f"  [6] Placeholder en índices {idx_placeholder_start}-{idx_placeholder_end}")
-
-            # -------------------------------------------------
-            # 7. Insertar tabla vacía en la posición del placeholder
-            # -------------------------------------------------
-            print(f"  [7] Insertando tabla nueva ({n_filas}x{n_cols})...")
             docs_service.documents().batchUpdate(
                 documentId=doc_id,
                 body={"requests": [
                     {"deleteContentRange": {
                         "range": {
-                            "startIndex": idx_placeholder_start,
-                            "endIndex":   idx_placeholder_end
+                            "startIndex": inicio_bloque,
+                            "endIndex":   fin_bloque
                         }
                     }},
                     {"insertTable": {
                         "rows":     n_filas,
                         "columns":  n_cols,
-                        "location": {"index": idx_placeholder_start}
+                        "location": {"index": inicio_bloque}
                     }}
                 ]}
             ).execute()
-            print(f"  [7] Tabla insertada")
 
             # -------------------------------------------------
-            # 8. Leer el documento de nuevo para obtener índice real
+            # 3b. Aplicar merges del Excel a la tabla recién insertada
             # -------------------------------------------------
-            print(f"  [8] Localizando tabla recién insertada...")
-            documento2  = docs_service.documents().get(documentId=doc_id).execute()
-            contenido2  = documento2.get("body", {}).get("content", [])
-            texto2, mi2 = _extraer_texto_con_indices(contenido2)
-
-            tabla_nueva = _encontrar_tabla_en_rango(
-                contenido2,
-                idx_placeholder_start - 1,
-                idx_placeholder_start + (n_filas * n_cols * 10)
-            )
-            if not tabla_nueva:
-                print(f"  → OMITIDA: no se pudo localizar la tabla recién insertada")
+            # Releer para obtener el startIndex real de la tabla recién insertada
+            doc_tmp   = docs_service.documents().get(documentId=doc_id).execute()
+            tabla_tmp = _encontrar_tabla_cerca(doc_tmp.get("body", {}).get("content", []), inicio_bloque)
+            if not tabla_tmp:
                 omitidos.append({"alias": alias, "razon": "no se pudo localizar la tabla recién insertada"})
                 continue
-            print(f"  [8] Tabla nueva localizada en índice {tabla_nueva.get('startIndex')}")
+            tabla_start_real = tabla_tmp["startIndex"]
+
+            if merges:
+                # Aplicar merges de derecha a izquierda y de abajo hacia arriba.
+                # Cada merge se aplica con verificación post-merge: se relee la
+                # tabla y se confirma que el columnSpan esperado quedó aplicado;
+                # si no, se reintenta hasta MAX_REINTENTOS veces.
+                MAX_REINTENTOS = 3
+                merges_ordenados = sorted(merges, key=lambda m: (-m["min_row"], -m["min_col"]))
+
+                tabla_start_actual = tabla_start_real
+
+                for merge in merges_ordenados:
+                    aplicado = False
+                    for intento in range(1, MAX_REINTENTOS + 1):
+                        # Releer y localizar la tabla actual
+                        doc_m = docs_service.documents().get(documentId=doc_id).execute()
+                        tabla_m = _encontrar_tabla_cerca(doc_m.get("body", {}).get("content", []), inicio_bloque)
+                        if not tabla_m:
+                            print(f"[MERGE] No se encontró la tabla. Abortando merges restantes.")
+                            break
+                        tabla_start_actual = tabla_m["startIndex"]
+
+                        # Aplicar el merge
+                        try:
+                            docs_service.documents().batchUpdate(
+                                documentId=doc_id,
+                                body={"requests": [{
+                                    "mergeTableCells": {
+                                        "tableRange": {
+                                            "tableCellLocation": {
+                                                "tableStartLocation": {"index": tabla_start_actual},
+                                                "rowIndex":    merge["min_row"],
+                                                "columnIndex": merge["min_col"]
+                                            },
+                                            "rowSpan":    merge["row_span"],
+                                            "columnSpan": merge["col_span"]
+                                        }
+                                    }
+                                }]}
+                            ).execute()
+                        except Exception as e:
+                            print(f"[MERGE] Error al aplicar merge "
+                                  f"(row={merge['min_row']}, col={merge['min_col']}, "
+                                  f"rowSpan={merge['row_span']}, colSpan={merge['col_span']}): {e}")
+
+                        # Verificar que el merge se aplicó releyendo la tabla
+                        doc_v = docs_service.documents().get(documentId=doc_id).execute()
+                        tabla_v = _encontrar_tabla_cerca(doc_v.get("body", {}).get("content", []), inicio_bloque)
+                        if not tabla_v:
+                            break
+
+                        filas_v = tabla_v.get("tableRows", [])
+                        if merge["min_row"] >= len(filas_v):
+                            break
+
+                        # Recorrer celdas físicas hasta encontrar la columna lógica esperada
+                        celdas_v = filas_v[merge["min_row"]].get("tableCells", [])
+                        col_off = 0
+                        span_real = None
+                        for c in celdas_v:
+                            sp = c.get("tableCellStyle", {}).get("columnSpan", 1)
+                            if col_off == merge["min_col"]:
+                                span_real = sp
+                                break
+                            col_off += sp
+
+                        if span_real == merge["col_span"]:
+                            aplicado = True
+                            if intento > 1:
+                                print(f"[MERGE] OK tras {intento} intentos "
+                                      f"(row={merge['min_row']}, col={merge['min_col']}, "
+                                      f"colSpan={merge['col_span']})")
+                            break
+                        else:
+                            print(f"[MERGE] Reintento {intento}/{MAX_REINTENTOS}: "
+                                  f"se esperaba colSpan={merge['col_span']} en "
+                                  f"row={merge['min_row']}, col={merge['min_col']}; "
+                                  f"se obtuvo span_real={span_real}")
+
+                    if not aplicado:
+                        print(f"[MERGE] FALLO definitivo tras {MAX_REINTENTOS} intentos: "
+                              f"row={merge['min_row']}, col={merge['min_col']}, "
+                              f"colSpan={merge['col_span']}, rowSpan={merge['row_span']}")
+
+
+            # Releer DESPUÉS de aplicar los merges para obtener la estructura real post-merge
+            documento2 = docs_service.documents().get(documentId=doc_id).execute()
+            contenido2 = documento2.get("body", {}).get("content", [])
+            # Usar el último tabla_start_actual conocido para localizar la tabla correcta.
+            # Si no hubo merges, caer a tabla_start_real como referencia.
+            ref = tabla_start_actual if merges else tabla_start_real
+            tabla_nueva = _encontrar_tabla_cerca(contenido2, ref)
+            if not tabla_nueva:
+                omitidos.append({"alias": alias, "razon": "no se pudo localizar la tabla recién insertada"})
+                continue
+            print(f"[DEBUG2] tabla_nueva startIndex={tabla_nueva['startIndex']}, "
+                  f"ref={ref}, "
+                  f"filas={len(tabla_nueva.get('tableRows',[]))}, "
+                  f"cols_fila0={len(tabla_nueva.get('tableRows',[[]])[0].get('tableCells',[]))}")
 
             # -------------------------------------------------
-            # 9. Llenar la tabla con datos y aplicar formato
+            # 7. Llenar celdas con datos (de atrás hacia adelante).
+            #    Las filas con merges tienen menos celdas físicas;
+            #    se usa col_offset para mapear celda física → col Excel.
             # -------------------------------------------------
-            print(f"  [9] Aplicando contenido y formato...")
-            requests_formato = []
-            requests_formato += _generar_requests_contenido(tabla_nueva, df)
-            requests_formato += _generar_requests_formato(
-                tabla_nueva, formato_plantilla, n_filas, n_cols
-            )
+            todas_las_filas = [list(df.columns)] + df.values.tolist()
+            requests_texto  = []
 
-            if requests_formato:
-                docs_service.documents().batchUpdate(
-                    documentId=doc_id,
-                    body={"requests": requests_formato}
-                ).execute()
-            print(f"  [9] Formato aplicado ({len(requests_formato)} requests)")
+            for fi in range(len(todas_las_filas) - 1, -1, -1):
+                fila_doc   = tabla_nueva.get("tableRows", [])[fi]
+                fila_datos = todas_las_filas[fi]
+                celdas_doc = fila_doc.get("tableCells", [])
 
-            # -------------------------------------------------
-            # 10. Aplicar merges
-            # -------------------------------------------------
-            print(f"  [10] Aplicando merges...")
-            requests_merges = _generar_requests_merges(
-                tabla_nueva, formato_plantilla, n_filas, n_cols, n_cols_plantilla
-            )
-            for merge_request in requests_merges:
-                docs_service.documents().batchUpdate(
-                    documentId=doc_id,
-                    body={"requests": [merge_request]}
-                ).execute()
-            print(f"  [10] Merges aplicados ({len(requests_merges)})")
+                # Construir lista (celda_doc, col_excel) de atrás hacia adelante
+                pares = []
+                col_offset = 0
+                for celda in celdas_doc:
+                    span = celda.get("tableCellStyle", {}).get("columnSpan", 1)
+                    if celda.get("content"):  # omitir celdas absorbidas (content=[])
+                        pares.append((celda, col_offset))
+                    col_offset += span
 
-            # -------------------------------------------------
-            # 11. Eliminar plantilla y etiquetas
-            # -------------------------------------------------
-            print(f"  [11] Limpiando plantilla y etiquetas...")
-            documento3  = docs_service.documents().get(documentId=doc_id).execute()
-            contenido3  = documento3.get("body", {}).get("content", [])
-            texto3, mi3 = _extraer_texto_con_indices(contenido3)
+                for celda, col_excel in reversed(pares):
+                    texto = str(fila_datos[col_excel]) if col_excel < len(fila_datos) else ""
+                    if not texto or texto in ("nan", "None"):
+                        continue
 
-            match3 = patron_bloque.search(texto3)
-            if match3:
-                start3 = _idx(match3.start(), mi3)
-                end3   = _idx(match3.end() - 1, mi3)
-                tabla_plantilla3 = _encontrar_tabla_en_rango(contenido3, start3, end3)
+                    parrafos  = celda.get("content", [])
+                    elementos = parrafos[0].get("paragraph", {}).get("elements", []) if parrafos else []
+                    if not elementos:
+                        continue
 
-                requests_limpieza = []
-
-                pos_end_tag = texto3.find(
-                    "{%", match3.start(1) + len(match3.group(1)) - 1
-                )
-                if pos_end_tag != -1:
-                    requests_limpieza.append({
-                        "deleteContentRange": {
-                            "range": {
-                                "startIndex": _idx(pos_end_tag, mi3),
-                                "endIndex":   _idx(match3.end(), mi3)
-                            }
+                    idx_insercion = elementos[0].get("startIndex", 0)
+                    requests_texto.append({
+                        "insertText": {
+                            "location": {"index": idx_insercion},
+                            "text":     texto
                         }
                     })
 
-                if tabla_plantilla3:
-                    requests_limpieza.append({
-                        "deleteContentRange": {
-                            "range": {
-                                "startIndex": tabla_plantilla3["startIndex"],
-                                "endIndex":   tabla_plantilla3["endIndex"]
-                            }
-                        }
-                    })
+            # ── DEBUG TEMPORAL ─────────────────────────────────────────
+            print(f"\n[DEBUG] tabla_nueva tiene {len(tabla_nueva.get('tableRows',[]))} filas")
+            fila0 = tabla_nueva.get("tableRows", [])[0]
+            celdas0 = fila0.get("tableCells", [])
+            print(f"[DEBUG] Fila 0: {len(celdas0)} celdas físicas")
+            col_off = 0
+            for i, c in enumerate(celdas0):
+                span = c.get("tableCellStyle", {}).get("columnSpan", 1)
+                paras = c.get("content", [])
+                idx = paras[0].get("paragraph",{}).get("elements",[{}])[0].get("startIndex","?") if paras else "?"
+                txt_mapped = str(todas_las_filas[0][col_off]) if col_off < len(todas_las_filas[0]) else "OOB"
+                print(f"  celda[{i}]: span={span}, col_excel={col_off}, startIndex={idx}, texto_mapeado={repr(txt_mapped)}")
+                col_off += span
+            print(f"[DEBUG] requests_texto row0 entries:")
+            for r in requests_texto:
+                loc = r.get("insertText",{}).get("location",{}).get("index")
+                txt = r.get("insertText",{}).get("text","")
+                if txt in ("TENDIDOS","EQUIPOS","COORDENADAS","POSTE","CIMENTACIÓN","ARMADOS"):
+                    print(f"  insertText idx={loc} text={repr(txt)}")
+            # ── FIN DEBUG ───────────────────────────────────────────────
 
-                pos_start_tag_end = texto3.find("%}", match3.start()) + 2
-                requests_limpieza.append({
-                    "deleteContentRange": {
-                        "range": {
-                            "startIndex": _idx(match3.start(), mi3),
-                            "endIndex":   _idx(pos_start_tag_end, mi3)
-                        }
-                    }
-                })
+            if requests_texto:
+                docs_service.documents().batchUpdate(
+                    documentId=doc_id,
+                    body={"requests": requests_texto}
+                ).execute()
 
-                requests_limpieza.sort(
-                    key=lambda r: r["deleteContentRange"]["range"]["startIndex"],
-                    reverse=True
-                )
-                if requests_limpieza:
-                    docs_service.documents().batchUpdate(
-                        documentId=doc_id,
-                        body={"requests": requests_limpieza}
-                    ).execute()
-            print(f"  [11] Limpieza completada")
+            # -------------------------------------------------
+            # 6. Releer documento y aplicar formato del Excel
+            #    (negrita, color de fondo, color de fuente)
+            # -------------------------------------------------
+            if cell_formats:
+                documento3 = docs_service.documents().get(documentId=doc_id).execute()
+                contenido3 = documento3.get("body", {}).get("content", [])
+                tabla_fmt  = _encontrar_tabla_cerca(contenido3, ref)
+                if tabla_fmt:
+                    fmt_requests = _generar_requests_formato_excel(tabla_fmt, cell_formats)
+                    if fmt_requests:
+                        docs_service.documents().batchUpdate(
+                            documentId=doc_id,
+                            body={"requests": fmt_requests}
+                        ).execute()
 
             reemplazados.append({
                 "alias":   alias,
                 "n_filas": n_filas,
                 "n_cols":  n_cols
             })
-            print(f"  ✅ Tabla [{alias}] reemplazada exitosamente")
 
         except Exception as e:
             import traceback
-            print(f"  ❌ ERROR en tabla [{alias}]: {str(e)}")
             traceback.print_exc()
             omitidos.append({"alias": alias, "razon": f"error: {str(e)}"})
 
-    print(f"\n✅ Tablas reemplazadas: {len(reemplazados)}")
+    _log(f"✅ Tablas reemplazadas: {len(reemplazados)}")
     for r in reemplazados:
-        print(f"   {r['alias']} → {r['n_filas']} filas x {r['n_cols']} columnas")
+        _log(f"   {r['alias']} → {r['n_filas']} filas × {r['n_cols']} columnas")
 
     if omitidos:
-        print(f"⚠️  Tablas omitidas: {len(omitidos)}")
+        _log(f"⚠️  Tablas omitidas: {len(omitidos)}")
         for o in omitidos:
-            print(f"   {o['alias']} → {o['razon']}")
+            _log(f"   {o['alias']}: {o['razon']}")
 
     return {"reemplazados": reemplazados, "omitidos": omitidos}
 
 
 # ==============================
-<<<<<<< HEAD
-# TABLAS EN GOOGLE DOCS
-# ==============================
-
-def reemplazar_tablas(doc_id, tablas_data, docs_service):
-    """
-    Rellena tablas en un Google Doc con datos de DataFrames.
-
-    Detecta automáticamente cuáles filas son encabezado (fondo no blanco o
-    con formato especial) y cuáles son datos (fondo neutro, estructura uniforme).
-    Las filas de encabezado se preservan; las de datos se eliminan y se
-    regeneran a partir del DataFrame.
-
-    Convención de uso en la plantilla
-    ----------------------------------
-    Coloca el placeholder como único texto en la PRIMERA CELDA de la tabla:
-
-        ┌─────────────────────┬──────────┬──────────┐
-        │ {{ TABLA_DATOS_MT }}│  Col B   │  Col C   │  ← fila de encabezado
-        ├─────────────────────┼──────────┼──────────┤
-        │  (fila de datos)    │          │          │  ← se detecta y reemplaza
-        └─────────────────────┴──────────┴──────────┘
-
-    Args:
-        doc_id      (str):  ID del documento Google Docs.
-        tablas_data (dict): { placeholder: pd.DataFrame }
-                            ej: {"{{ TABLA_DATOS_MT }}": datos_iniciales_red_mt}
-        docs_service:       Servicio autenticado de Google Docs API.
-
-    Returns:
-        dict: {"reemplazados": [...], "omitidos": [...]}
-
-    Orden de ejecución recomendado en doc_filler.py
-    ------------------------------------------------
-        procesar_condicionales(...)   # 1
-        reemplazar_tablas(...)        # 2  ← antes que los demás
-        reemplazar_textos(...)        # 3
-        reemplazar_imagenes(...)      # 4
-    """
-    import pandas as pd
-
-    reemplazados = []
-    omitidos     = []
-
-    if not tablas_data:
-        print("ℹ️  No se proporcionaron tablas para reemplazar.")
-        return {"reemplazados": [], "omitidos": []}
-
-    for placeholder, df in tablas_data.items():
-
-        try:
-            # ------------------------------------------------------------------
-            # 1. Obtener documento fresco y localizar la tabla por placeholder
-            # ------------------------------------------------------------------
-            doc      = docs_service.documents().get(documentId=doc_id).execute()
-            contenido = doc.get("body", {}).get("content", [])
-
-            tabla_info = _encontrar_tabla_por_placeholder(contenido, placeholder)
-
-            if tabla_info is None:
-                omitidos.append({
-                    "placeholder": placeholder,
-                    "razon": "placeholder no encontrado en ninguna celda de la tabla"
-                })
-                continue
-
-            table_el, table_start_idx = tabla_info
-            filas   = table_el.get("tableRows", [])
-            n_filas = len(filas)
-            n_cols  = max(len(f.get("tableCells", [])) for f in filas) if filas else 0
-
-            # ------------------------------------------------------------------
-            # 2. Detectar cuántas filas son encabezado
-            # ------------------------------------------------------------------
-            n_header = _detectar_encabezados_gdoc(filas)
-
-            if n_header >= n_filas:
-                omitidos.append({
-                    "placeholder": placeholder,
-                    "razon": (
-                        f"todas las {n_filas} filas parecen encabezado. "
-                        "Agrega al menos una fila de datos de ejemplo en la plantilla."
-                    )
-                })
-                continue
-
-            # ------------------------------------------------------------------
-            # 3. Validar que las columnas del DataFrame coincidan con la tabla
-            # ------------------------------------------------------------------
-            if df.shape[1] != n_cols:
-                omitidos.append({
-                    "placeholder": placeholder,
-                    "razon": (
-                        f"el DataFrame tiene {df.shape[1]} columnas "
-                        f"pero la tabla tiene {n_cols}. Deben coincidir."
-                    )
-                })
-                continue
-
-            # ------------------------------------------------------------------
-            # 4. Eliminar filas de datos existentes (de abajo hacia arriba
-            #    para no desplazar los índices de filas superiores)
-            # ------------------------------------------------------------------
-            n_data_rows_originales = n_filas - n_header
-            if n_data_rows_originales > 0:
-                delete_requests = [
-                    {
-                        "deleteTableRow": {
-                            "tableCellLocation": {
-                                "tableStartLocation": {"index": table_start_idx},
-                                "rowIndex":    n_filas - 1 - i,
-                                "columnIndex": 0
-                            }
-                        }
-                    }
-                    for i in range(n_data_rows_originales)
-                ]
-                docs_service.documents().batchUpdate(
-                    documentId=doc_id,
-                    body={"requests": delete_requests}
-                ).execute()
-
-            # ------------------------------------------------------------------
-            # 5. Insertar filas vacías (una por fila del DataFrame)
-            #    Todas se insertan debajo de la última fila de encabezado.
-            #    Se acumulan en un solo batchUpdate para eficiencia.
-            # ------------------------------------------------------------------
-            if len(df) > 0:
-                insert_requests = [
-                    {
-                        "insertTableRow": {
-                            "tableCellLocation": {
-                                "tableStartLocation": {"index": table_start_idx},
-                                "rowIndex":    n_header - 1 + i,
-                                "columnIndex": 0
-                            },
-                            "insertBelow": True
-                        }
-                    }
-                    for i in range(len(df))
-                ]
-                docs_service.documents().batchUpdate(
-                    documentId=doc_id,
-                    body={"requests": insert_requests}
-                ).execute()
-
-            # ------------------------------------------------------------------
-            # 6. Re-obtener el documento con los índices actualizados
-            # ------------------------------------------------------------------
-            doc      = docs_service.documents().get(documentId=doc_id).execute()
-            contenido = doc.get("body", {}).get("content", [])
-            tabla_info = _encontrar_tabla_por_placeholder(contenido, placeholder)
-            if tabla_info is None:
-                # Fallback: buscar por posición aproximada
-                tabla_info = _encontrar_tabla_por_indice(contenido, table_start_idx)
-            if tabla_info is None:
-                omitidos.append({
-                    "placeholder": placeholder,
-                    "razon": "no se pudo relocalizar la tabla tras insertar filas"
-                })
-                continue
-
-            table_el, _ = tabla_info
-            filas_nuevas = table_el.get("tableRows", [])[n_header:]
-
-            # ------------------------------------------------------------------
-            # 7. Escribir valores en las celdas de las nuevas filas
-            #    Orden: de atrás hacia adelante (fila y columna) para no
-            #    desplazar los índices de celdas que aún no se han escrito.
-            # ------------------------------------------------------------------
-            text_requests = []
-
-            for row_idx in range(len(filas_nuevas) - 1, -1, -1):
-                df_row = df.iloc[row_idx]
-                celdas = filas_nuevas[row_idx].get("tableCells", [])
-
-                for col_idx in range(len(celdas) - 1, -1, -1):
-                    celda  = celdas[col_idx]
-                    valor  = df_row.iloc[col_idx]
-
-                    # El primer párrafo de la celda es el punto de inserción
-                    parrafos = celda.get("content", [])
-                    if not parrafos:
-                        continue
-                    primer_parrafo = parrafos[0].get("paragraph", {})
-                    elementos      = primer_parrafo.get("elements", [])
-                    if not elementos:
-                        continue
-
-                    insert_idx = elementos[0].get("startIndex")
-                    if insert_idx is None:
-                        continue
-
-                    # Convertir valor a string (respetar None / NaN → vacío)
-                    es_nulo = False
-                    try:
-                        es_nulo = pd.isna(valor)
-                    except (TypeError, ValueError):
-                        pass
-
-                    texto = "" if es_nulo else str(valor).strip()
-                    if texto.lower() in ("nan", "none"):
-                        texto = ""
-
-                    if texto:
-                        text_requests.append({
-                            "insertText": {
-                                "location": {"index": insert_idx},
-                                "text":     texto
-                            }
-                        })
-
-            if text_requests:
-                docs_service.documents().batchUpdate(
-                    documentId=doc_id,
-                    body={"requests": text_requests}
-                ).execute()
-
-            # ------------------------------------------------------------------
-            # 8. Limpiar el placeholder de la primera celda del encabezado
-            #    (replaceAllText lo reemplazará por "" en el paso de textos,
-            #    pero lo limpiamos aquí para consistencia)
-            # ------------------------------------------------------------------
-            docs_service.documents().batchUpdate(
-                documentId=doc_id,
-                body={"requests": [{
-                    "replaceAllText": {
-                        "containsText": {"text": placeholder, "matchCase": True},
-                        "replaceText":  ""
-                    }
-                }]}
-            ).execute()
-
-            reemplazados.append({
-                "placeholder":  placeholder,
-                "filas_datos":  len(df),
-                "columnas":     df.shape[1],
-                "n_encabezados": n_header,
-            })
-
-        except Exception as e:
-            omitidos.append({
-                "placeholder": placeholder,
-                "razon":       f"error inesperado: {str(e)}"
-            })
-
-    # Log de resultados
-    print(f"✅ Tablas reemplazadas: {len(reemplazados)}")
-    for r in reemplazados:
-        print(
-            f"   {r['placeholder']} → "
-            f"{r['filas_datos']} filas × {r['columnas']} cols  "
-            f"({r['n_encabezados']} fila(s) de encabezado preservada(s))"
-        )
-
-    if omitidos:
-        print(f"⚠️  Omitidos: {len(omitidos)}")
-        for o in omitidos:
-            print(f"   {o['placeholder']}: {o['razon']}")
-
-    return {"reemplazados": reemplazados, "omitidos": omitidos}
-
-
-# ── Helpers internos de tablas ────────────────────────────────────────────────
-
-def _encontrar_tabla_por_placeholder(contenido, placeholder):
-    """
-    Busca en todos los elementos del body la tabla que tenga el placeholder
-    en alguna de sus celdas. Devuelve (table_element, table_start_index) o None.
-    """
-    for elemento in contenido:
-        if "table" not in elemento:
-            continue
-        table     = elemento["table"]
-        start_idx = elemento.get("startIndex", 0)
-        for fila in table.get("tableRows", []):
-            for celda in fila.get("tableCells", []):
-                texto_celda = _texto_celda_gdoc(celda)
-                if placeholder in texto_celda:
-                    return table, start_idx
-    return None
-
-
-def _encontrar_tabla_por_indice(contenido, table_start_idx):
-    """
-    Localiza una tabla por su startIndex aproximado (útil tras insertar filas,
-    cuando el startIndex puede haber cambiado ligeramente).
-    Devuelve (table_element, table_start_index) o None.
-    """
-    mejor      = None
-    menor_dist = float("inf")
-    for elemento in contenido:
-        if "table" not in elemento:
-            continue
-        idx  = elemento.get("startIndex", 0)
-        dist = abs(idx - table_start_idx)
-        if dist < menor_dist:
-            menor_dist = dist
-            mejor      = (elemento["table"], idx)
-    return mejor
-
-
-def _texto_celda_gdoc(celda):
-    """Extrae el texto plano de todos los párrafos de una celda."""
-    partes = []
-    for bloque in celda.get("content", []):
-        for elem in bloque.get("paragraph", {}).get("elements", []):
-            partes.append(elem.get("textRun", {}).get("content", ""))
-    return "".join(partes)
-
-
-def _color_es_neutro(color):
-    """
-    Devuelve True si el color de fondo es neutro (blanco o sin definir).
-    La API devuelve colores como {red: float, green: float, blue: float} con 1.0 = blanco.
-    """
-    if not color:
-        return True
-    r = color.get("red",   1.0)
-    g = color.get("green", 1.0)
-    b = color.get("blue",  1.0)
-    # Considerar neutro si es blanco puro o muy cercano a él
-    return r >= 0.95 and g >= 0.95 and b >= 0.95
-
-
-def _detectar_encabezados_gdoc(filas):
-    """
-    Detecta cuántas filas al inicio de la tabla son encabezado.
-
-    Heurística (en orden de prioridad):
-      1. Si la celda tiene fondo no neutro  → fila de encabezado.
-      2. Si todas las celdas tienen texto en negrita → fila de encabezado.
-      3. En caso de empate, al menos 1 fila es siempre encabezado.
-
-    Devuelve el número de filas de encabezado (int ≥ 1).
-    """
-    n_header = 0
-
-    for fila in filas:
-        celdas = fila.get("tableCells", [])
-        es_encabezado = False
-
-        for celda in celdas:
-            # Criterio 1: color de fondo
-            bg = (
-                celda.get("tableCellStyle", {})
-                     .get("backgroundColor", {})
-                     .get("color", {})
-                     .get("rgbColor", {})
-            )
-            if not _color_es_neutro(bg):
-                es_encabezado = True
-                break
-
-            # Criterio 2: texto en negrita
-            for bloque in celda.get("content", []):
-                for elem in bloque.get("paragraph", {}).get("elements", []):
-                    estilo = elem.get("textRun", {}).get("textStyle", {})
-                    if estilo.get("bold"):
-                        es_encabezado = True
-                        break
-                if es_encabezado:
-                    break
-            if es_encabezado:
-                break
-
-        if es_encabezado:
-            n_header += 1
-        else:
-            break  # las filas de datos son contiguas desde aquí
-
-    return max(n_header, 1)  # mínimo 1 fila de encabezado siempre
-=======
 # HELPERS DE TABLAS
 # ==============================
 
 def _cargar_datos_tabla(url, sheet_name, drive_service, header_row=None):
     """
-    Descarga datos desde Excel en Drive o Google Sheets.
-
-    Estrategia de descarga:
-        1. Intenta get_media (para .xlsx subidos a Drive)
-        2. Si falla con 403/fileNotExportable, intenta export_media (para Sheets nativos)
-
-    Esto resuelve el caso en que la URL tiene 'docs.google.com/spreadsheets'
-    pero el archivo es un .xlsx subido (no un Google Sheets nativo).
-
-    Args:
-        url         (str): URL del archivo en Drive o Google Sheets.
-        sheet_name  (str): Nombre de la hoja. Si es None usa la primera.
-        drive_service:     Servicio autenticado de Google Drive API.
-        header_row  (int): Fila donde está el encabezado (1-based).
-                           Si es None asume fila 1.
+    Descarga datos, formato y merges desde un .xlsx en Drive o Google Sheets nativo.
+    Devuelve (df, cell_formats, merges):
+        df           : DataFrame con los datos (sin columnas fantasma)
+        cell_formats : { (fila_doc, col_excel): {bold, bg_color, font_color, font_size} }
+        merges       : [ {min_row, min_col, max_row, max_col} ] en coordenadas 0-based
+                       relativas al header_idx (fila_doc 0 = primera fila de la tabla)
     """
     import io
     import pandas as pd
+    import openpyxl
     from googleapiclient.http import MediaIoBaseDownload
     from googleapiclient.errors import HttpError
 
@@ -1324,12 +990,10 @@ def _cargar_datos_tabla(url, sheet_name, drive_service, header_row=None):
         fh.seek(0)
         return fh
 
-    # Intentar primero get_media (funciona con .xlsx subidos a Drive)
     try:
         fh = _descargar(drive_service.files().get_media(fileId=file_id))
     except HttpError as e:
-        if e.resp.status in (403, 400):
-            # El archivo es un Google Sheets nativo → usar export_media
+        if e.resp.status in (400, 403):
             fh = _descargar(drive_service.files().export_media(
                 fileId=file_id,
                 mimeType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -1337,363 +1001,207 @@ def _cargar_datos_tabla(url, sheet_name, drive_service, header_row=None):
         else:
             raise
 
-    # header es 0-based en pandas, header_row es 1-based
-    pandas_header = (header_row - 1) if header_row and header_row > 1 else 0
+    fh.seek(0)
+    wb = openpyxl.load_workbook(fh, data_only=True)
+    ws = wb[sheet_name] if sheet_name and sheet_name in wb.sheetnames else wb.active
 
-    if sheet_name:
-        df = pd.read_excel(fh, sheet_name=sheet_name, header=pandas_header)
-    else:
-        df = pd.read_excel(fh, header=pandas_header)
+    header_idx = (header_row - 1) if header_row and header_row > 1 else 0
 
-    # Convertir todo a string para inserción en Docs
+    # ── Detectar última columna real (ignorar columnas fantasma vacías) ───────
+    max_col_real = 0
+    for fila in ws.iter_rows():
+        for celda in fila:
+            val = celda.value
+            if val is not None and str(val).strip() not in ("", "'"):
+                max_col_real = max(max_col_real, celda.column)
+    if max_col_real == 0:
+        max_col_real = ws.max_column
+
+    # ── Extraer datos (solo hasta max_col_real) ───────────────────────────────
+    filas_excel = list(ws.iter_rows(min_row=header_idx + 1, max_col=max_col_real, values_only=False))
+    encabezados = [str(c.value) if c.value is not None else "" for c in filas_excel[0]]
+    datos_filas = []
+    for fila in filas_excel[1:]:
+        datos_filas.append([str(c.value) if c.value is not None else "" for c in fila])
+
+    df = pd.DataFrame(datos_filas, columns=encabezados)
     df = df.fillna("").astype(str)
-    return df
 
-
-
-def _encontrar_tabla_en_rango(contenido, start_idx, end_idx):
-    """
-    Busca la primera tabla en el contenido del documento
-    cuyo startIndex esté dentro del rango dado.
-    Retorna el objeto tabla con startIndex y endIndex agregados.
-
-    Si start_idx o end_idx son None, usa un rango amplio para
-    no descartar tablas válidas.
-    """
-    # Si los índices son inválidos, usar rango máximo posible
-    if start_idx is None:
-        start_idx = 0
-    if end_idx is None:
-        end_idx = 9999999
-
-    for elemento in contenido:
-        if "table" in elemento:
-            elem_start = elemento.get("startIndex", 0)
-            elem_end   = elemento.get("endIndex", 0)
-            if start_idx <= elem_start <= end_idx:
-                tabla = elemento["table"]
-                tabla["startIndex"] = elem_start
-                tabla["endIndex"]   = elem_end
-                return tabla
-    return None
-
-
-def _extraer_formato_plantilla(tabla):
-    """
-    Extrae el formato completo de la tabla plantilla celda por celda.
-
-    Retorna:
-        {
-            "n_cols": int,
-            "n_rows": int,
-            "celdas": {
-                (fila, col): {
-                    "background":  color dict o None,
-                    "borders":     dict con top/bottom/left/right,
-                    "text_style":  dict con bold, italic, fontSize, etc.,
-                    "alignment":   str,
-                    "row_span":    int,
-                    "col_span":    int,
-                }
-            }
-        }
-    """
-    filas  = tabla.get("tableRows", [])
-    n_rows = len(filas)
-    n_cols = tabla.get("columns", 0)
-    celdas = {}
-
-    for fi, fila in enumerate(filas):
-        for ci, celda in enumerate(fila.get("tableCells", [])):
-            estilo_celda = celda.get("tableCellStyle", {})
+    # ── Extraer formato (solo hasta max_col_real) ─────────────────────────────
+    cell_formats = {}
+    for doc_ri, fila in enumerate(filas_excel):
+        for ci, celda in enumerate(fila):
+            if ci >= max_col_real:
+                break
+            fmt = {}
 
             # Color de fondo
-            bg = estilo_celda.get("backgroundColor", {}).get("color", {}).get("rgbColor")
+            fill = celda.fill
+            if fill and fill.fill_type not in (None, "none"):
+                color = fill.fgColor
+                if color and color.type == "rgb" and color.rgb not in ("00000000", "FFFFFFFF", "FF000000"):
+                    fmt["bg_color"] = _hex_argb_a_rgb_float(color.rgb)
 
-            # Bordes
-            bordes = {}
-            for lado in ["borderTop", "borderBottom", "borderLeft", "borderRight"]:
-                borde = estilo_celda.get(lado, {})
-                bordes[lado] = {
-                    "color": borde.get("color", {}).get("color", {}).get("rgbColor"),
-                    "width": borde.get("width", {}).get("magnitude", 1),
-                    "unit":  borde.get("width", {}).get("unit", "PT"),
-                    "dashStyle": borde.get("dashStyle", "SOLID")
-                }
+            # Negrita
+            if celda.font and celda.font.bold:
+                fmt["bold"] = True
 
-            # Formato de texto (del primer run del primer párrafo)
-            text_style = {}
-            parrafos   = celda.get("content", [])
-            alineacion = "START"
-            if parrafos:
-                primer_parrafo = parrafos[0].get("paragraph", {})
-                alineacion     = primer_parrafo.get("paragraphStyle", {}).get("alignment", "START")
-                elementos      = primer_parrafo.get("elements", [])
-                if elementos:
-                    ts = elementos[0].get("textRun", {}).get("textStyle", {})
-                    text_style = {
-                        "bold":          ts.get("bold", False),
-                        "italic":        ts.get("italic", False),
-                        "underline":     ts.get("underline", False),
-                        "fontSize":      ts.get("fontSize", {}).get("magnitude", 11),
-                        "fontSizeUnit":  ts.get("fontSize", {}).get("unit", "PT"),
-                        "foregroundColor": ts.get("foregroundColor", {})
-                                           .get("color", {}).get("rgbColor"),
-                        "weightedFontFamily": ts.get("weightedFontFamily", {})
-                                               .get("fontFamily", "Arial")
-                    }
+            # Tamaño de fuente (solo si está definido explícitamente)
+            if celda.font and celda.font.size:
+                fmt["font_size"] = float(celda.font.size)
 
-            # Merges
-            row_span = celda.get("tableCellStyle", {}).get("rowSpan", 1)
-            col_span = celda.get("tableCellStyle", {}).get("columnSpan", 1)
+            # Color de fuente (solo si no es negro por defecto)
+            if celda.font and celda.font.color:
+                fc = celda.font.color
+                if fc.type == "rgb" and fc.rgb not in ("00000000", "FF000000"):
+                    fmt["font_color"] = _hex_argb_a_rgb_float(fc.rgb)
 
-            celdas[(fi, ci)] = {
-                "background": bg,
-                "borders":    bordes,
-                "text_style": text_style,
-                "alignment":  alineacion,
-                "row_span":   row_span,
-                "col_span":   col_span,
-            }
+            if fmt:
+                cell_formats[(doc_ri, ci)] = fmt
 
-    return {"n_rows": n_rows, "n_cols": n_cols, "celdas": celdas}
+    # ── Extraer merges (ajustados a header_idx y recortados a max_col_real) ───
+    merges = []
+    for rng in ws.merged_cells.ranges:
+        # Convertir a 0-based y relativos a header_idx
+        doc_min_row = rng.min_row - 1 - header_idx
+        doc_max_row = rng.max_row - 1 - header_idx
+        min_col     = rng.min_col - 1
+        max_col     = min(rng.max_col - 1, max_col_real - 1)
+        # Solo incluir merges dentro del rango visible
+        if doc_min_row >= 0 and min_col < max_col_real:
+            merges.append({
+                "min_row":  doc_min_row,
+                "max_row":  doc_max_row,
+                "min_col":  min_col,
+                "max_col":  max_col,
+                "row_span": doc_max_row - doc_min_row + 1,
+                "col_span": max_col - min_col + 1,
+            })
+
+    return df, cell_formats, merges
 
 
-def _get_formato_celda(formato_plantilla, fila, col):
+def _hex_argb_a_rgb_float(hex_argb):
+    """Convierte 'FF00FF00' → {'red': 0.0, 'green': 1.0, 'blue': 0.0}"""
+    hex_rgb = hex_argb[-6:]
+    r = int(hex_rgb[0:2], 16) / 255
+    g = int(hex_rgb[2:4], 16) / 255
+    b = int(hex_rgb[4:6], 16) / 255
+    return {"red": round(r, 4), "green": round(g, 4), "blue": round(b, 4)}
+
+
+def _generar_requests_formato_excel(tabla_nueva, cell_formats):
     """
-    Retorna el formato para una celda dada.
-    Si está fuera del rango de la plantilla, usa la última celda disponible.
+    Genera requests de updateTableCellStyle y updateTextStyle.
+    Mapea (fila_doc, col_doc_ajustado) → celda del Doc, teniendo en cuenta
+    que las filas con merges tienen menos celdas físicas.
     """
-    celdas       = formato_plantilla["celdas"]
-    n_rows_plant = formato_plantilla["n_rows"]
-    n_cols_plant = formato_plantilla["n_cols"]
+    requests  = []
+    tabla_id  = tabla_nueva.get("startIndex", 0)
+    filas_doc = tabla_nueva.get("tableRows", [])
 
-    fi_ref = min(fila, n_rows_plant - 1)
-    ci_ref = min(col,  n_cols_plant - 1)
+    for (fi, ci_excel), fmt in cell_formats.items():
+        if fi >= len(filas_doc):
+            continue
 
-    return celdas.get((fi_ref, ci_ref), {})
+        # Resolver el índice de celda física en el Doc teniendo en cuenta merges
+        # Cada celda puede tener colSpan > 1, lo que desplaza el ci real
+        celdas_doc = filas_doc[fi].get("tableCells", [])
+        celda_doc  = None
+        ci_doc     = None
+        col_offset = 0
+        for idx, c in enumerate(celdas_doc):
+            span = c.get("tableCellStyle", {}).get("columnSpan", 1)
+            if col_offset == ci_excel:
+                if c.get("content"):  # omitir celdas absorbidas (content=[])
+                    celda_doc = c
+                    ci_doc    = idx
+                break
+            col_offset += span
 
+        if celda_doc is None:
+            continue
 
-def _generar_requests_contenido(tabla_nueva, df):
-    """
-    Genera requests para llenar la tabla con los datos del DataFrame.
-    Primera fila = encabezados, resto = datos.
-    """
-    requests = []
-    filas    = tabla_nueva.get("tableRows", [])
-
-    todas_las_filas = [list(df.columns)] + df.values.tolist()
-
-    for fi, (fila_doc, fila_datos) in enumerate(zip(filas, todas_las_filas)):
-        celdas_doc = fila_doc.get("tableCells", [])
-        for ci, (celda_doc, valor) in enumerate(zip(celdas_doc, fila_datos)):
-            texto = str(valor)
-            if not texto:  # saltar celdas vacías — la API rechaza insertText con texto=""
-                continue
-
-            parrafos = celda_doc.get("content", [])
-            if not parrafos:
-                continue
-            primer_parrafo = parrafos[0].get("paragraph", {})
-            elementos      = primer_parrafo.get("elements", [])
-            if not elementos:
-                continue
-            idx_insercion = elementos[0].get("startIndex", 0)
-
+        # ── Color de fondo ───────────────────────────────────────────────────
+        if "bg_color" in fmt:
+            col_span = celda_doc.get("tableCellStyle", {}).get("columnSpan", 1)
             requests.append({
-                "insertText": {
-                    "location": {"index": idx_insercion},
-                    "text":     texto
+                "updateTableCellStyle": {
+                    "tableRange": {
+                        "tableCellLocation": {
+                            "tableStartLocation": {"index": tabla_id},
+                            "rowIndex":    fi,
+                            "columnIndex": ci_excel
+                        },
+                        "rowSpan":    1,
+                        "columnSpan": col_span
+                    },
+                    "tableCellStyle": {
+                        "backgroundColor": {
+                            "color": {"rgbColor": fmt["bg_color"]}
+                        }
+                    },
+                    "fields": "backgroundColor"
                 }
             })
 
-    return requests
+        # ── Texto: negrita, tamaño, color ────────────────────────────────────
+        text_style  = {}
+        text_fields = []
 
-def _generar_requests_formato(tabla_nueva, formato_plantilla, n_filas, n_cols):
-    """
-    Genera requests para aplicar formato a cada celda de la tabla nueva.
-    """
-    requests = []
-    filas    = tabla_nueva.get("tableRows", [])
-    tabla_id = tabla_nueva.get("startIndex", 0)
+        if fmt.get("bold"):
+            text_style["bold"] = True
+            text_fields.append("bold")
 
-    for fi, fila_doc in enumerate(filas):
-        for ci, celda_doc in enumerate(fila_doc.get("tableCells", [])):
-            fmt = _get_formato_celda(formato_plantilla, fi, ci)
-            if not fmt:
-                continue
+        if "font_size" in fmt:
+            text_style["fontSize"] = {"magnitude": fmt["font_size"], "unit": "PT"}
+            text_fields.append("fontSize")
 
-            start_celda = celda_doc.get("startIndex", 0)
-            end_celda   = celda_doc.get("endIndex", 0)
+        if "font_color" in fmt:
+            text_style["foregroundColor"] = {
+                "color": {"rgbColor": fmt["font_color"]}
+            }
+            text_fields.append("foregroundColor")
 
-            # Formato de celda (fondo y bordes)
-            cell_style     = {}
-            cell_style_fields = []
-
-            if fmt.get("background"):
-                cell_style["backgroundColor"] = {"color": {"rgbColor": fmt["background"]}}
-                cell_style_fields.append("backgroundColor")
-
-            bordes = fmt.get("borders", {})
-            for lado, key in [
-                ("borderTop",    "borderTop"),
-                ("borderBottom", "borderBottom"),
-                ("borderLeft",   "borderLeft"),
-                ("borderRight",  "borderRight")
-            ]:
-                b = bordes.get(lado, {})
-                if b:
-                    cell_style[key] = {
-                        "color":     {"color": {"rgbColor": b.get("color") or {"red": 0, "green": 0, "blue": 0}}},
-                        "width":     {"magnitude": b.get("width", 1), "unit": b.get("unit", "PT")},
-                        "dashStyle": b.get("dashStyle", "SOLID")
-                    }
-                    cell_style_fields.append(key)
-
-            if cell_style:
-                requests.append({
-                    "updateTableCellStyle": {
-                        "tableRange": {
-                            "tableCellLocation": {
-                                "tableStartLocation": {"index": tabla_id},
-                                "rowIndex":    fi,
-                                "columnIndex": ci
-                            },
-                            "rowSpan":    1,
-                            "columnSpan": 1
-                        },
-                        "tableCellStyle": cell_style,
-                        "fields": ",".join(cell_style_fields)
-                    }
-                })
-
-            # Formato de texto
-            ts = fmt.get("text_style", {})
-            if ts:
-                parrafos  = celda_doc.get("content", [])
-                elementos = parrafos[0].get("paragraph", {}).get("elements", []) if parrafos else []
-                if elementos:
-                    ts_start = elementos[0].get("startIndex", 0)
-                    ts_end   = celda_doc.get("endIndex", 0) - 1
-
-                    text_style     = {}
-                    text_fields    = []
-
-                    if ts.get("bold") is not None:
-                        text_style["bold"] = ts["bold"]
-                        text_fields.append("bold")
-                    if ts.get("italic") is not None:
-                        text_style["italic"] = ts["italic"]
-                        text_fields.append("italic")
-                    if ts.get("underline") is not None:
-                        text_style["underline"] = ts["underline"]
-                        text_fields.append("underline")
-                    if ts.get("fontSize"):
-                        text_style["fontSize"] = {
-                            "magnitude": ts["fontSize"],
-                            "unit":      ts.get("fontSizeUnit", "PT")
-                        }
-                        text_fields.append("fontSize")
-                    if ts.get("foregroundColor"):
-                        text_style["foregroundColor"] = {
-                            "color": {"rgbColor": ts["foregroundColor"]}
-                        }
-                        text_fields.append("foregroundColor")
-                    if ts.get("weightedFontFamily"):
-                        text_style["weightedFontFamily"] = {
-                            "fontFamily": ts["weightedFontFamily"]
-                        }
-                        text_fields.append("weightedFontFamily")
-
-                    if text_style and ts_start < ts_end:
-                        requests.append({
-                            "updateTextStyle": {
-                                "range": {
-                                    "startIndex": ts_start,
-                                    "endIndex":   ts_end
-                                },
-                                "textStyle": text_style,
-                                "fields":    ",".join(text_fields)
-                            }
-                        })
-
-            # Alineación de párrafo
-            alineacion = fmt.get("alignment")
-            if alineacion and parrafos:
-                p_start = parrafos[0].get("paragraph", {}).get("elements", [{}])[0].get("startIndex", 0)
-                p_end   = celda_doc.get("endIndex", 0) - 1
-                if p_start < p_end:
+        if text_style:
+            parrafos  = celda_doc.get("content", [])
+            elementos = parrafos[0].get("paragraph", {}).get("elements", []) if parrafos else []
+            if elementos:
+                ts_start = elementos[0].get("startIndex", 0)
+                ts_end   = celda_doc.get("endIndex", 0) - 1
+                if ts_start < ts_end:
                     requests.append({
-                        "updateParagraphStyle": {
+                        "updateTextStyle": {
                             "range": {
-                                "startIndex": p_start,
-                                "endIndex":   p_end
+                                "startIndex": ts_start,
+                                "endIndex":   ts_end
                             },
-                            "paragraphStyle": {"alignment": alineacion},
-                            "fields": "alignment"
+                            "textStyle": text_style,
+                            "fields":    ",".join(text_fields)
                         }
                     })
 
     return requests
 
 
-def _generar_requests_merges(tabla_nueva, formato_plantilla, n_filas, n_cols, n_cols_plantilla):
+def _encontrar_tabla_cerca(contenido, indice_referencia):
     """
-    Genera requests de merge aplicando las reglas:
-    - Merge de fila completa → abarca todas las columnas de la tabla nueva
-    - Merge parcial → replica en las mismas posiciones, columnas extra independientes
+    Encuentra la tabla cuyo startIndex esté más cercano (y no antes) al índice dado.
     """
-    requests  = []
-    celdas    = formato_plantilla["celdas"]
-    tabla_id  = tabla_nueva.get("startIndex", 0)
-
-    celdas_procesadas = set()
-
-    for (fi, ci), fmt in celdas.items():
-        col_span = fmt.get("col_span", 1)
-        row_span = fmt.get("row_span", 1)
-
-        if col_span <= 1 and row_span <= 1:
+    mejor     = None
+    menor_dist = float("inf")
+    for elemento in contenido:
+        if "table" not in elemento:
             continue
-        if (fi, ci) in celdas_procesadas:
-            continue
-
-        # Determinar si es merge de fila completa
-        es_fila_completa = (col_span >= n_cols_plantilla)
-
-        col_span_final = n_cols if es_fila_completa else col_span
-        row_span_final = min(row_span, n_filas - fi)
-
-        # Validar que el merge cabe en la tabla nueva
-        if ci + col_span_final > n_cols:
-            col_span_final = n_cols - ci
-        if fi + row_span_final > n_filas:
-            row_span_final = n_filas - fi
-
-        if col_span_final <= 1 and row_span_final <= 1:
-            continue
-
-        requests.append({
-            "mergeTableCells": {
-                "tableRange": {
-                    "tableCellLocation": {
-                        "tableStartLocation": {"index": tabla_id},
-                        "rowIndex":    fi,
-                        "columnIndex": ci
-                    },
-                    "rowSpan":    row_span_final,
-                    "columnSpan": col_span_final
-                }
-            }
-        })
-
-        # Marcar celdas cubiertas por este merge como procesadas
-        for r in range(fi, fi + row_span_final):
-            for c in range(ci, ci + col_span_final):
-                celdas_procesadas.add((r, c))
-
-    return requests
->>>>>>> fc02f53c940000fc9118f61a6695063378b5a32d
+        start = elemento.get("startIndex", 0)
+        dist  = abs(start - indice_referencia)
+        if dist < menor_dist:
+            menor_dist = dist
+            tabla      = elemento["table"]
+            tabla["startIndex"] = start
+            tabla["endIndex"]   = elemento.get("endIndex", 0)
+            mejor = tabla
+    return mejor
 
 
 # ==============================
