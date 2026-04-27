@@ -18,20 +18,25 @@ from autodocs import funciones_docs
 
 # ==============================
 # CONFIGURACIÓN
+# Reemplaza cada URL con el enlace de compartir del archivo en Drive
+# (clic derecho → Compartir → Copiar enlace)
+#
+# NOTA: No hay URL_TABLAS global. Cada parámetro de tipo 'tabla' debe
+# tener su propia URL en la columna 'Valor' del diccionario, lo que
+# permite que cada tabla apunte a un Excel distinto.
 # ==============================
 
-# ID del Excel con el diccionario de datos (en Drive)
-EXCEL_FILE_ID = "1t9utg6qjm4KG9tQec6DzwoR0SYuUy53o"
+# Excel con el diccionario de datos
+URL_DICCIONARIO = "https://docs.google.com/spreadsheets/d/14VDGM9Yg0YyHByRdFT3526CmMbB-Ur4d/edit?usp=drive_link&ouid=109812277537374132162&rtpof=true&sd=true"
 
-# URL o ID del documento plantilla en Drive
-URL_PLANTILLA = "https://docs.google.com/document/d/15gUhRpMmIXnj8mgUlOBMwZKqjH7kfZ1jC2Q5sElpg4o/edit"
+# Documento plantilla de Google Docs
+URL_PLANTILLA = "https://docs.google.com/document/d/1s2k-y_WqI0HZhA10gaSgSj6RN_5sN5RTVyQ58INydv4/edit?usp=drive_link"
 
-# URL o ID de la carpeta donde se guardará la copia generada
-# Debe ser una carpeta en tu Drive personal a la que tengas acceso
-URL_CARPETA_DESTINO = "https://drive.google.com/drive/folders/1zUPZXuCLZyA63EK0HkzirBXY0Vw6CQkX"
+# Carpeta donde se guardará el documento generado
+URL_CARPETA_DESTINO = "https://drive.google.com/drive/folders/1zUPZXuCLZyA63EK0HkzirBXY0Vw6CQkX?usp=drive_link"
 
 # Nombre del documento generado
-NOMBRE_DOCUMENTO = "Declaración de Cumplimiento - Generado"
+NOMBRE_DOCUMENTO = "Plantilla proyecto de redes"
 
 
 # ==============================
@@ -71,15 +76,27 @@ def main():
         # 1. Autenticación OAuth2 con tu cuenta de Google
         #    Lee GOOGLE_OAUTH_CLIENT desde variables de entorno
         docs_service, drive_service, sheets_service = funciones_docs.autenticar_oauth()
-        print("✅ Autenticación exitosa")
+        print("Autenticacion exitosa")
 
-        # 2. Descargar el Excel desde Drive
-        archivo_excel = funciones_docs.descargar_excel_drive(EXCEL_FILE_ID, drive_service)
-        print("✅ Archivo Excel descargado desde Drive")
+        # 2. Descargar el Excel del diccionario desde Drive
+        file_id_diccionario = funciones_docs.extraer_id_gdoc(URL_DICCIONARIO)
+        archivo_excel = funciones_docs.descargar_excel_drive(file_id_diccionario, drive_service)
+        print("Diccionario descargado desde Drive")
 
         # 3. Construir el diccionario unificado
+        #    Cada entrada de tipo 'tabla' debe tener su URL en la columna 'Valor'
         diccionario = funciones_docs.cargar_diccionario(archivo_excel)
-        print("✅ Diccionario cargado correctamente")
+        print("Diccionario cargado correctamente")
+
+        # DEBUG TEMPORAL
+        tablas_con_valor = {k: v for k, v in diccionario.items() 
+                            if v.get("type") == "table" and v.get("value") is not None}
+        tablas_sin_valor = {k: v for k, v in diccionario.items() 
+                            if v.get("type") == "table" and v.get("value") is None}
+        print(f"DEBUG: tablas con URL: {len(tablas_con_valor)}")
+        print(f"DEBUG: tablas sin URL: {len(tablas_sin_valor)}")
+        for alias, entrada in list(tablas_con_valor.items())[:3]:
+            print(f"  {alias} | {str(entrada['value'])[:80]}")
 
         # 4. Extraer IDs desde las URLs
         doc_id_plantilla   = funciones_docs.extraer_id_gdoc(URL_PLANTILLA)
@@ -92,7 +109,7 @@ def main():
             drive_service      = drive_service,
             carpeta_destino_id = carpeta_destino_id
         )
-        print(f"✅ Copia creada con ID: {doc_id_nuevo}")
+        print(f"Copia creada con ID: {doc_id_nuevo}")
 
         # 6. Procesar condicionales ({% if %}...{% endif %})
         #    Debe ejecutarse ANTES del reemplazo de texto y tablas
@@ -110,13 +127,21 @@ def main():
         # 9. Reemplazar imágenes en la copia
         resultado_imagen = funciones_docs.reemplazar_imagenes(doc_id_nuevo, diccionario, docs_service, drive_service)
 
+<<<<<<< HEAD
         print("\n✅ Proceso completado")
         print(f"   Tablas reemplazadas:   {len(resultado_tabla['reemplazados'])}")
+=======
+        # 9. Reemplazar tablas en la copia
+        resultado_tabla = funciones_docs.reemplazar_tablas(doc_id_nuevo, diccionario, docs_service, drive_service)
+
+        print("\nProceso completado")
+>>>>>>> fc02f53c940000fc9118f61a6695063378b5a32d
         print(f"   Textos reemplazados:   {len(resultado_texto['reemplazados'])}")
-        print(f"   Imágenes reemplazadas: {len(resultado_imagen['reemplazados'])}")
+        print(f"   Imagenes reemplazadas: {len(resultado_imagen['reemplazados'])}")
+        print(f"   Tablas reemplazadas:   {len(resultado_tabla['reemplazados'])}")
 
     except Exception as e:
-        print("❌ ERROR:")
+        print("ERROR:")
         print(e)
 
 

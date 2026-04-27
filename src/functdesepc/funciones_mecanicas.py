@@ -4672,7 +4672,6 @@ def agregar_coordenada_z(
 
 
 
-
 def agregar_origen(
     carac_postes,
     postes_orden,
@@ -4689,6 +4688,7 @@ def agregar_origen(
     Lógica:
         - Si existe un poste anterior con vano > 0, se traza la línea entre ambos
           y se calcula el ángulo mínimo respecto a los 4 semiejes (N, S, E, O).
+        - El origen es la dirección desde la que llega la línea (opuesto al avance).
         - Si no existe poste anterior (primer poste de una ruta), se toma el
           origen del poste siguiente.
 
@@ -4706,16 +4706,15 @@ def agregar_origen(
     """
 
     SEMIEJES = {
-        "E": 0,          # eje X positivo
-        "N": 90,         # eje Y positivo
-        "O": 180,        # eje X negativo
-        "S": 270,        # eje Y negativo
+        "E": 0,
+        "N": 90,
+        "O": 180,
+        "S": 270,
     }
 
     def angulo_minimo_cardinal(dx, dy):
         """
         Calcula el cardinal cuyo semieje forma el menor ángulo con el vector (dx, dy).
-        Considera tanto el ángulo normal como el negativo (sentido horario).
         """
         angulo_vec = math.degrees(math.atan2(dy, dx)) % 360
 
@@ -4723,11 +4722,8 @@ def agregar_origen(
         cardinal = None
 
         for c, ref in SEMIEJES.items():
-            # Ángulo normal (antihorario)
-            diff_normal = abs((angulo_vec - ref + 180) % 360 - 180)
-            # Ángulo negativo (horario)
+            diff_normal  = abs((angulo_vec - ref + 180) % 360 - 180)
             diff_horario = abs((ref - angulo_vec + 180) % 360 - 180)
-            # Mínimo entre ambos
             diff = min(diff_normal, diff_horario)
 
             if min_ang is None or diff < min_ang:
@@ -4737,29 +4733,27 @@ def agregar_origen(
         return cardinal
 
     # Resetear índices para alineación posicional
-    postes_exp  = postes_export.reset_index(drop=True)
-    x_exp       = x_export.reset_index(drop=True)
-    y_exp       = y_export.reset_index(drop=True)
-    vano_exp    = vano_adelante_export.reset_index(drop=True)
+    postes_exp = postes_export.reset_index(drop=True)
+    x_exp      = x_export.reset_index(drop=True)
+    y_exp      = y_export.reset_index(drop=True)
+    vano_exp   = vano_adelante_export.reset_index(drop=True)
 
     n = len(postes_exp)
-
-    # Calcular origen en orden de exportación
     origen_export = [None] * n
 
     for i in range(n):
-        # Buscar poste anterior con vano válido hacia el actual
         if i > 0 and not pd.isna(vano_exp.iloc[i - 1]) and vano_exp.iloc[i - 1] != 0:
-            dx = x_exp.iloc[i] - x_exp.iloc[i - 1]
-            dy = y_exp.iloc[i] - y_exp.iloc[i - 1]
+            # CORRECCIÓN: vector desde el poste actual hacia el anterior
+            # (de dónde viene la línea, no hacia dónde va)
+            dx = x_exp.iloc[i - 1] - x_exp.iloc[i]
+            dy = y_exp.iloc[i - 1] - y_exp.iloc[i]
             origen_export[i] = angulo_minimo_cardinal(dx, dy)
         else:
-            origen_export[i] = None  # sin poste anterior válido, se resuelve después
+            origen_export[i] = None
 
     # Resolver postes sin origen anterior: tomar el origen del siguiente
     for i in range(n - 1, -1, -1):
         if origen_export[i] is None:
-            # Buscar hacia adelante el primer origen disponible
             for j in range(i + 1, n):
                 if origen_export[j] is not None:
                     origen_export[i] = origen_export[j]
@@ -4775,7 +4769,9 @@ def agregar_origen(
 
     return carac_postes
 
-    
+
+
+
 
 def formatear_float(v):
     try:
