@@ -592,6 +592,380 @@ def reemplazar_imagenes(doc_id, diccionario, docs_service, drive_service):
 
 
 # ==============================
+# TABLAS EN GOOGLE DOCS
+# ==============================
+
+def reemplazar_tablas(doc_id, tablas_data, docs_service):
+    """
+    Rellena tablas en un Google Doc con datos de DataFrames.
+
+    Detecta automáticamente cuáles filas son encabezado (fondo no blanco o
+    con formato especial) y cuáles son datos (fondo neutro, estructura uniforme).
+    Las filas de encabezado se preservan; las de datos se eliminan y se
+    regeneran a partir del DataFrame.
+
+    Convención de uso en la plantilla
+    ----------------------------------
+    Coloca el placeholder como único texto en la PRIMERA CELDA de la tabla:
+
+        ┌─────────────────────┬──────────┬──────────┐
+        │ {{ TABLA_DATOS_MT }}│  Col B   │  Col C   │  ← fila de encabezado
+        ├─────────────────────┼──────────┼──────────┤
+        │  (fila de datos)    │          │          │  ← se detecta y reemplaza
+        └─────────────────────┴──────────┴──────────┘
+
+    Args:
+        doc_id      (str):  ID del documento Google Docs.
+        tablas_data (dict): { placeholder: pd.DataFrame }
+                            ej: {"{{ TABLA_DATOS_MT }}": datos_iniciales_red_mt}
+        docs_service:       Servicio autenticado de Google Docs API.
+
+    Returns:
+        dict: {"reemplazados": [...], "omitidos": [...]}
+
+    Orden de ejecución recomendado en doc_filler.py
+    ------------------------------------------------
+        procesar_condicionales(...)   # 1
+        reemplazar_tablas(...)        # 2  ← antes que los demás
+        reemplazar_textos(...)        # 3
+        reemplazar_imagenes(...)      # 4
+    """
+    import pandas as pd
+
+    reemplazados = []
+    omitidos     = []
+
+    if not tablas_data:
+        print("ℹ️  No se proporcionaron tablas para reemplazar.")
+        return {"reemplazados": [], "omitidos": []}
+
+    for placeholder, df in tablas_data.items():
+
+        try:
+            # ------------------------------------------------------------------
+            # 1. Obtener documento fresco y localizar la tabla por placeholder
+            # ------------------------------------------------------------------
+            doc      = docs_service.documents().get(documentId=doc_id).execute()
+            contenido = doc.get("body", {}).get("content", [])
+
+            tabla_info = _encontrar_tabla_por_placeholder(contenido, placeholder)
+
+            if tabla_info is None:
+                omitidos.append({
+                    "placeholder": placeholder,
+                    "razon": "placeholder no encontrado en ninguna celda de la tabla"
+                })
+                continue
+
+            table_el, table_start_idx = tabla_info
+            filas   = table_el.get("tableRows", [])
+            n_filas = len(filas)
+            n_cols  = max(len(f.get("tableCells", [])) for f in filas) if filas else 0
+
+            # ------------------------------------------------------------------
+            # 2. Detectar cuántas filas son encabezado
+            # ------------------------------------------------------------------
+            n_header = _detectar_encabezados_gdoc(filas)
+
+            if n_header >= n_filas:
+                omitidos.append({
+                    "placeholder": placeholder,
+                    "razon": (
+                        f"todas las {n_filas} filas parecen encabezado. "
+                        "Agrega al menos una fila de datos de ejemplo en la plantilla."
+                    )
+                })
+                continue
+
+            # ------------------------------------------------------------------
+            # 3. Validar que las columnas del DataFrame coincidan con la tabla
+            # ------------------------------------------------------------------
+            if df.shape[1] != n_cols:
+                omitidos.append({
+                    "placeholder": placeholder,
+                    "razon": (
+                        f"el DataFrame tiene {df.shape[1]} columnas "
+                        f"pero la tabla tiene {n_cols}. Deben coincidir."
+                    )
+                })
+                continue
+
+            # ------------------------------------------------------------------
+            # 4. Eliminar filas de datos existentes (de abajo hacia arriba
+            #    para no desplazar los índices de filas superiores)
+            # ------------------------------------------------------------------
+            n_data_rows_originales = n_filas - n_header
+            if n_data_rows_originales > 0:
+                delete_requests = [
+                    {
+                        "deleteTableRow": {
+                            "tableCellLocation": {
+                                "tableStartLocation": {"index": table_start_idx},
+                                "rowIndex":    n_filas - 1 - i,
+                                "columnIndex": 0
+                            }
+                        }
+                    }
+                    for i in range(n_data_rows_originales)
+                ]
+                docs_service.documents().batchUpdate(
+                    documentId=doc_id,
+                    body={"requests": delete_requests}
+                ).execute()
+
+            # ------------------------------------------------------------------
+            # 5. Insertar filas vacías (una por fila del DataFrame)
+            #    Todas se insertan debajo de la última fila de encabezado.
+            #    Se acumulan en un solo batchUpdate para eficiencia.
+            # ------------------------------------------------------------------
+            if len(df) > 0:
+                insert_requests = [
+                    {
+                        "insertTableRow": {
+                            "tableCellLocation": {
+                                "tableStartLocation": {"index": table_start_idx},
+                                "rowIndex":    n_header - 1 + i,
+                                "columnIndex": 0
+                            },
+                            "insertBelow": True
+                        }
+                    }
+                    for i in range(len(df))
+                ]
+                docs_service.documents().batchUpdate(
+                    documentId=doc_id,
+                    body={"requests": insert_requests}
+                ).execute()
+
+            # ------------------------------------------------------------------
+            # 6. Re-obtener el documento con los índices actualizados
+            # ------------------------------------------------------------------
+            doc      = docs_service.documents().get(documentId=doc_id).execute()
+            contenido = doc.get("body", {}).get("content", [])
+            tabla_info = _encontrar_tabla_por_placeholder(contenido, placeholder)
+            if tabla_info is None:
+                # Fallback: buscar por posición aproximada
+                tabla_info = _encontrar_tabla_por_indice(contenido, table_start_idx)
+            if tabla_info is None:
+                omitidos.append({
+                    "placeholder": placeholder,
+                    "razon": "no se pudo relocalizar la tabla tras insertar filas"
+                })
+                continue
+
+            table_el, _ = tabla_info
+            filas_nuevas = table_el.get("tableRows", [])[n_header:]
+
+            # ------------------------------------------------------------------
+            # 7. Escribir valores en las celdas de las nuevas filas
+            #    Orden: de atrás hacia adelante (fila y columna) para no
+            #    desplazar los índices de celdas que aún no se han escrito.
+            # ------------------------------------------------------------------
+            text_requests = []
+
+            for row_idx in range(len(filas_nuevas) - 1, -1, -1):
+                df_row = df.iloc[row_idx]
+                celdas = filas_nuevas[row_idx].get("tableCells", [])
+
+                for col_idx in range(len(celdas) - 1, -1, -1):
+                    celda  = celdas[col_idx]
+                    valor  = df_row.iloc[col_idx]
+
+                    # El primer párrafo de la celda es el punto de inserción
+                    parrafos = celda.get("content", [])
+                    if not parrafos:
+                        continue
+                    primer_parrafo = parrafos[0].get("paragraph", {})
+                    elementos      = primer_parrafo.get("elements", [])
+                    if not elementos:
+                        continue
+
+                    insert_idx = elementos[0].get("startIndex")
+                    if insert_idx is None:
+                        continue
+
+                    # Convertir valor a string (respetar None / NaN → vacío)
+                    es_nulo = False
+                    try:
+                        es_nulo = pd.isna(valor)
+                    except (TypeError, ValueError):
+                        pass
+
+                    texto = "" if es_nulo else str(valor).strip()
+                    if texto.lower() in ("nan", "none"):
+                        texto = ""
+
+                    if texto:
+                        text_requests.append({
+                            "insertText": {
+                                "location": {"index": insert_idx},
+                                "text":     texto
+                            }
+                        })
+
+            if text_requests:
+                docs_service.documents().batchUpdate(
+                    documentId=doc_id,
+                    body={"requests": text_requests}
+                ).execute()
+
+            # ------------------------------------------------------------------
+            # 8. Limpiar el placeholder de la primera celda del encabezado
+            #    (replaceAllText lo reemplazará por "" en el paso de textos,
+            #    pero lo limpiamos aquí para consistencia)
+            # ------------------------------------------------------------------
+            docs_service.documents().batchUpdate(
+                documentId=doc_id,
+                body={"requests": [{
+                    "replaceAllText": {
+                        "containsText": {"text": placeholder, "matchCase": True},
+                        "replaceText":  ""
+                    }
+                }]}
+            ).execute()
+
+            reemplazados.append({
+                "placeholder":  placeholder,
+                "filas_datos":  len(df),
+                "columnas":     df.shape[1],
+                "n_encabezados": n_header,
+            })
+
+        except Exception as e:
+            omitidos.append({
+                "placeholder": placeholder,
+                "razon":       f"error inesperado: {str(e)}"
+            })
+
+    # Log de resultados
+    print(f"✅ Tablas reemplazadas: {len(reemplazados)}")
+    for r in reemplazados:
+        print(
+            f"   {r['placeholder']} → "
+            f"{r['filas_datos']} filas × {r['columnas']} cols  "
+            f"({r['n_encabezados']} fila(s) de encabezado preservada(s))"
+        )
+
+    if omitidos:
+        print(f"⚠️  Omitidos: {len(omitidos)}")
+        for o in omitidos:
+            print(f"   {o['placeholder']}: {o['razon']}")
+
+    return {"reemplazados": reemplazados, "omitidos": omitidos}
+
+
+# ── Helpers internos de tablas ────────────────────────────────────────────────
+
+def _encontrar_tabla_por_placeholder(contenido, placeholder):
+    """
+    Busca en todos los elementos del body la tabla que tenga el placeholder
+    en alguna de sus celdas. Devuelve (table_element, table_start_index) o None.
+    """
+    for elemento in contenido:
+        if "table" not in elemento:
+            continue
+        table     = elemento["table"]
+        start_idx = elemento.get("startIndex", 0)
+        for fila in table.get("tableRows", []):
+            for celda in fila.get("tableCells", []):
+                texto_celda = _texto_celda_gdoc(celda)
+                if placeholder in texto_celda:
+                    return table, start_idx
+    return None
+
+
+def _encontrar_tabla_por_indice(contenido, table_start_idx):
+    """
+    Localiza una tabla por su startIndex aproximado (útil tras insertar filas,
+    cuando el startIndex puede haber cambiado ligeramente).
+    Devuelve (table_element, table_start_index) o None.
+    """
+    mejor      = None
+    menor_dist = float("inf")
+    for elemento in contenido:
+        if "table" not in elemento:
+            continue
+        idx  = elemento.get("startIndex", 0)
+        dist = abs(idx - table_start_idx)
+        if dist < menor_dist:
+            menor_dist = dist
+            mejor      = (elemento["table"], idx)
+    return mejor
+
+
+def _texto_celda_gdoc(celda):
+    """Extrae el texto plano de todos los párrafos de una celda."""
+    partes = []
+    for bloque in celda.get("content", []):
+        for elem in bloque.get("paragraph", {}).get("elements", []):
+            partes.append(elem.get("textRun", {}).get("content", ""))
+    return "".join(partes)
+
+
+def _color_es_neutro(color):
+    """
+    Devuelve True si el color de fondo es neutro (blanco o sin definir).
+    La API devuelve colores como {red: float, green: float, blue: float} con 1.0 = blanco.
+    """
+    if not color:
+        return True
+    r = color.get("red",   1.0)
+    g = color.get("green", 1.0)
+    b = color.get("blue",  1.0)
+    # Considerar neutro si es blanco puro o muy cercano a él
+    return r >= 0.95 and g >= 0.95 and b >= 0.95
+
+
+def _detectar_encabezados_gdoc(filas):
+    """
+    Detecta cuántas filas al inicio de la tabla son encabezado.
+
+    Heurística (en orden de prioridad):
+      1. Si la celda tiene fondo no neutro  → fila de encabezado.
+      2. Si todas las celdas tienen texto en negrita → fila de encabezado.
+      3. En caso de empate, al menos 1 fila es siempre encabezado.
+
+    Devuelve el número de filas de encabezado (int ≥ 1).
+    """
+    n_header = 0
+
+    for fila in filas:
+        celdas = fila.get("tableCells", [])
+        es_encabezado = False
+
+        for celda in celdas:
+            # Criterio 1: color de fondo
+            bg = (
+                celda.get("tableCellStyle", {})
+                     .get("backgroundColor", {})
+                     .get("color", {})
+                     .get("rgbColor", {})
+            )
+            if not _color_es_neutro(bg):
+                es_encabezado = True
+                break
+
+            # Criterio 2: texto en negrita
+            for bloque in celda.get("content", []):
+                for elem in bloque.get("paragraph", {}).get("elements", []):
+                    estilo = elem.get("textRun", {}).get("textStyle", {})
+                    if estilo.get("bold"):
+                        es_encabezado = True
+                        break
+                if es_encabezado:
+                    break
+            if es_encabezado:
+                break
+
+        if es_encabezado:
+            n_header += 1
+        else:
+            break  # las filas de datos son contiguas desde aquí
+
+    return max(n_header, 1)  # mínimo 1 fila de encabezado siempre
+
+
+# ==============================
 # GOOGLE AUTH
 # ==============================
 import os
