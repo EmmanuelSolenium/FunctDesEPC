@@ -149,6 +149,9 @@ def identificar_poste(codigo: str, detallado: bool = False):
         if not isinstance(codigo, str):
             return np.nan
 
+        if ' ' in codigo:
+            codigo = codigo.replace(' ', '')
+
         # Extraer patrón MTF?###-# donde F es opcional
         match = re.search(r'MT(F?)(\d{3})-(\d)', codigo, re.IGNORECASE)
         if not match:
@@ -220,7 +223,7 @@ def identificar_poste(codigo: str, detallado: bool = False):
     except Exception:
         return np.nan
 
-
+print(identificar_poste("MTF 331-1"))
 
 def calcular_cantones(armados, rutas, postes, vanos_adelante, detallado=False):
     """
@@ -4441,6 +4444,8 @@ def tipo_armado(carac_postes, postes_orden, postes_export, armado_export, nombre
         try:
             if not isinstance(codigo, str):
                 return np.nan
+            if ' ' in codigo:
+                codigo = codigo.replace(' ', '')
             match = re.search(r'MT(F?)(\d{3})-(\d)', codigo, re.IGNORECASE)
             if not match:
                 return np.nan
@@ -4485,6 +4490,8 @@ def numero_fases(carac_postes, postes_orden, postes_export, armado_export, nombr
         try:
             if not isinstance(codigo, str):
                 return np.nan
+            if ' ' in codigo:
+                codigo = codigo.replace(' ', '')
             match = re.search(r'MT(F?)(\d{3})-(\d)', codigo, re.IGNORECASE)
             if not match:
                 return np.nan
@@ -4585,6 +4592,8 @@ def numero_perforaciones(
         try:
             if not isinstance(codigo, str) or str(codigo).strip() in ("", "-", "0"):
                 return 0
+            if ' ' in codigo:
+                codigo = codigo.replace(' ', '')
             match = re.search(r'MT(F?)(\d{3})-(\d)', codigo, re.IGNORECASE)
             if not match:
                 return 0
