@@ -632,20 +632,14 @@ def reemplazar_tablas(doc_id, diccionario, docs_service, drive_service):
     """
     Reemplaza placeholders de tipo 'table' en un Google Doc.
 
-    Enfoque: sin copiar formato. Lee los datos del Excel/Sheets y los pega
-    en una tabla nueva con formato predeterminado de Google Docs.
-
-    Sintaxis en el documento (sin tabla plantilla):
-        {% table alias %}
-        {{ alias }}
-        {% end_table alias %}
-
     Flujo por cada tabla:
-        1. Encuentra el bloque {% table %}...{% end_table %}
-        2. Descarga los datos desde Excel o Google Sheets (URL en el diccionario)
-        3. Elimina todo el contenido del bloque (tags + placeholder)
-        4. Inserta una tabla nueva en esa posición
-        5. Llena las celdas con los datos (encabezados en fila 1, datos en el resto)
+        1. Localiza el placeholder {{ alias }} en el texto plano del documento.
+        2. Calcula startIndex y endIndex del placeholder.
+        3. En un solo batchUpdate: borra el placeholder con deleteContentRange
+           e inserta la tabla con insertTable en esa misma posición.
+        4. Relee el documento y localiza la tabla por startIndex exacto
+           (fallback a proximidad si no hay coincidencia exacta).
+        5. Aplica merges, llena celdas y aplica formato.
 
     Args:
         doc_id        (str):  ID del documento de Google Docs.
@@ -656,8 +650,6 @@ def reemplazar_tablas(doc_id, diccionario, docs_service, drive_service):
     Returns:
         dict: {"reemplazados": [...], "omitidos": [...]}
     """
-    import re
-
     reemplazados = []
     omitidos     = []
 
@@ -700,31 +692,28 @@ def reemplazar_tablas(doc_id, diccionario, docs_service, drive_service):
             n_cols  = len(df.columns)
 
             # -------------------------------------------------
-            # 2. Leer documento y localizar el bloque {% table %}
+            # 2. Leer documento y localizar el placeholder
             # -------------------------------------------------
             documento = docs_service.documents().get(documentId=doc_id).execute()
             contenido = documento.get("body", {}).get("content", [])
             texto_plano, mapa_indices = _extraer_texto_con_indices(contenido)
 
-            patron_bloque = re.compile(
-                r"\{%-?\s*table\s+" + re.escape(alias) + r"\s*-?%\}"
-                r"(.*?)"
-                r"\{%-?\s*end_table\s+" + re.escape(alias) + r"\s*-?%\}",
-                re.DOTALL
-            )
-            match_bloque = patron_bloque.search(texto_plano)
-            if not match_bloque:
-                omitidos.append({"alias": alias, "razon": f"bloque {{% table {alias} %}} no encontrado"})
+            pos = texto_plano.find(placeholder)
+            if pos == -1:
+                omitidos.append({"alias": alias, "razon": f"placeholder '{placeholder}' no encontrado en el documento"})
                 continue
 
-            inicio_bloque = _idx(match_bloque.start(), mapa_indices)
-            fin_bloque    = _idx(match_bloque.end() - 1, mapa_indices)
-            if fin_bloque is None:
-                fin_bloque = mapa_indices[-1] if mapa_indices else 0
-            fin_bloque += 1  # endIndex es exclusivo en la API
+            start_idx = _idx(pos, mapa_indices)
+            end_idx   = _idx(pos + len(placeholder), mapa_indices)
+
+            if start_idx is None or end_idx is None:
+                omitidos.append({"alias": alias, "razon": "no se pudo mapear el índice del placeholder"})
+                continue
+
+            inicio_bloque = start_idx
 
             # -------------------------------------------------
-            # 3. Eliminar todo el bloque e insertar tabla vacía
+            # 3. Borrar el placeholder e insertar tabla vacía
             #    en un solo batchUpdate
             # -------------------------------------------------
             docs_service.documents().batchUpdate(
@@ -732,14 +721,14 @@ def reemplazar_tablas(doc_id, diccionario, docs_service, drive_service):
                 body={"requests": [
                     {"deleteContentRange": {
                         "range": {
-                            "startIndex": inicio_bloque,
-                            "endIndex":   fin_bloque
+                            "startIndex": start_idx,
+                            "endIndex":   end_idx
                         }
                     }},
                     {"insertTable": {
                         "rows":     n_filas,
                         "columns":  n_cols,
-                        "location": {"index": inicio_bloque}
+                        "location": {"index": start_idx}
                     }}
                 ]}
             ).execute()
@@ -747,14 +736,25 @@ def reemplazar_tablas(doc_id, diccionario, docs_service, drive_service):
             # -------------------------------------------------
             # 3b. Aplicar merges del Excel a la tabla recién insertada
             # -------------------------------------------------
-            # Releer para obtener el startIndex real de la tabla recién insertada
-            doc_tmp   = docs_service.documents().get(documentId=doc_id).execute()
-            tabla_tmp = _encontrar_tabla_cerca(doc_tmp.get("body", {}).get("content", []), inicio_bloque)
+            # Releer y localizar la tabla por startIndex exacto; fallback a proximidad
+            doc_tmp       = docs_service.documents().get(documentId=doc_id).execute()
+            contenido_tmp = doc_tmp.get("body", {}).get("content", [])
+            tabla_tmp     = None
+            for elem in contenido_tmp:
+                if "table" in elem and elem.get("startIndex") == inicio_bloque:
+                    t = elem["table"]
+                    t["startIndex"] = elem["startIndex"]
+                    t["endIndex"]   = elem.get("endIndex", 0)
+                    tabla_tmp = t
+                    break
+            if tabla_tmp is None:
+                tabla_tmp = _encontrar_tabla_cerca(contenido_tmp, inicio_bloque)
             if not tabla_tmp:
                 omitidos.append({"alias": alias, "razon": "no se pudo localizar la tabla recién insertada"})
                 continue
             tabla_start_real = tabla_tmp["startIndex"]
 
+            print(f"[MERGE_DEBUG] merges recibidos: {len(merges)} -> {merges}")
             if merges:
                 # Aplicar merges de derecha a izquierda y de abajo hacia arriba.
                 # Cada merge se aplica con verificación post-merge: se relee la
@@ -762,21 +762,26 @@ def reemplazar_tablas(doc_id, diccionario, docs_service, drive_service):
                 # si no, se reintenta hasta MAX_REINTENTOS veces.
                 MAX_REINTENTOS = 3
                 merges_ordenados = sorted(merges, key=lambda m: (-m["min_row"], -m["min_col"]))
+                print(f"[MERGE_DEBUG] orden de aplicación: {[(m['min_col'], m['col_span']) for m in merges_ordenados]}")
 
                 tabla_start_actual = tabla_start_real
 
                 for merge in merges_ordenados:
+                    print(f"[MERGE_DEBUG] intentando merge col={merge['min_col']} span={merge['col_span']}")
                     aplicado = False
-                    for intento in range(1, MAX_REINTENTOS + 1):
-                        # Releer y localizar la tabla actual
-                        doc_m = docs_service.documents().get(documentId=doc_id).execute()
+                    for intento in range(1, 4):
+                        print(f"[MERGE_DEBUG]   intento {intento}, leyendo doc...")
+                        try:
+                            doc_m = docs_service.documents().get(documentId=doc_id).execute()
+                        except Exception as e:
+                            print(f"[MERGE_DEBUG]   ERROR leyendo doc: {e}")
+                            break
                         tabla_m = _encontrar_tabla_cerca(doc_m.get("body", {}).get("content", []), inicio_bloque)
                         if not tabla_m:
-                            print(f"[MERGE] No se encontró la tabla. Abortando merges restantes.")
+                            print(f"[MERGE_DEBUG]   tabla no encontrada, abortando")
                             break
                         tabla_start_actual = tabla_m["startIndex"]
-
-                        # Aplicar el merge
+                        print(f"[MERGE_DEBUG]   tabla_start={tabla_start_actual}, aplicando merge...")
                         try:
                             docs_service.documents().batchUpdate(
                                 documentId=doc_id,
@@ -794,23 +799,20 @@ def reemplazar_tablas(doc_id, diccionario, docs_service, drive_service):
                                     }
                                 }]}
                             ).execute()
+                            print(f"[MERGE_DEBUG]   batchUpdate ejecutado OK")
                         except Exception as e:
-                            print(f"[MERGE] Error al aplicar merge "
-                                  f"(row={merge['min_row']}, col={merge['min_col']}, "
-                                  f"rowSpan={merge['row_span']}, colSpan={merge['col_span']}): {e}")
-
-                        # Verificar que el merge se aplicó releyendo la tabla
-                        doc_v = docs_service.documents().get(documentId=doc_id).execute()
-                        tabla_v = _encontrar_tabla_cerca(doc_v.get("body", {}).get("content", []), inicio_bloque)
+                            print(f"[MERGE_DEBUG]   ERROR en batchUpdate: {e}")
+                        try:
+                            doc_v = docs_service.documents().get(documentId=doc_id).execute()
+                            tabla_v = _encontrar_tabla_cerca(doc_v.get("body", {}).get("content", []), inicio_bloque)
+                        except Exception as e:
+                            print(f"[MERGE_DEBUG]   ERROR leyendo doc post-merge: {e}")
+                            break
                         if not tabla_v:
+                            print(f"[MERGE_DEBUG]   tabla no encontrada post-merge")
                             break
-
                         filas_v = tabla_v.get("tableRows", [])
-                        if merge["min_row"] >= len(filas_v):
-                            break
-
-                        # Recorrer celdas físicas hasta encontrar la columna lógica esperada
-                        celdas_v = filas_v[merge["min_row"]].get("tableCells", [])
+                        celdas_v = filas_v[merge["min_row"]].get("tableCells", []) if merge["min_row"] < len(filas_v) else []
                         col_off = 0
                         span_real = None
                         for c in celdas_v:
@@ -819,36 +821,40 @@ def reemplazar_tablas(doc_id, diccionario, docs_service, drive_service):
                                 span_real = sp
                                 break
                             col_off += sp
-
+                        print(f"[MERGE_DEBUG]   verificación: esperado span={merge['col_span']}, real={span_real}")
                         if span_real == merge["col_span"]:
                             aplicado = True
-                            if intento > 1:
-                                print(f"[MERGE] OK tras {intento} intentos "
-                                      f"(row={merge['min_row']}, col={merge['min_col']}, "
-                                      f"colSpan={merge['col_span']})")
                             break
-                        else:
-                            print(f"[MERGE] Reintento {intento}/{MAX_REINTENTOS}: "
-                                  f"se esperaba colSpan={merge['col_span']} en "
-                                  f"row={merge['min_row']}, col={merge['min_col']}; "
-                                  f"se obtuvo span_real={span_real}")
-
                     if not aplicado:
-                        print(f"[MERGE] FALLO definitivo tras {MAX_REINTENTOS} intentos: "
-                              f"row={merge['min_row']}, col={merge['min_col']}, "
-                              f"colSpan={merge['col_span']}, rowSpan={merge['row_span']}")
+                        print(f"[MERGE_DEBUG] FALLO merge col={merge['min_col']} span={merge['col_span']}")
 
 
-            # Releer DESPUÉS de aplicar los merges para obtener la estructura real post-merge
-            documento2 = docs_service.documents().get(documentId=doc_id).execute()
-            contenido2 = documento2.get("body", {}).get("content", [])
-            # Usar el último tabla_start_actual conocido para localizar la tabla correcta.
-            # Si no hubo merges, caer a tabla_start_real como referencia.
+            # Releer DESPUÉS de aplicar los merges — reusar la última lectura de
+            # verificación para no hacer un GET extra y evitar confusión de tablas.
+            # tabla_start_actual contiene el startIndex verificado en el último merge.
+            doc_final = docs_service.documents().get(documentId=doc_id).execute()
+            contenido2 = doc_final.get("body", {}).get("content", [])
             ref = tabla_start_actual if merges else tabla_start_real
-            tabla_nueva = _encontrar_tabla_cerca(contenido2, ref)
-            if not tabla_nueva:
-                omitidos.append({"alias": alias, "razon": "no se pudo localizar la tabla recién insertada"})
+
+            # Buscar por startIndex EXACTO para evitar confusión con otras tablas cercanas
+            tabla_nueva = None
+            for elemento in contenido2:
+                if "table" not in elemento:
+                    continue
+                if elemento.get("startIndex") == ref:
+                    tabla_nueva = elemento["table"]
+                    tabla_nueva["startIndex"] = ref
+                    tabla_nueva["endIndex"] = elemento.get("endIndex", 0)
+                    break
+
+            if tabla_nueva is None:
+                # Fallback por proximidad
+                tabla_nueva = _encontrar_tabla_cerca(contenido2, ref)
+
+            if tabla_nueva is None:
+                omitidos.append({"alias": alias, "razon": "no se pudo localizar la tabla post-merge"})
                 continue
+
             print(f"[DEBUG2] tabla_nueva startIndex={tabla_nueva['startIndex']}, "
                   f"ref={ref}, "
                   f"filas={len(tabla_nueva.get('tableRows',[]))}, "
@@ -867,14 +873,17 @@ def reemplazar_tablas(doc_id, diccionario, docs_service, drive_service):
                 fila_datos = todas_las_filas[fi]
                 celdas_doc = fila_doc.get("tableCells", [])
 
-                # Construir lista (celda_doc, col_excel) de atrás hacia adelante
                 pares = []
-                col_offset = 0
+                col_logica = 0        # columna lógica actual (en términos del Excel)
+                col_consumida_hasta = -1  # hasta qué col lógica llega el merge activo
                 for celda in celdas_doc:
                     span = celda.get("tableCellStyle", {}).get("columnSpan", 1)
-                    if celda.get("content"):  # omitir celdas absorbidas (content=[])
-                        pares.append((celda, col_offset))
-                    col_offset += span
+                    if col_logica > col_consumida_hasta:
+                        # Esta celda es la principal (no absorbida)
+                        pares.append((celda, col_logica))
+                        col_consumida_hasta = col_logica + span - 1
+                    # Si col_logica <= col_consumida_hasta, es absorbida — no agregar a pares
+                    col_logica += 1   # cada celda física avanza 1 en la columna lógica
 
                 for celda, col_excel in reversed(pares):
                     texto = str(fila_datos[col_excel]) if col_excel < len(fila_datos) else ""
@@ -898,21 +907,22 @@ def reemplazar_tablas(doc_id, diccionario, docs_service, drive_service):
             print(f"\n[DEBUG] tabla_nueva tiene {len(tabla_nueva.get('tableRows',[]))} filas")
             fila0 = tabla_nueva.get("tableRows", [])[0]
             celdas0 = fila0.get("tableCells", [])
-            print(f"[DEBUG] Fila 0: {len(celdas0)} celdas físicas")
+            celdas_reales = [c for c in celdas0 if c.get("content")]
+            celdas_absorbidas = [c for c in celdas0 if not c.get("content")]
+            print(f"[DEBUG] Fila 0: {len(celdas0)} celdas físicas totales")
+            print(f"[DEBUG]   -> {len(celdas_reales)} celdas reales (con content)")
+            print(f"[DEBUG]   -> {len(celdas_absorbidas)} celdas absorbidas (content vacío)")
             col_off = 0
             for i, c in enumerate(celdas0):
                 span = c.get("tableCellStyle", {}).get("columnSpan", 1)
+                tiene_content = bool(c.get("content"))
                 paras = c.get("content", [])
                 idx = paras[0].get("paragraph",{}).get("elements",[{}])[0].get("startIndex","?") if paras else "?"
                 txt_mapped = str(todas_las_filas[0][col_off]) if col_off < len(todas_las_filas[0]) else "OOB"
-                print(f"  celda[{i}]: span={span}, col_excel={col_off}, startIndex={idx}, texto_mapeado={repr(txt_mapped)}")
+                estado = "REAL" if tiene_content else "ABSORBIDA"
+                celda_end_dbg = c.get("endIndex", "?")
+                print(f"  celda[{i}]: span={span}, col_excel={col_off}, idx={idx}, end={celda_end_dbg}, [{estado}], texto={repr(txt_mapped)}")
                 col_off += span
-            print(f"[DEBUG] requests_texto row0 entries:")
-            for r in requests_texto:
-                loc = r.get("insertText",{}).get("location",{}).get("index")
-                txt = r.get("insertText",{}).get("text","")
-                if txt in ("TENDIDOS","EQUIPOS","COORDENADAS","POSTE","CIMENTACIÓN","ARMADOS"):
-                    print(f"  insertText idx={loc} text={repr(txt)}")
             # ── FIN DEBUG ───────────────────────────────────────────────
 
             if requests_texto:
@@ -1110,10 +1120,16 @@ def _generar_requests_formato_excel(tabla_nueva, cell_formats):
         celda_doc  = None
         ci_doc     = None
         col_offset = 0
+        ultima_celda_principal_end = -1
         for idx, c in enumerate(celdas_doc):
             span = c.get("tableCellStyle", {}).get("columnSpan", 1)
+            paras = c.get("content", [])
+            celda_start = paras[0].get("paragraph", {}).get("elements", [{}])[0].get("startIndex", -1) if paras else -1
+            es_absorbida = (celda_start != -1 and celda_start < ultima_celda_principal_end)
+            if not es_absorbida:
+                ultima_celda_principal_end = c.get("endIndex", celda_start + 1)
             if col_offset == ci_excel:
-                if c.get("content"):  # omitir celdas absorbidas (content=[])
+                if not es_absorbida:
                     celda_doc = c
                     ci_doc    = idx
                 break
