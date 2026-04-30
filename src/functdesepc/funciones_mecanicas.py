@@ -3260,7 +3260,7 @@ def tab_fle_canton(
 
             # Tense: del primer vano
             v0 = vanos_validos[0]
-            df["Tense (daN)"] = tabla_fle[(vanos_dict[v0], "Tiro H. (kg)")]
+            df["Tense (daN)"] = tabla_fle[(vanos_dict[v0], "Tiro H. (kg)")].apply(kgf_a_daN)
 
             # Flechas
             for v in vanos_validos:
@@ -3601,7 +3601,7 @@ def tab_fle_canton_v2(
         if vanos_ids:
             col_tiro = cols_dict[vanos_ids[0]].get("tiro")
             if col_tiro is not None:
-                df["Tiro H. (kg)"] = tabla[col_tiro].values
+                df["Tiro (daN)"] = pd.Series(tabla[col_tiro].values).apply(kgf_a_daN)
 
         # Flechas
         for v in vanos_ids:
