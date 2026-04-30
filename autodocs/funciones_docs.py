@@ -76,6 +76,16 @@ def cargar_diccionario(archivo, project_filter=None):
     # Normalizar nombres de columnas
     df.columns = [str(col).strip().lower() for col in df.columns]
 
+    # DEBUG: detectar columnas duplicadas
+    from collections import Counter
+    conteo = Counter(df.columns)
+    duplicadas = [col for col, n in conteo.items() if n > 1]
+    if duplicadas:
+        print(f"⚠️  Columnas duplicadas encontradas: {duplicadas}")
+    else:
+        print("✅ No hay columnas duplicadas")
+    print(f"   Todas las columnas: {list(df.columns)}")
+
     df = df.rename(columns={
         "nombre del dato": "placeholder",
         "valor":           "value",
@@ -754,7 +764,6 @@ def reemplazar_tablas(doc_id, diccionario, docs_service, drive_service):
                 continue
             tabla_start_real = tabla_tmp["startIndex"]
 
-            print(f"[MERGE_DEBUG] merges recibidos: {len(merges)} -> {merges}")
             if merges:
                 # Aplicar merges de derecha a izquierda y de abajo hacia arriba.
                 # Cada merge se aplica con verificación post-merge: se relee la
@@ -762,26 +771,20 @@ def reemplazar_tablas(doc_id, diccionario, docs_service, drive_service):
                 # si no, se reintenta hasta MAX_REINTENTOS veces.
                 MAX_REINTENTOS = 3
                 merges_ordenados = sorted(merges, key=lambda m: (-m["min_row"], -m["min_col"]))
-                print(f"[MERGE_DEBUG] orden de aplicación: {[(m['min_col'], m['col_span']) for m in merges_ordenados]}")
 
                 tabla_start_actual = tabla_start_real
 
                 for merge in merges_ordenados:
-                    print(f"[MERGE_DEBUG] intentando merge col={merge['min_col']} span={merge['col_span']}")
                     aplicado = False
                     for intento in range(1, 4):
-                        print(f"[MERGE_DEBUG]   intento {intento}, leyendo doc...")
                         try:
                             doc_m = docs_service.documents().get(documentId=doc_id).execute()
                         except Exception as e:
-                            print(f"[MERGE_DEBUG]   ERROR leyendo doc: {e}")
                             break
                         tabla_m = _encontrar_tabla_cerca(doc_m.get("body", {}).get("content", []), inicio_bloque)
                         if not tabla_m:
-                            print(f"[MERGE_DEBUG]   tabla no encontrada, abortando")
                             break
                         tabla_start_actual = tabla_m["startIndex"]
-                        print(f"[MERGE_DEBUG]   tabla_start={tabla_start_actual}, aplicando merge...")
                         try:
                             docs_service.documents().batchUpdate(
                                 documentId=doc_id,
@@ -799,17 +802,14 @@ def reemplazar_tablas(doc_id, diccionario, docs_service, drive_service):
                                     }
                                 }]}
                             ).execute()
-                            print(f"[MERGE_DEBUG]   batchUpdate ejecutado OK")
                         except Exception as e:
-                            print(f"[MERGE_DEBUG]   ERROR en batchUpdate: {e}")
+                            pass
                         try:
                             doc_v = docs_service.documents().get(documentId=doc_id).execute()
                             tabla_v = _encontrar_tabla_cerca(doc_v.get("body", {}).get("content", []), inicio_bloque)
                         except Exception as e:
-                            print(f"[MERGE_DEBUG]   ERROR leyendo doc post-merge: {e}")
                             break
                         if not tabla_v:
-                            print(f"[MERGE_DEBUG]   tabla no encontrada post-merge")
                             break
                         filas_v = tabla_v.get("tableRows", [])
                         celdas_v = filas_v[merge["min_row"]].get("tableCells", []) if merge["min_row"] < len(filas_v) else []
@@ -821,12 +821,9 @@ def reemplazar_tablas(doc_id, diccionario, docs_service, drive_service):
                                 span_real = sp
                                 break
                             col_off += sp
-                        print(f"[MERGE_DEBUG]   verificación: esperado span={merge['col_span']}, real={span_real}")
                         if span_real == merge["col_span"]:
                             aplicado = True
                             break
-                    if not aplicado:
-                        print(f"[MERGE_DEBUG] FALLO merge col={merge['min_col']} span={merge['col_span']}")
 
 
             # Releer DESPUÉS de aplicar los merges — reusar la última lectura de
@@ -854,11 +851,6 @@ def reemplazar_tablas(doc_id, diccionario, docs_service, drive_service):
             if tabla_nueva is None:
                 omitidos.append({"alias": alias, "razon": "no se pudo localizar la tabla post-merge"})
                 continue
-
-            print(f"[DEBUG2] tabla_nueva startIndex={tabla_nueva['startIndex']}, "
-                  f"ref={ref}, "
-                  f"filas={len(tabla_nueva.get('tableRows',[]))}, "
-                  f"cols_fila0={len(tabla_nueva.get('tableRows',[[]])[0].get('tableCells',[]))}")
 
             # -------------------------------------------------
             # 7. Llenar celdas con datos (de atrás hacia adelante).
@@ -902,28 +894,6 @@ def reemplazar_tablas(doc_id, diccionario, docs_service, drive_service):
                             "text":     texto
                         }
                     })
-
-            # ── DEBUG TEMPORAL ─────────────────────────────────────────
-            print(f"\n[DEBUG] tabla_nueva tiene {len(tabla_nueva.get('tableRows',[]))} filas")
-            fila0 = tabla_nueva.get("tableRows", [])[0]
-            celdas0 = fila0.get("tableCells", [])
-            celdas_reales = [c for c in celdas0 if c.get("content")]
-            celdas_absorbidas = [c for c in celdas0 if not c.get("content")]
-            print(f"[DEBUG] Fila 0: {len(celdas0)} celdas físicas totales")
-            print(f"[DEBUG]   -> {len(celdas_reales)} celdas reales (con content)")
-            print(f"[DEBUG]   -> {len(celdas_absorbidas)} celdas absorbidas (content vacío)")
-            col_off = 0
-            for i, c in enumerate(celdas0):
-                span = c.get("tableCellStyle", {}).get("columnSpan", 1)
-                tiene_content = bool(c.get("content"))
-                paras = c.get("content", [])
-                idx = paras[0].get("paragraph",{}).get("elements",[{}])[0].get("startIndex","?") if paras else "?"
-                txt_mapped = str(todas_las_filas[0][col_off]) if col_off < len(todas_las_filas[0]) else "OOB"
-                estado = "REAL" if tiene_content else "ABSORBIDA"
-                celda_end_dbg = c.get("endIndex", "?")
-                print(f"  celda[{i}]: span={span}, col_excel={col_off}, idx={idx}, end={celda_end_dbg}, [{estado}], texto={repr(txt_mapped)}")
-                col_off += span
-            # ── FIN DEBUG ───────────────────────────────────────────────
 
             if requests_texto:
                 docs_service.documents().batchUpdate(
@@ -1015,21 +985,54 @@ def _cargar_datos_tabla(url, sheet_name, drive_service, header_row=None):
     wb = openpyxl.load_workbook(fh, data_only=True)
     ws = wb[sheet_name] if sheet_name and sheet_name in wb.sheetnames else wb.active
 
-    header_idx = (header_row - 1) if header_row and header_row > 1 else 0
-
-    # ── Detectar última columna real (ignorar columnas fantasma vacías) ───────
-    max_col_real = 0
+    # ── Detectar última columna, última fila y primera fila con datos reales ──
+    max_col_real        = 0
+    max_row_real        = 0
+    first_row_con_datos = None
     for fila in ws.iter_rows():
         for celda in fila:
             val = celda.value
             if val is not None and str(val).strip() not in ("", "'"):
                 max_col_real = max(max_col_real, celda.column)
+                max_row_real = max(max_row_real, celda.row)
+                if first_row_con_datos is None:
+                    first_row_con_datos = celda.row
     if max_col_real == 0:
         max_col_real = ws.max_column
+    if max_row_real == 0:
+        max_row_real = ws.max_row
 
-    # ── Extraer datos (solo hasta max_col_real) ───────────────────────────────
-    filas_excel = list(ws.iter_rows(min_row=header_idx + 1, max_col=max_col_real, values_only=False))
-    encabezados = [str(c.value) if c.value is not None else "" for c in filas_excel[0]]
+    # Si header_row viene definido úsalo; si no, auto-detectar primera fila con datos
+    if header_row and header_row > 0:
+        header_idx = header_row - 1
+        # Validar que esa fila tenga contenido real; si no, avanzar a la siguiente con datos
+        fila_candidata = list(ws.iter_rows(min_row=header_idx + 1, max_row=header_idx + 1, max_col=max_col_real, values_only=False))
+        if fila_candidata:
+            tiene_contenido = any(
+                c.value is not None and str(c.value).strip() not in ("", "'")
+                for c in fila_candidata[0]
+            )
+            if not tiene_contenido and first_row_con_datos is not None:
+                header_idx = first_row_con_datos - 1
+    else:
+        header_idx = (first_row_con_datos - 1) if first_row_con_datos else 0
+
+    # ── Extraer datos (solo hasta max_col_real y max_row_real) ───────────────
+    filas_excel = list(ws.iter_rows(
+        min_row=header_idx + 1,
+        max_row=max_row_real,
+        max_col=max_col_real,
+        values_only=False,
+    ))
+
+    def _limpiar_valor_encabezado(val):
+        """Elimina el apóstrofe inicial que Excel añade a celdas de texto puro."""
+        if val is None:
+            return ""
+        s = str(val)
+        return s.lstrip("'") if s.startswith("'") else s
+
+    encabezados = [_limpiar_valor_encabezado(c.value) for c in filas_excel[0]]
     datos_filas = []
     for fila in filas_excel[1:]:
         datos_filas.append([str(c.value) if c.value is not None else "" for c in fila])

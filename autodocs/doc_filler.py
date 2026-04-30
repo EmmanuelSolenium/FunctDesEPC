@@ -20,7 +20,7 @@ from autodocs import funciones_docs
 # VERBOSE
 # Pon True para ver el detalle de cada paso en la consola
 # ==============================
-VERBOSE = False
+VERBOSE = True 
 
 
 # ==============================

@@ -223,7 +223,7 @@ def identificar_poste(codigo: str, detallado: bool = False):
     except Exception:
         return np.nan
 
-print(identificar_poste("MTF 331-1"))
+#print(identificar_poste("MTF 331-1"))
 
 def calcular_cantones(armados, rutas, postes, vanos_adelante, detallado=False):
     """

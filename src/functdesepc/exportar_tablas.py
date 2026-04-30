@@ -67,6 +67,13 @@ NUM_FMT_2DEC = '0.00'
 NUM_FMT_4DEC = '0.0000'
 
 
+def _round4(val):
+    """Redondea a 4 decimales los valores float con más de 4 cifras decimales."""
+    if isinstance(val, float):
+        return round(val, 4)
+    return val
+
+
 # ---------------------------------------------------------------------------
 # Helpers internos
 # ---------------------------------------------------------------------------
@@ -74,7 +81,7 @@ NUM_FMT_4DEC = '0.0000'
 def _write_cell(ws, row, col, value, font=None, alignment=None,
                 border=None, fill=None, number_format=None):
     """Escribe un valor en una celda con formato opcional."""
-    cell = ws.cell(row=row, column=col, value=value)
+    cell = ws.cell(row=row, column=col, value=_round4(value))
     if font is not None:
         cell.font = font
     if alignment is not None:
@@ -370,7 +377,7 @@ def exportar_calculos(ruta_template, ruta_salida, mec, ret, eovanos, carac_poste
         # Datos
         for row_idx, row in enumerate(df.itertuples(index=False), start=start_row + 1):
             for col_idx, value in enumerate(row, start=1):
-                cell = ws.cell(row=row_idx, column=col_idx, value=_clean(value))
+                cell = ws.cell(row=row_idx, column=col_idx, value=_round4(_clean(value)))
                 cell.border = border
                 cell.alignment = wrap
 
@@ -453,7 +460,7 @@ def exportar_todo(
     # ── Helpers flechado ─────────────────────────────────────────────────────
     def _write_cell(ws, row, col, value, font=None, alignment=None,
                     border=None, fill=None, number_format=None):
-        cell = ws.cell(row=row, column=col, value=value)
+        cell = ws.cell(row=row, column=col, value=_round4(value))
         if font:          cell.font = font
         if alignment:     cell.alignment = alignment
         if border:        cell.border = border
@@ -579,7 +586,7 @@ def exportar_todo(
         # Datos
         for row_idx, row in enumerate(df.itertuples(index=False), start=start_row + 1):
             for col_idx, value in enumerate(row, start=1):
-                cell = ws.cell(row=row_idx, column=col_idx, value=_clean(value))
+                cell = ws.cell(row=row_idx, column=col_idx, value=_round4(_clean(value)))
                 cell.border = border
                 cell.alignment = wrap
 
@@ -750,7 +757,7 @@ def exportar_todo_afinia(
     # ── Helpers flechado ─────────────────────────────────────────────────────
     def _write_cell(ws, row, col, value, font=None, alignment=None,
                     border=None, fill=None, number_format=None):
-        cell = ws.cell(row=row, column=col, value=value)
+        cell = ws.cell(row=row, column=col, value=_round4(value))
         if font:          cell.font = font
         if alignment:     cell.alignment = alignment
         if border:        cell.border = border
@@ -862,7 +869,7 @@ def exportar_todo_afinia(
 
         for row_idx, row in enumerate(df.itertuples(index=False), start=2):
             for col_idx, value in enumerate(row, start=1):
-                cell = ws.cell(row=row_idx, column=col_idx, value=_clean(value))
+                cell = ws.cell(row=row_idx, column=col_idx, value=_round4(_clean(value)))
                 cell.border = border
                 cell.alignment = wrap
                 cell.font = FONT_NORMAL
@@ -900,7 +907,7 @@ def exportar_todo_afinia(
 
         for row_idx, row in enumerate(df.itertuples(index=False), start=start_row + 1):
             for col_idx, value in enumerate(row, start=1):
-                cell = ws.cell(row=row_idx, column=col_idx, value=_clean(value))
+                cell = ws.cell(row=row_idx, column=col_idx, value=_round4(_clean(value)))
                 cell.border = border
                 cell.alignment = wrap
 
