@@ -693,7 +693,10 @@ def reemplazar_tablas(doc_id, diccionario, docs_service, drive_service):
             # -------------------------------------------------
             # 1. Descargar datos y formato desde Excel o Google Sheets
             # -------------------------------------------------
-            df, cell_formats, merges = _cargar_datos_tabla(url_tabla, sheet_name, drive_service, header_row)
+            df, cell_formats, merges = _cargar_datos_tabla(
+                url_tabla, sheet_name, drive_service, header_row,
+                alias=alias, placeholder=placeholder,
+            )
             if df is None or df.empty:
                 omitidos.append({"alias": alias, "razon": "no se pudieron cargar los datos"})
                 continue
@@ -944,7 +947,7 @@ def reemplazar_tablas(doc_id, diccionario, docs_service, drive_service):
 # HELPERS DE TABLAS
 # ==============================
 
-def _cargar_datos_tabla(url, sheet_name, drive_service, header_row=None):
+def _cargar_datos_tabla(url, sheet_name, drive_service, header_row=None, alias=None, placeholder=None):
     """
     Descarga datos, formato y merges desde un .xlsx en Drive o Google Sheets nativo.
     Devuelve (df, cell_formats, merges):
@@ -952,6 +955,13 @@ def _cargar_datos_tabla(url, sheet_name, drive_service, header_row=None):
         cell_formats : { (fila_doc, col_excel): {bold, bg_color, font_color, font_size} }
         merges       : [ {min_row, min_col, max_row, max_col} ] en coordenadas 0-based
                        relativas al header_idx (fila_doc 0 = primera fila de la tabla)
+
+    IMPORTANTE: si el archivo Excel tiene varias hojas y no se proporciona
+    ``sheet_name`` (o el nombre dado no coincide con ninguna hoja), la función
+    lanza ValueError en vez de cargar silenciosamente la hoja activa. Esto
+    evita el bug de que todas las tablas sin sheet acabaran reemplazadas con
+    los datos de la misma hoja. Si se quiere hacer fallback por nombre del
+    placeholder, se puede pasar el ``placeholder`` o el ``alias``.
     """
     import io
     import pandas as pd
@@ -983,7 +993,43 @@ def _cargar_datos_tabla(url, sheet_name, drive_service, header_row=None):
 
     fh.seek(0)
     wb = openpyxl.load_workbook(fh, data_only=True)
-    ws = wb[sheet_name] if sheet_name and sheet_name in wb.sheetnames else wb.active
+
+    # ── Selección estricta de la hoja ───────────────────────────────────────
+    # Antes: si sheet_name era None o no existía, se usaba wb.active.
+    # Eso causaba que TODAS las tablas que no especificaban hoja terminaran
+    # con datos de la primera hoja del archivo (p.ej. EOLOVANOS).
+    # Ahora: si hay más de una hoja y no se especifica una válida, error.
+    n_hojas = len(wb.sheetnames)
+
+    if sheet_name and sheet_name in wb.sheetnames:
+        ws = wb[sheet_name]
+        hoja_usada = sheet_name
+    elif n_hojas == 1:
+        # Archivo con una sola hoja: no hay ambigüedad, se usa esa.
+        ws = wb.active
+        hoja_usada = ws.title
+    else:
+        # Intentar fallback por nombre del placeholder/alias
+        candidato = _resolver_hoja_por_nombre(wb.sheetnames, placeholder, alias)
+        if candidato:
+            ws = wb[candidato]
+            hoja_usada = candidato
+            _log(
+                f"⚠️  No se especificó 'sheet' para '{placeholder or alias}'. "
+                f"Se usará la hoja '{candidato}' detectada por similitud de nombre."
+            )
+        else:
+            hojas_disponibles = ", ".join(f"'{h}'" for h in wb.sheetnames)
+            etiqueta = placeholder or alias or "(sin etiqueta)"
+            raise ValueError(
+                f"El archivo Excel para la tabla {etiqueta} tiene {n_hojas} hojas "
+                f"pero no se especificó cuál usar. "
+                f"sheet_name recibido: {sheet_name!r}. "
+                f"Hojas disponibles: {hojas_disponibles}. "
+                f"Agrega una columna 'sheet' en el diccionario con el nombre exacto de la hoja."
+            )
+
+    _log(f"   📄 Hoja seleccionada: '{hoja_usada}' ({ws.max_row} filas × {ws.max_column} cols)")
 
     # ── Detectar última columna, última fila y primera fila con datos reales ──
     max_col_real        = 0
@@ -1101,6 +1147,66 @@ def _hex_argb_a_rgb_float(hex_argb):
     g = int(hex_rgb[2:4], 16) / 255
     b = int(hex_rgb[4:6], 16) / 255
     return {"red": round(r, 4), "green": round(g, 4), "blue": round(b, 4)}
+
+
+def _resolver_hoja_por_nombre(hojas_disponibles, placeholder, alias):
+    """
+    Intenta detectar a qué hoja del Excel corresponde un placeholder, comparando
+    palabras significativas. Devuelve el nombre exacto de la hoja si la
+    coincidencia es lo bastante fuerte, o None en caso contrario.
+
+    Esto es solo un fallback de conveniencia. La forma correcta es declarar la
+    hoja explícitamente en una columna 'sheet' del diccionario.
+    """
+    import unicodedata, re as _re
+
+    def _normalizar(s):
+        if not s:
+            return ""
+        s = str(s)
+        # quitar acentos
+        s = "".join(
+            c for c in unicodedata.normalize("NFD", s)
+            if unicodedata.category(c) != "Mn"
+        )
+        # solo letras/números, en minúscula
+        s = _re.sub(r"[^a-zA-Z0-9]+", " ", s).lower().strip()
+        return s
+
+    STOPWORDS = {
+        "de", "del", "la", "el", "los", "las", "y", "en", "con", "sobre",
+        "por", "para", "a", "al", "un", "una", "mt", "ac", "dc",
+    }
+
+    def _tokens(s):
+        return {t for t in _normalizar(s).split() if t and t not in STOPWORDS}
+
+    objetivo = _tokens(placeholder) | _tokens(alias)
+    if not objetivo:
+        return None
+
+    mejor_hoja = None
+    mejor_score = 0
+    for hoja in hojas_disponibles:
+        toks_hoja = _tokens(hoja)
+        if not toks_hoja:
+            continue
+        comunes = objetivo & toks_hoja
+        if not comunes:
+            continue
+        # Cobertura sobre la hoja: qué tan bien cubre el placeholder los
+        # tokens de la hoja (más estricto que solo contar palabras comunes).
+        score = len(comunes) / max(len(toks_hoja), 1)
+        if score > mejor_score:
+            mejor_score = score
+            mejor_hoja = hoja
+
+    # Umbral conservador: al menos 50% de los tokens de la hoja deben aparecer
+    # en el placeholder. Esto evita que "Tablas de regulación MT" se empareje
+    # con "VANOS IDEALES DE REGULACIÓN" solo por compartir "regulacion".
+    if mejor_score >= 0.5:
+        return mejor_hoja
+    return None
 
 
 def _generar_requests_formato_excel(tabla_nueva, cell_formats):

@@ -152,6 +152,9 @@ def identificar_poste(codigo: str, detallado: bool = False):
         if ' ' in codigo:
             codigo = codigo.replace(' ', '')
 
+        if not re.search(r'MT\s*F?\s*\d{3}-\d', codigo, re.IGNORECASE) and re.search(r'MT\s*F?\s*\d{3}$', codigo, re.IGNORECASE):
+            codigo = codigo + '-1'
+
         # Extraer patrón MTF?###-# donde F es opcional
         match = re.search(r'MT(F?)(\d{3})-(\d)', codigo, re.IGNORECASE)
         if not match:
@@ -4446,6 +4449,8 @@ def tipo_armado(carac_postes, postes_orden, postes_export, armado_export, nombre
                 return np.nan
             if ' ' in codigo:
                 codigo = codigo.replace(' ', '')
+            if not re.search(r'MT\s*F?\s*\d{3}-\d', codigo, re.IGNORECASE) and re.search(r'MT\s*F?\s*\d{3}$', codigo, re.IGNORECASE):
+                codigo = codigo + '-1'
             match = re.search(r'MT(F?)(\d{3})-(\d)', codigo, re.IGNORECASE)
             if not match:
                 return np.nan
@@ -4492,6 +4497,8 @@ def numero_fases(carac_postes, postes_orden, postes_export, armado_export, nombr
                 return np.nan
             if ' ' in codigo:
                 codigo = codigo.replace(' ', '')
+            if not re.search(r'MT\s*F?\s*\d{3}-\d', codigo, re.IGNORECASE) and re.search(r'MT\s*F?\s*\d{3}$', codigo, re.IGNORECASE):
+                codigo = codigo + '-1'
             match = re.search(r'MT(F?)(\d{3})-(\d)', codigo, re.IGNORECASE)
             if not match:
                 return np.nan
@@ -4594,6 +4601,8 @@ def numero_perforaciones(
                 return 0
             if ' ' in codigo:
                 codigo = codigo.replace(' ', '')
+            if not re.search(r'MT\s*F?\s*\d{3}-\d', codigo, re.IGNORECASE) and re.search(r'MT\s*F?\s*\d{3}$', codigo, re.IGNORECASE):
+                codigo = codigo + '-1'
             match = re.search(r'MT(F?)(\d{3})-(\d)', codigo, re.IGNORECASE)
             if not match:
                 return 0
