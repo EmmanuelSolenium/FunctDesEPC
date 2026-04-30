@@ -986,3 +986,284 @@ def exportar_todo_afinia(
 #     tipo_retenidas_ancla       = tipo_retenidas_ancla,
 #     dimension_ancla            = dimension_ancla,
 # )
+
+
+# exportar_nuevo_formato
+# ─────────────────────────────────────────────────────────────────────────────
+def exportar_nuevo_formato(
+    ruta_template,
+    ruta_salida,
+    # Hojas heredadas del template
+    eovanos,
+    van_reg,
+    # Hojas de flechado
+    tab_fle,
+    tablas_p,
+    tab_fle_s,
+    tablas_s,
+    # Tablas AFINIA
+    datos_iniciales_red_mt,
+    informacion_del_apoyo,
+    calculo_esfuerzos_apoyo,
+    analisis_hipotesis_normales,
+    analisis_hipotesis_anormales,
+    calculo_poste_retenidas=None,
+    validacion_poste_retenidas=None,
+    tipo_retenidas_ancla=None,
+    dimension_ancla=None,
+):
+    """
+    Exporta todos los datos al formato del nuevo Excel (calculos_mecanicos_afinia.xlsx).
+ 
+    Preserva íntegramente los encabezados de cada hoja (incluyendo celdas combinadas,
+    colores y fuentes). Para cada hoja detecta automáticamente la fila de encabezados
+    de columna y mapea los campos del DataFrame a las columnas correspondientes del
+    template, buscando coincidencia por nombre (exacta o normalizada) en las primeras
+    6 filas.
+ 
+    Parámetros
+    ----------
+    ruta_template : str   – Ruta al archivo base (calculos_mecanicos_afinia.xlsx).
+    ruta_salida   : str   – Ruta del archivo Excel de salida.
+    eovanos, van_reg : pd.DataFrame
+    tab_fle, tablas_p : list[pd.DataFrame]  – Cantones normales.
+    tab_fle_s, tablas_s : list[pd.DataFrame] – Cantones secundarios.
+    datos_iniciales_red_mt, informacion_del_apoyo, calculo_esfuerzos_apoyo,
+    analisis_hipotesis_normales, analisis_hipotesis_anormales : pd.DataFrame
+    calculo_poste_retenidas, validacion_poste_retenidas,
+    tipo_retenidas_ancla, dimension_ancla : pd.DataFrame | None
+        Si es None o está vacío, la hoja se deja con sus encabezados sin datos.
+    """
+    import pandas as pd
+    from openpyxl import load_workbook
+    from openpyxl.styles import Alignment, Font
+ 
+    # ── Configuración por hoja ────────────────────────────────────────────────
+    # header_row : fila con los nombres de columna más granulares (1-indexed)
+    # data_start : primera fila donde se escriben los datos
+    SHEET_CFG = {
+        "EOLOVANOS":                   {"header_row": 3, "data_start": 4},
+        "VANOS IDEALES DE REGULACIÓN": {"header_row": 6, "data_start": 7},
+        "Datos Iniciales Red MT":      {"header_row": 2, "data_start": 3},
+        "Información del Apoyo":       {"header_row": 4, "data_start": 5},
+        "Cálculo Esfuerzos Apoyo":     {"header_row": 2, "data_start": 3},
+        "Análisis Hip. Normales":      {"header_row": 3, "data_start": 4},
+        "Análisis Hip. Anormales":     {"header_row": 3, "data_start": 4},
+        "Cálculo Poste Retenidas":     {"header_row": 2, "data_start": 3},
+        "Validación Poste Retenidas":  {"header_row": 2, "data_start": 3},
+        "Tipo Retenidas y Ancla":      {"header_row": 2, "data_start": 3},
+        "Dimensión Ancla":             {"header_row": 1, "data_start": 2},
+    }
+ 
+    wrap = Alignment(wrap_text=True, vertical="center", horizontal="center")
+ 
+    # ── Helpers ───────────────────────────────────────────────────────────────
+ 
+    def _clean(val):
+        try:
+            if pd.isna(val):
+                return None
+        except (TypeError, ValueError):
+            pass
+        return val
+ 
+    def _val(val):
+        """Limpia y redondea a 4 decimales."""
+        v = _clean(val)
+        if isinstance(v, float):
+            v = round(v, 4)
+        return v
+ 
+    def _norm(text):
+        """Normaliza un nombre de columna para comparación robusta."""
+        if text is None:
+            return ""
+        import unicodedata
+        s = str(text).strip().lower()
+        s = unicodedata.normalize("NFKD", s)
+        s = "".join(c for c in s if not unicodedata.combining(c))
+        return s
+ 
+    def _build_col_map(ws, header_row, max_col):
+        """
+        Lee la fila `header_row` del worksheet y devuelve:
+            {nombre_normalizado: col_idx_excel (1-based)}
+        También incluye el nombre original para diagnóstico.
+        Considera celdas combinadas (el valor está sólo en la primera celda).
+        """
+        col_map = {}
+        raw_map = {}
+        for c in range(1, max_col + 1):
+            cell = ws.cell(header_row, c)
+            v = cell.value
+            if v is not None:
+                key = _norm(v)
+                col_map[key] = c
+                raw_map[str(v)] = c
+        return col_map, raw_map
+ 
+    def _map_df_to_cols(df, col_map):
+        """
+        Para cada columna del DataFrame, busca su posición en col_map.
+        Devuelve lista de (df_col_name, excel_col_idx | None).
+        """
+        result = []
+        for col_name in df.columns:
+            key = _norm(col_name)
+            idx = col_map.get(key)
+            if idx is None:
+                # Búsqueda parcial: el header del Excel puede ser más largo
+                for map_key, map_col in col_map.items():
+                    if key in map_key or map_key in key:
+                        idx = map_col
+                        break
+            result.append((col_name, idx))
+        return result
+ 
+    def _copy_cell_style(src_cell, dst_cell):
+        """Copia fill, font, border y alignment de src a dst."""
+        import copy
+        if src_cell.has_style:
+            dst_cell._style = copy.copy(src_cell._style)
+ 
+    def _write_sheet(ws, df, cfg):
+        """
+        Limpia los datos antiguos y escribe el DataFrame df en ws,
+        mapeando columnas por nombre respecto a cfg['header_row'].
+        """
+        if df is None or len(df) == 0:
+            return
+ 
+        header_row = cfg["header_row"]
+        data_start = cfg["data_start"]
+ 
+        # Leer estilo de una celda de datos de referencia (primera fila de datos actual)
+        ref_font = None
+        ref_align = None
+        if ws.max_row >= data_start:
+            ref_cell = ws.cell(data_start, 1)
+            if ref_cell.font:
+                ref_font = ref_cell.font
+            if ref_cell.alignment:
+                ref_align = ref_cell.alignment
+ 
+        # Eliminar filas de datos existentes
+        rows_to_delete = ws.max_row - data_start + 1
+        if rows_to_delete > 0:
+            ws.delete_rows(data_start, rows_to_delete)
+ 
+        # Construir mapa de columnas
+        col_map, _ = _build_col_map(ws, header_row, ws.max_column)
+        mapping = _map_df_to_cols(df, col_map)
+ 
+        # Escribir filas
+        for rel_row, (_, row_data) in enumerate(df.iterrows()):
+            abs_row = data_start + rel_row
+            for col_name, excel_col in mapping:
+                if excel_col is None:
+                    continue
+                raw_val = row_data[col_name]
+                val = _val(raw_val)
+                cell = ws.cell(abs_row, excel_col, value=val)
+                # Aplicar estilo de referencia
+                if ref_font:
+                    cell.font = Font(
+                        bold=ref_font.bold,
+                        size=ref_font.size,
+                        name=ref_font.name,
+                    )
+                cell.alignment = wrap
+ 
+    # ── 1. Cargar template ────────────────────────────────────────────────────
+    wb = load_workbook(ruta_template)
+ 
+    # ── 2. Hojas de cálculo (EOLOVANOS y VANOS IDEALES) ──────────────────────
+    tablas_calc = [
+        ("EOLOVANOS",                   eovanos),
+        ("VANOS IDEALES DE REGULACIÓN", van_reg),
+    ]
+    for sheet_name, df in tablas_calc:
+        if df is None or len(df) == 0:
+            continue
+        ws = wb[sheet_name]
+        _write_sheet(ws, df, SHEET_CFG[sheet_name])
+ 
+    # ── 3. Hojas AFINIA ───────────────────────────────────────────────────────
+    tablas_afinia = [
+        ("Datos Iniciales Red MT",       datos_iniciales_red_mt),
+        ("Información del Apoyo",        informacion_del_apoyo),
+        ("Cálculo Esfuerzos Apoyo",      calculo_esfuerzos_apoyo),
+        ("Análisis Hip. Normales",       analisis_hipotesis_normales),
+        ("Análisis Hip. Anormales",      analisis_hipotesis_anormales),
+        ("Cálculo Poste Retenidas",      calculo_poste_retenidas),
+        ("Validación Poste Retenidas",   validacion_poste_retenidas),
+        ("Tipo Retenidas y Ancla",       tipo_retenidas_ancla),
+        ("Dimensión Ancla",              dimension_ancla),
+    ]
+    hojas_escritas = []
+    hojas_omitidas = []
+    for sheet_name, df in tablas_afinia:
+        if df is None or len(df) == 0:
+            hojas_omitidas.append(sheet_name)
+            continue
+        if sheet_name not in wb.sheetnames:
+            hojas_omitidas.append(f"{sheet_name} (no encontrada en template)")
+            continue
+        ws = wb[sheet_name]
+        _write_sheet(ws, df, SHEET_CFG[sheet_name])
+        hojas_escritas.append(sheet_name)
+ 
+    # ── 4. Hojas de flechado ──────────────────────────────────────────────────
+    # Eliminar las hojas de cantones existentes del template para reescribirlas
+    canton_sheets = [s for s in wb.sheetnames if s.startswith("Canton_")]
+    for s in canton_sheets:
+        del wb[s]
+ 
+    for i, (header_df, datos_df) in enumerate(zip(tab_fle, tablas_p)):
+        ws = wb.create_sheet(title=f"Canton_{i + 1}")
+        next_row = _escribir_header_tabla(ws, header_df, start_row=1, start_col=1)
+        _escribir_datos_tabla(ws, datos_df, start_row=next_row, start_col=1)
+        _auto_col_width(ws)
+ 
+    for i, (header_df, datos_df) in enumerate(zip(tab_fle_s, tablas_s)):
+        ws = wb.create_sheet(title=f"Canton_{i + 1}S")
+        next_row = _escribir_header_tabla(ws, header_df, start_row=1, start_col=1)
+        _escribir_datos_tabla(ws, datos_df, start_row=next_row, start_col=1)
+        _auto_col_width(ws)
+ 
+    # ── 5. Guardar ────────────────────────────────────────────────────────────
+    wb.save(ruta_salida)
+ 
+    omitidas_str = (
+        f"\n   ⚠️  Hojas omitidas (sin datos o no halladas): {', '.join(hojas_omitidas)}"
+        if hojas_omitidas else ""
+    )
+    print(
+        f"✅ Archivo guardado: {ruta_salida}\n"
+        f"   • Hojas template     : EOLOVANOS, VANOS IDEALES DE REGULACIÓN\n"
+        f"   • Tablas AFINIA      : {len(hojas_escritas)} hojas{omitidas_str}\n"
+        f"   • Cantones normales  : {len(tab_fle)}\n"
+        f"   • Cantones secund.   : {len(tab_fle_s)}"
+    )
+ 
+ 
+# ── Ejemplo de uso ────────────────────────────────────────────────────────────
+# exportar_nuevo_formato(
+#     ruta_template              = DATA + "calculos_mecanicos_afinia.xlsx",
+#     ruta_salida                = DATA + "calculos_mecanicos_nuevo.xlsx",
+#     eovanos                    = eovanos,
+#     van_reg                    = van_reg,
+#     tab_fle                    = tab_fle,
+#     tablas_p                   = tablas_p,
+#     tab_fle_s                  = tab_fle_s,
+#     tablas_s                   = tablas_s,
+#     datos_iniciales_red_mt     = datos_iniciales_red_mt,
+#     informacion_del_apoyo      = informacion_del_apoyo,
+#     calculo_esfuerzos_apoyo    = calculo_esfuerzos_apoyo,
+#     analisis_hipotesis_normales  = analisis_hipotesis_normales,
+#     analisis_hipotesis_anormales = analisis_hipotesis_anormales,
+#     calculo_poste_retenidas    = calculo_poste_retenidas,    # opcional
+#     validacion_poste_retenidas = validacion_poste_retenidas, # opcional
+#     tipo_retenidas_ancla       = tipo_retenidas_ancla,       # opcional
+#     dimension_ancla            = dimension_ancla,            # opcional
+# )
