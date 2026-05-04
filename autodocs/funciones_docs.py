@@ -2,6 +2,14 @@ import pandas as pd
 import re
 import io
 
+
+def _debug(msg):
+    import os
+    log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "debug_tablas.log")
+    with open(log_path, "a", encoding="utf-8") as f:
+        f.write(msg + "\n")
+
+
 # ==============================
 # TAMAÑO POR DEFECTO DE IMÁGENES
 # ==============================
@@ -682,6 +690,9 @@ def reemplazar_tablas(doc_id, diccionario, docs_service, drive_service):
     Returns:
         dict: {"reemplazados": [...], "omitidos": [...]}
     """
+    import os
+    open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "debug_tablas.log"), "w").close()
+
     reemplazados = []
     omitidos     = []
 
@@ -901,13 +912,29 @@ def reemplazar_tablas(doc_id, diccionario, docs_service, drive_service):
                 ).execute()
 
             # -------------------------------------------------
+            # GET 4: releer tabla con índices actualizados post-insertText
+            # -------------------------------------------------
+            doc_post_texto  = docs_service.documents().get(documentId=doc_id).execute()
+            contenido_post  = doc_post_texto.get("body", {}).get("content", [])
+            tabla_para_fmt  = None
+            for elemento in contenido_post:
+                if "table" in elemento and elemento.get("startIndex") == tabla_start_real:
+                    tabla_para_fmt = elemento["table"]
+                    tabla_para_fmt["startIndex"] = tabla_start_real
+                    tabla_para_fmt["endIndex"]   = elemento.get("endIndex", 0)
+                    break
+            if tabla_para_fmt is None:
+                tabla_para_fmt = _encontrar_tabla_cerca(contenido_post, tabla_start_real)
+            if tabla_para_fmt is None:
+                tabla_para_fmt = tabla_nueva  # fallback
+
+            # -------------------------------------------------
             # batch 4: todo el formato en un solo batchUpdate
-            # Reutilizamos tabla_nueva (GET 3) más el offset conocido que
-            # produce insertText — el formato usa índices de celdas, no de
-            # caracteres, así que tabla_nueva sigue siendo válida.
             # -------------------------------------------------
             if cell_formats:
-                fmt_requests = _generar_requests_formato_excel(tabla_nueva, cell_formats)
+                _dbg_sizes_rt = {v["font_size"] for v in cell_formats.values() if "font_size" in v}
+                _debug(f"reemplazar_tablas | alias={alias!r} | font_sizes en cell_formats={_dbg_sizes_rt}")
+                fmt_requests = _generar_requests_formato_excel(tabla_para_fmt, cell_formats)
                 if fmt_requests:
                     docs_service.documents().batchUpdate(
                         documentId=doc_id,
@@ -1082,6 +1109,11 @@ def _cargar_datos_tabla(url, sheet_name, drive_service, header_row=None, alias=N
         for ci, celda in enumerate(fila):
             if ci >= max_col_real:
                 break
+            # Ignorar celdas vacías: pueden tener formato residual del Excel
+            # (p.ej. celdas sin contenido dentro de rangos mergeados) que
+            # produciría tamaños de fuente incorrectos en el documento.
+            if celda.value is None or str(celda.value).strip() in ("", "'"):
+                continue
             fmt = {}
 
             # Color de fondo
@@ -1098,6 +1130,7 @@ def _cargar_datos_tabla(url, sheet_name, drive_service, header_row=None, alias=N
             # Tamaño de fuente (solo si está definido explícitamente)
             if celda.font and celda.font.size:
                 fmt["font_size"] = float(celda.font.size)
+                _debug(f"_cargar_datos_tabla | celda {celda.coordinate} | valor={celda.value!r} | font_size={fmt['font_size']}")
 
             # Color de fuente (solo si no es negro por defecto)
             if celda.font and celda.font.color:
@@ -1107,6 +1140,9 @@ def _cargar_datos_tabla(url, sheet_name, drive_service, header_row=None, alias=N
 
             if fmt:
                 cell_formats[(doc_ri, ci)] = fmt
+
+    _dbg_sizes = {v["font_size"] for v in cell_formats.values() if "font_size" in v}
+    _debug(f"_cargar_datos_tabla | resumen: {len(cell_formats)} celdas con formato | font_sizes únicos={_dbg_sizes}")
 
     # ── Extraer merges (ajustados a header_idx y recortados a max_col_real) ───
     merges = []
@@ -1209,6 +1245,10 @@ def _generar_requests_formato_excel(tabla_nueva, cell_formats):
     tabla_id  = tabla_nueva.get("startIndex", 0)
     filas_doc = tabla_nueva.get("tableRows", [])
 
+    _dbg_sizes_grf = {v["font_size"] for v in cell_formats.values() if "font_size" in v}
+    _debug(f"_generar_requests_formato_excel | font_sizes recibidos={_dbg_sizes_grf} | total_entradas={len(cell_formats)}")
+    _count_ts_fontsize = 0
+
     for (fi, ci_excel), fmt in cell_formats.items():
         if fi >= len(filas_doc):
             continue
@@ -1295,7 +1335,11 @@ def _generar_requests_formato_excel(tabla_nueva, cell_formats):
                             "fields":    ",".join(text_fields)
                         }
                     })
+                    if "font_size" in fmt:
+                        _debug(f"_generar_requests | updateTextStyle | ({fi},{ci_excel}) | font_size={fmt['font_size']} | startIndex={ts_start} | endIndex={ts_end}")
+                        _count_ts_fontsize += 1
 
+    _debug(f"_generar_requests | TOTAL updateTextStyle con fontSize: {_count_ts_fontsize}")
     return requests
 
 
@@ -1661,9 +1705,26 @@ def reemplazar_loops(doc_id, diccionario, docs_service, drive_service):
                             body={"requests": requests_texto}
                         ).execute()
 
+                    # ── GET 4: releer tabla con índices actualizados post-insertText ──
+                    doc_post_texto  = docs_service.documents().get(documentId=doc_id).execute()
+                    contenido_post  = doc_post_texto.get("body", {}).get("content", [])
+                    tabla_para_fmt  = None
+                    for elemento in contenido_post:
+                        if "table" in elemento and elemento.get("startIndex") == tabla_start_real:
+                            tabla_para_fmt = elemento["table"]
+                            tabla_para_fmt["startIndex"] = tabla_start_real
+                            tabla_para_fmt["endIndex"]   = elemento.get("endIndex", 0)
+                            break
+                    if tabla_para_fmt is None:
+                        tabla_para_fmt = _encontrar_tabla_cerca(contenido_post, tabla_start_real)
+                    if tabla_para_fmt is None:
+                        tabla_para_fmt = tabla_nueva  # fallback
+
                     # ── 4f. batch 4: todo el formato en un solo batch ───────
                     if cell_formats:
-                        fmt_requests = _generar_requests_formato_excel(tabla_nueva, cell_formats)
+                        _dbg_sizes_rl = {v["font_size"] for v in cell_formats.values() if "font_size" in v}
+                        _debug(f"reemplazar_loops | alias={alias!r} hoja={hoja!r} | font_sizes en cell_formats={_dbg_sizes_rl}")
+                        fmt_requests = _generar_requests_formato_excel(tabla_para_fmt, cell_formats)
                         if fmt_requests:
                             docs_service.documents().batchUpdate(
                                 documentId=doc_id,
