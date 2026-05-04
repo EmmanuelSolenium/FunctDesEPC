@@ -431,29 +431,36 @@ def construir_c2t1_vano(
     return tabla1
 
 
-def convertir_texto_kgf_a_daN(texto: str) -> str:
+import re
+
+def convertir_texto_kgf_a_daN(texto):
     """
     Convierte expresiones del tipo 'PH ##/#### kg-f' a 'PH ##/XXX daN'.
 
+    - Si el valor NO es string → retorna None
     - Extrae el valor numérico después del slash (/)
     - Convierte de kgf a daN
-    - Redondea hacia arriba a la unidad más cercana
-    - Reemplaza 'kg-f' por 'daN'
+    - Redondea al entero más cercano
     """
 
+    # Validación de tipo
+    if not isinstance(texto, str):
+        return None
+
     patron = r"(.*?/)(\d+)(\s*kg-f)"
-
     match = re.search(patron, texto)
-    if not match:
-        raise ValueError(f"Formato no reconocido: {texto}")
 
-    prefijo = match.group(1)        # 'PH 12/'
+    if not match:
+        return None  # formato inesperado
+
+    prefijo = match.group(1)
     valor_kgf = float(match.group(2))
-    
+
     valor_daN = kgf_a_daN(valor_kgf)
     valor_daN_red = round(valor_daN)
 
     return f"{prefijo}{valor_daN_red} daN"
+
 
 """ texto = "PH 12/1350 kg-f"
 resultado = convertir_texto_kgf_a_daN(texto)

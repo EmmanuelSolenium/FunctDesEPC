@@ -37,7 +37,7 @@ VERBOSE = True
 URL_DICCIONARIO = "https://docs.google.com/spreadsheets/d/14VDGM9Yg0YyHByRdFT3526CmMbB-Ur4d/edit?usp=drive_link&ouid=109812277537374132162&rtpof=true&sd=true"
 
 # Documento plantilla de Google Docs
-URL_PLANTILLA = "https://docs.google.com/document/d/1s2k-y_WqI0HZhA10gaSgSj6RN_5sN5RTVyQ58INydv4/edit?usp=drive_link"
+URL_PLANTILLA = "https://docs.google.com/document/d/1VB6ltovwW6UFgGmCER6e685AyaEeslv8rWTGVHOgLmQ/edit?usp=sharing"
 
 # Carpeta donde se guardará el documento generado
 URL_CARPETA_DESTINO = "https://drive.google.com/drive/folders/1zUPZXuCLZyA63EK0HkzirBXY0Vw6CQkX?usp=drive_link"
@@ -88,10 +88,14 @@ def main():
         # 9. Reemplazar tablas en la copia
         resultado_tabla = funciones_docs.reemplazar_tablas(doc_id_nuevo, diccionario, docs_service, drive_service)
 
+        # 10. Reemplazar loops (tablas dinámicas multi-hoja) en la copia
+        resultado_loop = funciones_docs.reemplazar_loops(doc_id_nuevo, diccionario, docs_service, drive_service)
+
         print("\nProceso completado")
         print(f"   Textos reemplazados:   {len(resultado_texto['reemplazados'])}")
         print(f"   Imagenes reemplazadas: {len(resultado_imagen['reemplazados'])}")
         print(f"   Tablas reemplazadas:   {len(resultado_tabla['reemplazados'])}")
+        print(f"   Loops reemplazados:    {len(resultado_loop['reemplazados'])}")
 
     except Exception as e:
         print("ERROR:")

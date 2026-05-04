@@ -18,6 +18,7 @@ TIPO_MAP = {
     "condicional":    "text",
     "imagen":         "image",
     "tabla":          "table",
+    "loop":           "loop",
     "imagen / tabla": "image",  # se trata como imagen por ahora
 }
 
@@ -140,6 +141,23 @@ def cargar_diccionario(archivo, project_filter=None):
                     except Exception:
                         header_row = None
             value = {"file_id": raw_url, "sheet": sheet, "header_row": header_row} if raw_url else None
+
+        elif tipo_normalizado == "loop":
+            # file_id: URL al Excel con múltiples hojas
+            # sheet:   prefijo que deben tener los nombres de las hojas a incluir
+            # header_row: fila de encabezados (igual que en tabla)
+            raw_url = str(raw_value).strip() if not _es_nulo(raw_value) else None
+            prefijo = str(row.get("sheet", "")).strip() if tiene_sheet else None
+            prefijo = prefijo if prefijo and prefijo.lower() != "nan" else None
+            header_row = None
+            if tiene_header_row:
+                hr = row.get("header_row")
+                if not _es_nulo(hr):
+                    try:
+                        header_row = int(float(hr))
+                    except Exception:
+                        header_row = None
+            value = {"file_id": raw_url, "prefijo": prefijo, "header_row": header_row} if raw_url else None
 
         else:
             value = _convertir_a_texto(raw_value)
@@ -642,14 +660,18 @@ def reemplazar_tablas(doc_id, diccionario, docs_service, drive_service):
     """
     Reemplaza placeholders de tipo 'table' en un Google Doc.
 
-    Flujo por cada tabla:
-        1. Localiza el placeholder {{ alias }} en el texto plano del documento.
-        2. Calcula startIndex y endIndex del placeholder.
-        3. En un solo batchUpdate: borra el placeholder con deleteContentRange
-           e inserta la tabla con insertTable en esa misma posición.
-        4. Relee el documento y localiza la tabla por startIndex exacto
-           (fallback a proximidad si no hay coincidencia exacta).
-        5. Aplica merges, llena celdas y aplica formato.
+    Diseño de requests optimizado — por cada tabla:
+        GET 1  : leer documento y localizar placeholder
+        batch 1: deleteContentRange + insertTable  (1 request)
+        GET 2  : localizar tabla recién insertada
+        batch 2: todos los mergeTableCells en un solo batch (ordenados abajo-derecha → arriba-izquierda)
+        GET 3  : leer estructura post-merge para obtener índices reales de celdas
+        batch 3: todos los insertText en un solo batch
+        batch 4: todos los updateTableCellStyle + updateTextStyle en un solo batch
+                 (reusar GET 3 con offset conocido, sin GET extra)
+
+    Total: 3 GETs + 4 batchUpdates por tabla (independiente del nº de celdas/merges).
+    Antes: 3 + 3·N GETs + 2 + N batchUpdates donde N = nº de merges.
 
     Args:
         doc_id        (str):  ID del documento de Google Docs.
@@ -691,7 +713,7 @@ def reemplazar_tablas(doc_id, diccionario, docs_service, drive_service):
 
         try:
             # -------------------------------------------------
-            # 1. Descargar datos y formato desde Excel o Google Sheets
+            # 1. Descargar datos y formato desde Excel
             # -------------------------------------------------
             df, cell_formats, merges = _cargar_datos_tabla(
                 url_tabla, sheet_name, drive_service, header_row,
@@ -705,10 +727,10 @@ def reemplazar_tablas(doc_id, diccionario, docs_service, drive_service):
             n_cols  = len(df.columns)
 
             # -------------------------------------------------
-            # 2. Leer documento y localizar el placeholder
+            # GET 1: localizar el placeholder
             # -------------------------------------------------
-            documento = docs_service.documents().get(documentId=doc_id).execute()
-            contenido = documento.get("body", {}).get("content", [])
+            documento   = docs_service.documents().get(documentId=doc_id).execute()
+            contenido   = documento.get("body", {}).get("content", [])
             texto_plano, mapa_indices = _extraer_texto_con_indices(contenido)
 
             pos = texto_plano.find(placeholder)
@@ -726,30 +748,19 @@ def reemplazar_tablas(doc_id, diccionario, docs_service, drive_service):
             inicio_bloque = start_idx
 
             # -------------------------------------------------
-            # 3. Borrar el placeholder e insertar tabla vacía
-            #    en un solo batchUpdate
+            # batch 1: borrar placeholder + insertar tabla vacía
             # -------------------------------------------------
             docs_service.documents().batchUpdate(
                 documentId=doc_id,
                 body={"requests": [
-                    {"deleteContentRange": {
-                        "range": {
-                            "startIndex": start_idx,
-                            "endIndex":   end_idx
-                        }
-                    }},
-                    {"insertTable": {
-                        "rows":     n_filas,
-                        "columns":  n_cols,
-                        "location": {"index": start_idx}
-                    }}
+                    {"deleteContentRange": {"range": {"startIndex": start_idx, "endIndex": end_idx}}},
+                    {"insertTable": {"rows": n_filas, "columns": n_cols, "location": {"index": start_idx}}}
                 ]}
             ).execute()
 
             # -------------------------------------------------
-            # 3b. Aplicar merges del Excel a la tabla recién insertada
+            # GET 2: localizar la tabla recién insertada
             # -------------------------------------------------
-            # Releer y localizar la tabla por startIndex exacto; fallback a proximidad
             doc_tmp       = docs_service.documents().get(documentId=doc_id).execute()
             contenido_tmp = doc_tmp.get("body", {}).get("content", [])
             tabla_tmp     = None
@@ -765,29 +776,45 @@ def reemplazar_tablas(doc_id, diccionario, docs_service, drive_service):
             if not tabla_tmp:
                 omitidos.append({"alias": alias, "razon": "no se pudo localizar la tabla recién insertada"})
                 continue
+
             tabla_start_real = tabla_tmp["startIndex"]
 
+            # -------------------------------------------------
+            # batch 2: todos los merges en UN solo batchUpdate
+            #
+            # La API de Google Docs acepta múltiples mergeTableCells en un
+            # mismo batchUpdate siempre que estén ordenados de abajo-derecha
+            # hacia arriba-izquierda (sin solapamiento de rangos de destino).
+            # Esto elimina el loop de N GETs + N batchUpdates del diseño anterior.
+            # -------------------------------------------------
             if merges:
-                # Aplicar merges de derecha a izquierda y de abajo hacia arriba.
-                # Cada merge se aplica con verificación post-merge: se relee la
-                # tabla y se confirma que el columnSpan esperado quedó aplicado;
-                # si no, se reintenta hasta MAX_REINTENTOS veces.
-                MAX_REINTENTOS = 3
                 merges_ordenados = sorted(merges, key=lambda m: (-m["min_row"], -m["min_col"]))
-
-                tabla_start_actual = tabla_start_real
-
-                for merge in merges_ordenados:
-                    aplicado = False
-                    for intento in range(1, 4):
-                        try:
-                            doc_m = docs_service.documents().get(documentId=doc_id).execute()
-                        except Exception as e:
-                            break
-                        tabla_m = _encontrar_tabla_cerca(doc_m.get("body", {}).get("content", []), inicio_bloque)
-                        if not tabla_m:
-                            break
-                        tabla_start_actual = tabla_m["startIndex"]
+                merge_requests   = [
+                    {
+                        "mergeTableCells": {
+                            "tableRange": {
+                                "tableCellLocation": {
+                                    "tableStartLocation": {"index": tabla_start_real},
+                                    "rowIndex":    m["min_row"],
+                                    "columnIndex": m["min_col"]
+                                },
+                                "rowSpan":    m["row_span"],
+                                "columnSpan": m["col_span"]
+                            }
+                        }
+                    }
+                    for m in merges_ordenados
+                ]
+                try:
+                    docs_service.documents().batchUpdate(
+                        documentId=doc_id,
+                        body={"requests": merge_requests}
+                    ).execute()
+                except Exception as e_merge:
+                    # Si el batch de merges falla (raro, p.ej. merges solapados en el Excel)
+                    # caemos al modo secuencial como fallback para no perder la tabla.
+                    _log(f"   ⚠️  Batch de merges falló ({e_merge}), reintentando de forma secuencial…")
+                    for m in merges_ordenados:
                         try:
                             docs_service.documents().batchUpdate(
                                 documentId=doc_id,
@@ -795,70 +822,44 @@ def reemplazar_tablas(doc_id, diccionario, docs_service, drive_service):
                                     "mergeTableCells": {
                                         "tableRange": {
                                             "tableCellLocation": {
-                                                "tableStartLocation": {"index": tabla_start_actual},
-                                                "rowIndex":    merge["min_row"],
-                                                "columnIndex": merge["min_col"]
+                                                "tableStartLocation": {"index": tabla_start_real},
+                                                "rowIndex":    m["min_row"],
+                                                "columnIndex": m["min_col"]
                                             },
-                                            "rowSpan":    merge["row_span"],
-                                            "columnSpan": merge["col_span"]
+                                            "rowSpan":    m["row_span"],
+                                            "columnSpan": m["col_span"]
                                         }
                                     }
                                 }]}
                             ).execute()
-                        except Exception as e:
+                        except Exception:
                             pass
-                        try:
-                            doc_v = docs_service.documents().get(documentId=doc_id).execute()
-                            tabla_v = _encontrar_tabla_cerca(doc_v.get("body", {}).get("content", []), inicio_bloque)
-                        except Exception as e:
-                            break
-                        if not tabla_v:
-                            break
-                        filas_v = tabla_v.get("tableRows", [])
-                        celdas_v = filas_v[merge["min_row"]].get("tableCells", []) if merge["min_row"] < len(filas_v) else []
-                        col_off = 0
-                        span_real = None
-                        for c in celdas_v:
-                            sp = c.get("tableCellStyle", {}).get("columnSpan", 1)
-                            if col_off == merge["min_col"]:
-                                span_real = sp
-                                break
-                            col_off += sp
-                        if span_real == merge["col_span"]:
-                            aplicado = True
-                            break
 
-
-            # Releer DESPUÉS de aplicar los merges — reusar la última lectura de
-            # verificación para no hacer un GET extra y evitar confusión de tablas.
-            # tabla_start_actual contiene el startIndex verificado en el último merge.
-            doc_final = docs_service.documents().get(documentId=doc_id).execute()
+            # -------------------------------------------------
+            # GET 3: leer estructura post-merge
+            # Necesario para obtener los startIndex reales de cada celda
+            # después de que los merges hayan desplazado los índices internos.
+            # Este es el único GET que no se puede eliminar.
+            # -------------------------------------------------
+            doc_final  = docs_service.documents().get(documentId=doc_id).execute()
             contenido2 = doc_final.get("body", {}).get("content", [])
-            ref = tabla_start_actual if merges else tabla_start_real
 
-            # Buscar por startIndex EXACTO para evitar confusión con otras tablas cercanas
             tabla_nueva = None
             for elemento in contenido2:
-                if "table" not in elemento:
-                    continue
-                if elemento.get("startIndex") == ref:
+                if "table" in elemento and elemento.get("startIndex") == tabla_start_real:
                     tabla_nueva = elemento["table"]
-                    tabla_nueva["startIndex"] = ref
-                    tabla_nueva["endIndex"] = elemento.get("endIndex", 0)
+                    tabla_nueva["startIndex"] = tabla_start_real
+                    tabla_nueva["endIndex"]   = elemento.get("endIndex", 0)
                     break
-
             if tabla_nueva is None:
-                # Fallback por proximidad
-                tabla_nueva = _encontrar_tabla_cerca(contenido2, ref)
-
+                tabla_nueva = _encontrar_tabla_cerca(contenido2, tabla_start_real)
             if tabla_nueva is None:
                 omitidos.append({"alias": alias, "razon": "no se pudo localizar la tabla post-merge"})
                 continue
 
             # -------------------------------------------------
-            # 7. Llenar celdas con datos (de atrás hacia adelante).
-            #    Las filas con merges tienen menos celdas físicas;
-            #    se usa col_offset para mapear celda física → col Excel.
+            # batch 3: todos los insertText en un solo batchUpdate
+            # (de atrás hacia adelante para no desplazar índices)
             # -------------------------------------------------
             todas_las_filas = [list(df.columns)] + df.values.tolist()
             requests_texto  = []
@@ -868,32 +869,27 @@ def reemplazar_tablas(doc_id, diccionario, docs_service, drive_service):
                 fila_datos = todas_las_filas[fi]
                 celdas_doc = fila_doc.get("tableCells", [])
 
-                pares = []
-                col_logica = 0        # columna lógica actual (en términos del Excel)
-                col_consumida_hasta = -1  # hasta qué col lógica llega el merge activo
+                pares               = []
+                col_logica          = 0
+                col_consumida_hasta = -1
                 for celda in celdas_doc:
                     span = celda.get("tableCellStyle", {}).get("columnSpan", 1)
                     if col_logica > col_consumida_hasta:
-                        # Esta celda es la principal (no absorbida)
                         pares.append((celda, col_logica))
                         col_consumida_hasta = col_logica + span - 1
-                    # Si col_logica <= col_consumida_hasta, es absorbida — no agregar a pares
-                    col_logica += 1   # cada celda física avanza 1 en la columna lógica
+                    col_logica += 1
 
                 for celda, col_excel in reversed(pares):
                     texto = str(fila_datos[col_excel]) if col_excel < len(fila_datos) else ""
                     if not texto or texto in ("nan", "None"):
                         continue
-
                     parrafos  = celda.get("content", [])
                     elementos = parrafos[0].get("paragraph", {}).get("elements", []) if parrafos else []
                     if not elementos:
                         continue
-
-                    idx_insercion = elementos[0].get("startIndex", 0)
                     requests_texto.append({
                         "insertText": {
-                            "location": {"index": idx_insercion},
+                            "location": {"index": elementos[0].get("startIndex", 0)},
                             "text":     texto
                         }
                     })
@@ -905,26 +901,23 @@ def reemplazar_tablas(doc_id, diccionario, docs_service, drive_service):
                 ).execute()
 
             # -------------------------------------------------
-            # 6. Releer documento y aplicar formato del Excel
-            #    (negrita, color de fondo, color de fuente)
+            # batch 4: todo el formato en un solo batchUpdate
+            # Reutilizamos tabla_nueva (GET 3) más el offset conocido que
+            # produce insertText — el formato usa índices de celdas, no de
+            # caracteres, así que tabla_nueva sigue siendo válida.
             # -------------------------------------------------
             if cell_formats:
-                documento3 = docs_service.documents().get(documentId=doc_id).execute()
-                contenido3 = documento3.get("body", {}).get("content", [])
-                tabla_fmt  = _encontrar_tabla_cerca(contenido3, ref)
-                if tabla_fmt:
-                    fmt_requests = _generar_requests_formato_excel(tabla_fmt, cell_formats)
-                    if fmt_requests:
-                        docs_service.documents().batchUpdate(
-                            documentId=doc_id,
-                            body={"requests": fmt_requests}
-                        ).execute()
+                fmt_requests = _generar_requests_formato_excel(tabla_nueva, cell_formats)
+                if fmt_requests:
+                    docs_service.documents().batchUpdate(
+                        documentId=doc_id,
+                        body={"requests": fmt_requests}
+                    ).execute()
 
-            reemplazados.append({
-                "alias":   alias,
-                "n_filas": n_filas,
-                "n_cols":  n_cols
-            })
+            reemplazados.append({"alias": alias, "n_filas": n_filas, "n_cols": n_cols})
+            _log(f"   ✅ '{alias}' → {n_filas} filas × {n_cols} cols  "
+                 f"({len(merges)} merges, {len(requests_texto)} celdas, "
+                 f"{len(cell_formats)} formatos)")
 
         except Exception as e:
             import traceback
@@ -932,9 +925,6 @@ def reemplazar_tablas(doc_id, diccionario, docs_service, drive_service):
             omitidos.append({"alias": alias, "razon": f"error: {str(e)}"})
 
     _log(f"✅ Tablas reemplazadas: {len(reemplazados)}")
-    for r in reemplazados:
-        _log(f"   {r['alias']} → {r['n_filas']} filas × {r['n_cols']} columnas")
-
     if omitidos:
         _log(f"⚠️  Tablas omitidas: {len(omitidos)}")
         for o in omitidos:
@@ -1327,6 +1317,389 @@ def _encontrar_tabla_cerca(contenido, indice_referencia):
             tabla["endIndex"]   = elemento.get("endIndex", 0)
             mejor = tabla
     return mejor
+
+
+# ==============================
+# LOOPS (tablas dinámicas por hojas)
+# ==============================
+
+def _listar_hojas_con_prefijo(url, prefijo, drive_service):
+    """
+    Descarga el Excel desde Drive y devuelve los nombres de las hojas
+    cuyo nombre empiece con ``prefijo`` (case-insensitive), en el orden
+    en que aparecen en el libro.
+
+    Args:
+        url          (str): URL o file_id del Excel en Drive.
+        prefijo      (str): Prefijo que deben tener los nombres de hoja.
+                            Si es None o vacío, devuelve TODAS las hojas.
+        drive_service:      Servicio autenticado de Google Drive API.
+
+    Returns:
+        list[str]: Nombres de hojas que cumplen el filtro.
+    """
+    import io
+    import openpyxl
+    from googleapiclient.http import MediaIoBaseDownload
+    from googleapiclient.errors import HttpError
+
+    file_id = extraer_id_gdoc(url)
+
+    def _descargar(request):
+        fh = io.BytesIO()
+        downloader = MediaIoBaseDownload(fh, request)
+        done = False
+        while not done:
+            _, done = downloader.next_chunk()
+        fh.seek(0)
+        return fh
+
+    try:
+        fh = _descargar(drive_service.files().get_media(fileId=file_id))
+    except HttpError as e:
+        if e.resp.status in (400, 403):
+            fh = _descargar(drive_service.files().export_media(
+                fileId=file_id,
+                mimeType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            ))
+        else:
+            raise
+
+    wb = openpyxl.load_workbook(fh, read_only=True, data_only=True)
+    hojas = wb.sheetnames
+
+    if not prefijo:
+        return hojas
+
+    prefijo_lower = prefijo.lower()
+    return [h for h in hojas if h.lower().startswith(prefijo_lower)]
+
+
+def reemplazar_loops(doc_id, diccionario, docs_service, drive_service):
+    """
+    Reemplaza placeholders de tipo 'loop' en un Google Doc.
+
+    Un placeholder de tipo loop tiene la forma ``{% loop alias %}`` en el
+    documento. El código:
+
+        1. Lista todas las hojas del Excel cuyo nombre empiece con el prefijo
+           definido en la columna ``sheet`` del diccionario.
+        2. Localiza el placeholder ``{% loop alias %}`` en el documento.
+        3. Borra el placeholder.
+        4. Por cada hoja (en orden), inserta un salto de página seguido de la
+           tabla con los datos y formato de esa hoja.
+           - Las tablas se insertan de ATRÁS HACIA ADELANTE para no desplazar
+             los índices de las inserciones siguientes.
+
+    El formato de cada tabla (negrita, colores, merges) se preserva igual que
+    en ``reemplazar_tablas()``.
+
+    Sintaxis en el diccionario Excel:
+        Nombre del dato : (cualquier etiqueta descriptiva)
+        Alias           : tabla_tendido        ← nombre del loop
+        Tipo            : Loop
+        Valor           : https://drive.google.com/...  ← URL del Excel con hojas por cantón
+        sheet           : Canton_              ← prefijo de las hojas a incluir
+        header_row      : 1                    ← (opcional) fila de encabezados
+
+    Sintaxis en Google Docs:
+        {% loop tabla_tendido %}
+
+    Args:
+        doc_id        (str):  ID del documento de Google Docs.
+        diccionario   (dict): Diccionario unificado generado por cargar_diccionario().
+        docs_service:         Servicio autenticado de Google Docs API.
+        drive_service:        Servicio autenticado de Google Drive API.
+
+    Returns:
+        dict: {"reemplazados": [...], "omitidos": [...]}
+    """
+    reemplazados = []
+    omitidos     = []
+
+    entradas_loop = [
+        (alias, entrada)
+        for alias, entrada in diccionario.items()
+        if entrada.get("type") == "loop"
+        and entrada.get("value") is not None
+    ]
+
+    if not entradas_loop:
+        _log("ℹ️  No se encontraron entradas de tipo 'loop' para reemplazar.")
+        return {"reemplazados": [], "omitidos": omitidos}
+
+    for alias, entrada in entradas_loop:
+        valor      = entrada["value"]
+        url_excel  = valor.get("file_id")
+        prefijo    = valor.get("prefijo")
+        header_row = valor.get("header_row")
+
+        # El placeholder en el doc es {% loop alias %}
+        placeholder = f"{{% loop {alias} %}}"
+
+        if not url_excel:
+            omitidos.append({"alias": alias, "razon": "URL de Excel vacía"})
+            continue
+
+        try:
+            # -------------------------------------------------
+            # 1. Listar hojas que cumplan el prefijo
+            # -------------------------------------------------
+            hojas = _listar_hojas_con_prefijo(url_excel, prefijo, drive_service)
+
+            if not hojas:
+                omitidos.append({
+                    "alias": alias,
+                    "razon": f"No se encontraron hojas con prefijo '{prefijo}' en el Excel"
+                })
+                continue
+
+            _log(f"   🗂️  Loop '{alias}': {len(hojas)} hojas encontradas → {hojas}")
+
+            # -------------------------------------------------
+            # 2. Localizar el placeholder en el documento
+            # -------------------------------------------------
+            documento   = docs_service.documents().get(documentId=doc_id).execute()
+            contenido   = documento.get("body", {}).get("content", [])
+            texto_plano, mapa_indices = _extraer_texto_con_indices(contenido)
+
+            pos = texto_plano.find(placeholder)
+            if pos == -1:
+                omitidos.append({
+                    "alias": alias,
+                    "razon": f"placeholder '{placeholder}' no encontrado en el documento"
+                })
+                continue
+
+            start_idx = _idx(pos, mapa_indices)
+            end_idx   = _idx(pos + len(placeholder), mapa_indices)
+
+            if start_idx is None or end_idx is None:
+                omitidos.append({"alias": alias, "razon": "no se pudo mapear el índice del placeholder"})
+                continue
+
+            # -------------------------------------------------
+            # 3. Borrar el placeholder
+            # -------------------------------------------------
+            docs_service.documents().batchUpdate(
+                documentId=doc_id,
+                body={"requests": [{
+                    "deleteContentRange": {
+                        "range": {"startIndex": start_idx, "endIndex": end_idx}
+                    }
+                }]}
+            ).execute()
+
+            # -------------------------------------------------
+            # 4. Insertar tablas de ATRÁS HACIA ADELANTE
+            #    Cada tabla va precedida de un salto de página,
+            #    excepto la primera (que queda en el lugar del placeholder).
+            #    Insertamos en orden inverso para no desplazar start_idx.
+            # -------------------------------------------------
+            tablas_insertadas = 0
+
+            for hoja in reversed(hojas):
+                try:
+                    df, cell_formats, merges = _cargar_datos_tabla(
+                        url_excel, hoja, drive_service, header_row,
+                        alias=alias, placeholder=hoja,
+                    )
+                    if df is None or df.empty:
+                        _log(f"   ⚠️  Hoja '{hoja}' vacía, se omite.")
+                        continue
+
+                    n_filas = len(df) + 1   # +1 fila de encabezados
+                    n_cols  = len(df.columns)
+
+                    # ── 4a. Insertar salto de página + tabla vacía ──────────
+                    # El salto de página va ANTES de la tabla (excepto la primera).
+                    # Como insertamos en reversa, el salto va después en el índice
+                    # pero termina antes en el documento final.
+                    requests_insercion = []
+
+                    if tablas_insertadas > 0:
+                        # Salto de página al inicio de la posición actual
+                        requests_insercion.append({
+                            "insertPageBreak": {
+                                "location": {"index": start_idx}
+                            }
+                        })
+
+                    requests_insercion.append({
+                        "insertTable": {
+                            "rows":     n_filas,
+                            "columns":  n_cols,
+                            "location": {"index": start_idx}
+                        }
+                    })
+
+                    docs_service.documents().batchUpdate(
+                        documentId=doc_id,
+                        body={"requests": requests_insercion}
+                    ).execute()
+
+                    # ── 4b. Localizar la tabla recién insertada ─────────────
+                    doc_tmp       = docs_service.documents().get(documentId=doc_id).execute()
+                    contenido_tmp = doc_tmp.get("body", {}).get("content", [])
+                    tabla_tmp     = None
+                    for elem in contenido_tmp:
+                        if "table" in elem and elem.get("startIndex") == start_idx:
+                            t = elem["table"]
+                            t["startIndex"] = elem["startIndex"]
+                            t["endIndex"]   = elem.get("endIndex", 0)
+                            tabla_tmp = t
+                            break
+                    if tabla_tmp is None:
+                        tabla_tmp = _encontrar_tabla_cerca(contenido_tmp, start_idx)
+                    if not tabla_tmp:
+                        _log(f"   ⚠️  No se pudo localizar la tabla insertada para '{hoja}'.")
+                        continue
+
+                    tabla_start_real = tabla_tmp["startIndex"]
+
+                    # ── 4c. batch 2: todos los merges en UN solo batchUpdate ──
+                    if merges:
+                        merges_ordenados = sorted(merges, key=lambda m: (-m["min_row"], -m["min_col"]))
+                        merge_requests   = [
+                            {
+                                "mergeTableCells": {
+                                    "tableRange": {
+                                        "tableCellLocation": {
+                                            "tableStartLocation": {"index": tabla_start_real},
+                                            "rowIndex":    m["min_row"],
+                                            "columnIndex": m["min_col"]
+                                        },
+                                        "rowSpan":    m["row_span"],
+                                        "columnSpan": m["col_span"]
+                                    }
+                                }
+                            }
+                            for m in merges_ordenados
+                        ]
+                        try:
+                            docs_service.documents().batchUpdate(
+                                documentId=doc_id,
+                                body={"requests": merge_requests}
+                            ).execute()
+                        except Exception as e_merge:
+                            _log(f"   ⚠️  Batch de merges falló ({e_merge}), reintentando secuencialmente…")
+                            for m in merges_ordenados:
+                                try:
+                                    docs_service.documents().batchUpdate(
+                                        documentId=doc_id,
+                                        body={"requests": [{
+                                            "mergeTableCells": {
+                                                "tableRange": {
+                                                    "tableCellLocation": {
+                                                        "tableStartLocation": {"index": tabla_start_real},
+                                                        "rowIndex":    m["min_row"],
+                                                        "columnIndex": m["min_col"]
+                                                    },
+                                                    "rowSpan":    m["row_span"],
+                                                    "columnSpan": m["col_span"]
+                                                }
+                                            }
+                                        }]}
+                                    ).execute()
+                                except Exception:
+                                    pass
+
+                    # ── 4d. GET 3: leer estructura post-merge ───────────────
+                    doc_final  = docs_service.documents().get(documentId=doc_id).execute()
+                    contenido2 = doc_final.get("body", {}).get("content", [])
+                    tabla_nueva = None
+                    for elemento in contenido2:
+                        if "table" in elemento and elemento.get("startIndex") == tabla_start_real:
+                            tabla_nueva = elemento["table"]
+                            tabla_nueva["startIndex"] = tabla_start_real
+                            tabla_nueva["endIndex"]   = elemento.get("endIndex", 0)
+                            break
+                    if tabla_nueva is None:
+                        tabla_nueva = _encontrar_tabla_cerca(contenido2, tabla_start_real)
+                    if tabla_nueva is None:
+                        _log(f"   ⚠️  No se pudo releer la tabla para '{hoja}'.")
+                        continue
+
+                    # ── 4e. batch 3: todos los insertText en un solo batch ──
+                    todas_las_filas = [list(df.columns)] + df.values.tolist()
+                    requests_texto  = []
+
+                    for fi in range(len(todas_las_filas) - 1, -1, -1):
+                        fila_doc   = tabla_nueva.get("tableRows", [])[fi]
+                        fila_datos = todas_las_filas[fi]
+                        celdas_doc = fila_doc.get("tableCells", [])
+
+                        pares = []
+                        col_logica           = 0
+                        col_consumida_hasta  = -1
+                        for celda in celdas_doc:
+                            span = celda.get("tableCellStyle", {}).get("columnSpan", 1)
+                            if col_logica > col_consumida_hasta:
+                                pares.append((celda, col_logica))
+                                col_consumida_hasta = col_logica + span - 1
+                            col_logica += 1
+
+                        for celda, col_excel in reversed(pares):
+                            texto = str(fila_datos[col_excel]) if col_excel < len(fila_datos) else ""
+                            if not texto or texto in ("nan", "None"):
+                                continue
+                            parrafos  = celda.get("content", [])
+                            elementos = parrafos[0].get("paragraph", {}).get("elements", []) if parrafos else []
+                            if not elementos:
+                                continue
+                            idx_insercion = elementos[0].get("startIndex", 0)
+                            requests_texto.append({
+                                "insertText": {
+                                    "location": {"index": idx_insercion},
+                                    "text":     texto
+                                }
+                            })
+
+                    if requests_texto:
+                        docs_service.documents().batchUpdate(
+                            documentId=doc_id,
+                            body={"requests": requests_texto}
+                        ).execute()
+
+                    # ── 4f. batch 4: todo el formato en un solo batch ───────
+                    if cell_formats:
+                        fmt_requests = _generar_requests_formato_excel(tabla_nueva, cell_formats)
+                        if fmt_requests:
+                            docs_service.documents().batchUpdate(
+                                documentId=doc_id,
+                                body={"requests": fmt_requests}
+                            ).execute()
+
+                    tablas_insertadas += 1
+                    _log(f"   ✅ Tabla insertada para hoja '{hoja}' ({n_filas} filas × {n_cols} cols)")
+
+                except Exception as e_hoja:
+                    import traceback
+                    traceback.print_exc()
+                    _log(f"   ❌ Error procesando hoja '{hoja}': {e_hoja}")
+                    omitidos.append({"alias": alias, "razon": f"error en hoja '{hoja}': {str(e_hoja)}"})
+
+            reemplazados.append({
+                "alias":             alias,
+                "hojas":             hojas,
+                "tablas_insertadas": tablas_insertadas,
+            })
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            omitidos.append({"alias": alias, "razon": f"error: {str(e)}"})
+
+    _log(f"✅ Loops reemplazados: {len(reemplazados)}")
+    for r in reemplazados:
+        _log(f"   {r['alias']} → {r['tablas_insertadas']} tablas ({', '.join(r['hojas'])})")
+
+    if omitidos:
+        _log(f"⚠️  Loops omitidos: {len(omitidos)}")
+        for o in omitidos:
+            _log(f"   {o['alias']}: {o['razon']}")
+
+    return {"reemplazados": reemplazados, "omitidos": omitidos}
 
 
 # ==============================
