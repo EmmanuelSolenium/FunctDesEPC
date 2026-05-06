@@ -13,7 +13,7 @@ if PROJECT_ROOT not in sys.path:
 # ==============================
 # IMPORTAR FUNCIONES
 # ==============================
-from autodocs import funciones_docs
+from autodocs import funciones_docs_word
 
 
 # ==============================
@@ -37,7 +37,7 @@ VERBOSE = True
 URL_DICCIONARIO = "https://docs.google.com/spreadsheets/d/14VDGM9Yg0YyHByRdFT3526CmMbB-Ur4d/edit?usp=drive_link&ouid=109812277537374132162&rtpof=true&sd=true"
 
 # Plantilla en formato .docx en Google Drive  <- coloca aqui tu enlace
-URL_PLANTILLA = "https://drive.google.com/file/d/REEMPLAZA_CON_ID_DE_TU_DOCX/view?usp=sharing"
+URL_PLANTILLA = "https://docs.google.com/document/d/1n-9GyhJ1zis4yL9sGh6kXgtr3tyLXxz5/edit?usp=drive_link&ouid=109812277537374132162&rtpof=true&sd=true"
 
 # Carpeta donde se subira el documento generado
 URL_CARPETA_DESTINO = "https://drive.google.com/drive/folders/1zUPZXuCLZyA63EK0HkzirBXY0Vw6CQkX?usp=drive_link"
@@ -52,24 +52,24 @@ NOMBRE_DOCUMENTO = "Plantilla proyecto de redes"
 def main():
     try:
         # 1. Autenticacion OAuth2 con tu cuenta de Google
-        docs_service, drive_service, sheets_service = funciones_docs.autenticar_oauth()
-        funciones_docs.VERBOSE = VERBOSE
+        docs_service, drive_service, sheets_service = funciones_docs_word.autenticar_oauth()
+        funciones_docs_word.VERBOSE = VERBOSE
 
         # 2. Descargar el Excel del diccionario desde Drive
-        file_id_diccionario = funciones_docs.extraer_id_gdoc(URL_DICCIONARIO)
-        archivo_excel = funciones_docs.descargar_excel_drive(file_id_diccionario, drive_service)
+        file_id_diccionario = funciones_docs_word.extraer_id_gdoc(URL_DICCIONARIO)
+        archivo_excel = funciones_docs_word.descargar_excel_drive(file_id_diccionario, drive_service)
 
         # 3. Construir el diccionario unificado
         #    Cada entrada de tipo 'tabla' / 'imagen' / 'loop' debe tener su URL en la columna 'Valor'
-        diccionario = funciones_docs.cargar_diccionario(archivo_excel)
+        diccionario = funciones_docs_word.cargar_diccionario(archivo_excel)
 
         # 4. Extraer IDs desde las URLs
-        doc_id_plantilla   = funciones_docs.extraer_id_gdoc(URL_PLANTILLA)
-        carpeta_destino_id = funciones_docs.extraer_id_gdoc(URL_CARPETA_DESTINO)
+        doc_id_plantilla   = funciones_docs_word.extraer_id_gdoc(URL_PLANTILLA)
+        carpeta_destino_id = funciones_docs_word.extraer_id_gdoc(URL_CARPETA_DESTINO)
 
         # 5. Descargar la plantilla .docx a un temporal local
         #    (sustituye la antigua copia en Drive)
-        ruta_docx = funciones_docs.copiar_documento(
+        ruta_docx = funciones_docs_word.copiar_documento(
             doc_id             = doc_id_plantilla,
             nombre_nuevo       = NOMBRE_DOCUMENTO,
             drive_service      = drive_service,
@@ -78,23 +78,23 @@ def main():
 
         # 6. Procesar condicionales ({% if %}...{% endif %})
         #    Debe ejecutarse ANTES del reemplazo de texto
-        funciones_docs.procesar_condicionales(ruta_docx, diccionario)
+        funciones_docs_word.procesar_condicionales(ruta_docx, diccionario)
 
         # 7. Reemplazar textos en el .docx local
-        resultado_texto = funciones_docs.reemplazar_textos(ruta_docx, diccionario)
+        resultado_texto = funciones_docs_word.reemplazar_textos(ruta_docx, diccionario)
 
         # 8. Reemplazar imagenes en el .docx local
-        resultado_imagen = funciones_docs.reemplazar_imagenes(ruta_docx, diccionario, None, drive_service)
+        resultado_imagen = funciones_docs_word.reemplazar_imagenes(ruta_docx, diccionario, None, drive_service)
 
         # 9. Reemplazar tablas estaticas en el .docx local
-        resultado_tabla = funciones_docs.reemplazar_tablas(ruta_docx, diccionario, None, drive_service)
+        resultado_tabla = funciones_docs_word.reemplazar_tablas(ruta_docx, diccionario, None, drive_service)
 
         # 10. Reemplazar loops (tablas dinamicas multi-hoja) en el .docx local
-        resultado_loop = funciones_docs.reemplazar_loops(ruta_docx, diccionario, None, drive_service)
+        resultado_loop = funciones_docs_word.reemplazar_loops(ruta_docx, diccionario, None, drive_service)
 
         # 11. Subir el .docx resultante a la carpeta destino en Drive
         nombre_archivo = NOMBRE_DOCUMENTO + ".docx"
-        file_id_nuevo  = funciones_docs.subir_docx_drive(
+        file_id_nuevo  = funciones_docs_word.subir_docx_drive(
             ruta_local    = ruta_docx,
             nombre        = nombre_archivo,
             carpeta_id    = carpeta_destino_id,

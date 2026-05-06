@@ -5024,4 +5024,45 @@ def llenar_dimension_ancla(
     return dimension_ancla
 
 
+import pandas as pd
+
+def concat_series_preferente(s1: pd.Series, s2: pd.Series) -> pd.Series:
+    """
+    Concatena celda a celda como: s1 + " y " + s2.
+    
+    Reglas:
+    - Si ambos tienen dato: "s1 y s2"
+    - Si solo uno tiene dato: ese valor
+    - Si ninguno tiene dato (NaN/None/""/solo espacios): None
+    """
+
+    # Asegurar mismo índice
+    s1, s2 = s1.align(s2)
+
+    # Convertir a string para operar, pero conservando NaN
+    a = s1.astype("string")
+    b = s2.astype("string")
+
+    # Considerar como "sin dato" también strings vacíos o con solo espacios
+    a_clean = a.str.strip()
+    b_clean = b.str.strip()
+
+    mask_a = a_clean.notna() & (a_clean != "")
+    mask_b = b_clean.notna() & (b_clean != "")
+
+    # Construcción vectorizada
+    both = mask_a & mask_b
+    only_a = mask_a & ~mask_b
+    only_b = ~mask_a & mask_b
+
+    out = pd.Series(pd.NA, index=a.index, dtype="string")
+
+    out[both] = a_clean[both] + " y " + b_clean[both]
+    out[only_a] = a_clean[only_a]
+    out[only_b] = b_clean[only_b]
+
+    # Convertir a None donde no hay dato en ninguno
+    return out.astype(object).where(out.notna(), None)
+
+
 

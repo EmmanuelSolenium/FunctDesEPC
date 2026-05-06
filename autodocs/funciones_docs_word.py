@@ -347,11 +347,19 @@ def _iter_all_paragraphs(doc):
 def _get_para_full_text(para):
     return "".join(r.text for r in para.runs)
 
+def _consolidar_runs(para):
+    runs = para.runs
+    if len(runs) <= 1:
+        return
+    texto_completo = "".join(r.text for r in runs)
+    if not texto_completo:
+        return
+    runs[0].text = texto_completo
+    for r in runs[1:]:
+        r.text = ""
+
 def _replace_text_in_para(para, old, new):
-    """
-    Reemplaza old por new en un parrafo preservando el formato del primer run.
-    Maneja el caso en que el placeholder esta repartido entre varios runs.
-    """
+    _consolidar_runs(para)
     full = _get_para_full_text(para)
     if old not in full:
         return False
@@ -581,6 +589,7 @@ def reemplazar_imagenes(doc_path, diccionario, _docs_service=None, drive_service
 
         encontrado = False
         for para in _iter_all_paragraphs(doc):
+            _consolidar_runs(para)
             if placeholder not in _get_para_full_text(para):
                 continue
             encontrado = True
@@ -709,28 +718,46 @@ def _cargar_datos_tabla(url, sheet_name, drive_service, header_row=None, alias=N
     ]
     df = pd.DataFrame(datos_filas, columns=encabezados).fillna("").astype(str)
 
+    # Colores ARGB que consideramos "sin relleno real" (transparente / blanco / negro)
+    _FILLS_IGNORADOS = {"00000000", "FFFFFFFF", "FF000000", "00FFFFFF", "FFFFFFFF"}
+
     cell_formats = {}
     for doc_ri, fila in enumerate(filas_excel):
         for ci, celda in enumerate(fila):
             if ci >= max_col_real:
                 break
-            if celda.value is None or str(celda.value).strip() in ("", "'"):
-                continue
+
+            has_value = (
+                celda.value is not None
+                and str(celda.value).strip() not in ("", "'")
+            )
+
             fmt = {}
+
+            # ── Fondo: se captura para TODAS las celdas (incluso vacías).
+            # Esto preserva el relleno azul de celdas de cabecera que no tienen
+            # texto pero sí color (p.ej. A2:D2 en EOLOVANOS).
             fill = celda.fill
             if fill and fill.fill_type not in (None, "none"):
                 color = fill.fgColor
-                if color and color.type == "rgb" and color.rgb not in ("00000000", "FFFFFFFF", "FF000000"):
+                if color and color.type == "rgb" and color.rgb not in _FILLS_IGNORADOS:
                     fmt["bg_color"] = color.rgb
-            if celda.font and celda.font.bold:
-                fmt["bold"] = True
-            if celda.font and celda.font.size:
-                fmt["font_size"] = float(celda.font.size)
-                _debug(f"_cargar_datos_tabla | {celda.coordinate} | valor={celda.value!r} | font_size={fmt['font_size']}")
-            if celda.font and celda.font.color:
-                fc = celda.font.color
-                if fc.type == "rgb" and fc.rgb not in ("00000000", "FF000000"):
-                    fmt["font_color"] = fc.rgb
+
+            # ── Fuente: solo para celdas con contenido real
+            if has_value:
+                if celda.font and celda.font.bold:
+                    fmt["bold"] = True
+                if celda.font and celda.font.size:
+                    fmt["font_size"] = float(celda.font.size)
+                    _debug(
+                        f"_cargar_datos_tabla | {celda.coordinate} "
+                        f"| valor={celda.value!r} | font_size={fmt['font_size']}"
+                    )
+                if celda.font and celda.font.color:
+                    fc = celda.font.color
+                    if fc.type == "rgb" and fc.rgb not in ("00000000", "FF000000"):
+                        fmt["font_color"] = fc.rgb
+
             if fmt:
                 cell_formats[(doc_ri, ci)] = fmt
 
@@ -785,47 +812,317 @@ def _resolver_hoja_por_nombre(hojas_disponibles, placeholder, alias):
 # CREAR TABLA DOCX CON FORMATO
 # ==============================
 
+def _aplicar_bordes_tabla(tabla):
+    """Aplica bordes de cuadrícula via XML, sin depender del estilo 'Table Grid'."""
+    tbl   = tabla._tbl
+    tblPr = tbl.find(qn("w:tblPr"))
+    if tblPr is None:
+        tblPr = OxmlElement("w:tblPr")
+        tbl.insert(0, tblPr)
+    for old_b in tblPr.findall(qn("w:tblBorders")):
+        tblPr.remove(old_b)
+    tblBorders = OxmlElement("w:tblBorders")
+    for side in ("top", "left", "bottom", "right", "insideH", "insideV"):
+        el = OxmlElement(f"w:{side}")
+        el.set(qn("w:val"),   "single")
+        el.set(qn("w:sz"),    "4")
+        el.set(qn("w:space"), "0")
+        el.set(qn("w:color"), "000000")
+        tblBorders.append(el)
+    tblPr.append(tblBorders)
+
+
+def _quitar_bordes_celda(tc):
+    """Quita todos los bordes de una celda individual."""
+    tcPr = tc.find(qn("w:tcPr"))
+    if tcPr is None:
+        tcPr = OxmlElement("w:tcPr")
+        tc.insert(0, tcPr)
+    for old_b in tcPr.findall(qn("w:tcBorders")):
+        tcPr.remove(old_b)
+    tcBorders = OxmlElement("w:tcBorders")
+    for side in ("top", "left", "bottom", "right", "insideH", "insideV"):
+        el = OxmlElement(f"w:{side}")
+        el.set(qn("w:val"),   "none")
+        el.set(qn("w:sz"),    "0")
+        el.set(qn("w:space"), "0")
+        el.set(qn("w:color"), "auto")
+        tcBorders.append(el)
+    tcPr.append(tcBorders)
+
+
+def _vaciar_celda_xml(tc):
+    """
+    Elimina todo el contenido de una celda dejando exactamente UN párrafo vacío.
+    Word requiere al menos un <w:p> por celda. Múltiples <w:p> vacíos producen
+    saltos de línea que inflan el alto de fila.
+    """
+    parrafos = tc.findall(qn("w:p"))
+    for p in parrafos:
+        for r in list(p.findall(qn("w:r"))):
+            p.remove(r)
+        for hyp in list(p.findall(qn("w:hyperlink"))):
+            p.remove(hyp)
+    for p in parrafos[1:]:
+        tc.remove(p)
+    if not parrafos:
+        tc.append(OxmlElement("w:p"))
+
+
 def _aplicar_formato_tabla(tabla, cell_formats, merges):
-    """Aplica merges y formato (bg, bold, font_size, font_color) a una tabla python-docx."""
+    """
+    Aplica merges y formato de celda (bg, bold, font_size, font_color).
+
+    IMPORTANTE – comportamiento de python-docx al fusionar celdas:
+    Cuando se llama a cell.merge(), los párrafos de cada celda absorbida
+    se MUEVEN al interior del anchor (celda origen del merge), lo que genera
+    párrafos vacíos extra dentro de esa celda y produce grandes espacios en
+    blanco. La función _limpiar_parrafos_merge() corrige esto después.
+    """
+    # ── 1. Aplicar merges
     for m in sorted(merges, key=lambda x: (-x["min_row"], -x["min_col"])):
         try:
-            tabla.cell(m["min_row"], m["min_col"]).merge(tabla.cell(m["max_row"], m["max_col"]))
+            tabla.cell(m["min_row"], m["min_col"]).merge(
+                tabla.cell(m["max_row"], m["max_col"])
+            )
         except Exception:
             pass
 
+    # ── 2. Aplicar formato celda a celda
     for (fi, ci), fmt in cell_formats.items():
         try:
             celda = tabla.cell(fi, ci)
         except Exception:
             continue
 
+        # Fondo: se aplica incluso a celdas sin texto (p.ej. A2:D2 azul en EOLOVANOS)
         if "bg_color" in fmt:
             tc_pr = celda._tc.get_or_add_tcPr()
-            shd   = OxmlElement("w:shd")
+            # Eliminar shd previos para evitar duplicados
+            for old_shd in tc_pr.findall(qn("w:shd")):
+                tc_pr.remove(old_shd)
+            shd = OxmlElement("w:shd")
             shd.set(qn("w:val"),   "clear")
             shd.set(qn("w:color"), "auto")
             shd.set(qn("w:fill"),  fmt["bg_color"][-6:])
             tc_pr.append(shd)
 
-        for para in celda.paragraphs:
-            for run in para.runs:
-                if fmt.get("bold"):
-                    run.bold = True
-                if "font_size" in fmt:
-                    run.font.size = Pt(fmt["font_size"])
-                if "font_color" in fmt:
-                    r, g, b = _hex_argb_a_rgb(fmt["font_color"])
-                    run.font.color.rgb = RGBColor(r, g, b)
+        # Fuente: solo si la celda tiene texto real
+        texto_celda = "".join(
+            t.text or "" for t in celda._tc.iter(qn("w:t"))
+        ).strip()
+        if texto_celda:
+            for para in celda.paragraphs:
+                for run in para.runs:
+                    if fmt.get("bold"):
+                        run.bold = True
+                    if "font_size" in fmt:
+                        run.font.size = Pt(fmt["font_size"])
+                    if "font_color" in fmt:
+                        r, g, b = _hex_argb_a_rgb(fmt["font_color"])
+                        run.font.color.rgb = RGBColor(r, g, b)
 
 
-def _crear_tabla_docx(doc, df, cell_formats, merges):
-    """Crea y retorna una tabla python-docx con datos, merges y formato."""
+def _limpiar_parrafos_merge(tabla):
+    """
+    Elimina los párrafos vacíos extra que python-docx introduce en la celda
+    anchor cuando fusiona celdas con merge().
+
+    Problema confirmado: al llamar a cell.merge(), python-docx MUEVE los
+    párrafos de cada celda absorbida al interior del anchor. Si esas celdas
+    tenían texto vacío (""), el anchor acaba con N párrafos vacíos de más
+    → espacio en blanco gigante dentro de la celda combinada.
+
+    Solución: después del merge, recorrer todos los <w:tc> y eliminar los
+    párrafos vacíos que siguen al último párrafo con contenido real,
+    dejando siempre al menos un <w:p> (requisito de Word).
+    """
+    for row in tabla.rows:
+        for tc in row._tr.findall(qn("w:tc")):
+            parrafos = tc.findall(qn("w:p"))
+            if len(parrafos) <= 1:
+                continue  # nada que limpiar
+
+            # Eliminar párrafos vacíos desde el final hacia atrás
+            while len(parrafos) > 1:
+                ultimo = parrafos[-1]
+                texto = "".join(
+                    (t.text or "") for t in ultimo.iter(qn("w:t"))
+                ).strip()
+                if texto:
+                    break          # encontramos contenido real → parar
+                tc.remove(ultimo)
+                parrafos.pop()
+
+
+def _hacer_filas_asimetricas(tabla):
+    """
+    Crea una tabla verdaderamente asimétrica en OOXML eliminando las celdas
+    vacías del FINAL de cada fila y ampliando la última celda con datos
+    mediante gridSpan.
+
+    Por qué val="none" en tcBorders NO es suficiente:
+    En el modelo de resolución de conflictos de OOXML, cuando una celda vacía
+    tiene val="none" en su borde izquierdo pero la celda adyacente con DATOS
+    no tiene override explícito (usa el borde de tabla insideV="single"), el
+    borde "single" de la celda con datos gana y se dibuja igual.
+    La única forma de eliminar el borde completamente es quitar la celda vacía
+    del DOM y ampliar la última celda con datos.
+
+    Qué hace esta función:
+    - Para cada fila, localiza la última celda con texto real.
+    - Calcula cuántas celdas vacías hay a continuación (trailing).
+    - Suma su gridSpan a la última celda con datos y actualiza su ancho (tcW).
+    - Elimina las celdas vacías trailing del <w:tr>.
+
+    Celdas vacías NO-trailing (antes de la última con datos) se dejan tal cual;
+    son manejadas por _ocultar_celdas_vacias_intermedias().
+    """
+    tbl = tabla._tbl
+
+    # Leer anchos de columna del tblGrid
+    tblGrid = tbl.find(qn("w:tblGrid"))
+    grid_widths: list[int] = []
+    if tblGrid is not None:
+        for gridCol in tblGrid.findall(qn("w:gridCol")):
+            w = gridCol.get(qn("w:w"))
+            grid_widths.append(int(w) if w else 0)
+
+    for row in tabla.rows:
+        tcs = list(row._tr.findall(qn("w:tc")))
+        if not tcs:
+            continue
+
+        # Mapear cada <w:tc> a (índice_físico, col_lógica_inicio, gridSpan)
+        tc_info: list[tuple] = []
+        col_logica = 0
+        for tc in tcs:
+            tcPr = tc.find(qn("w:tcPr"))
+            gs = 1
+            if tcPr is not None:
+                gs_el = tcPr.find(qn("w:gridSpan"))
+                if gs_el is not None:
+                    gs = int(gs_el.get(qn("w:val"), 1))
+            tc_info.append((tc, col_logica, gs))
+            col_logica += gs
+
+        # Hallar el último índice físico que tiene texto
+        ultimo_con_datos = -1
+        for i, (tc, _, _) in enumerate(tc_info):
+            texto = "".join(t.text or "" for t in tc.iter(qn("w:t"))).strip()
+            if texto:
+                ultimo_con_datos = i
+
+        # Sin datos o sin trailing vacíos → nada que hacer
+        if ultimo_con_datos < 0 or ultimo_con_datos >= len(tc_info) - 1:
+            continue
+
+        celdas_trailing = tc_info[ultimo_con_datos + 1:]
+        gs_extra = sum(gs for _, _, gs in celdas_trailing)
+        if gs_extra == 0:
+            continue
+
+        # ── Ampliar la última celda con datos ──
+        ultima_tc, ultima_col, ultima_gs = tc_info[ultimo_con_datos]
+        nueva_gs = ultima_gs + gs_extra
+
+        ultima_tcPr = ultima_tc.find(qn("w:tcPr"))
+        if ultima_tcPr is None:
+            ultima_tcPr = OxmlElement("w:tcPr")
+            ultima_tc.insert(0, ultima_tcPr)
+
+        # Actualizar o crear gridSpan
+        gs_el_existente = ultima_tcPr.find(qn("w:gridSpan"))
+        if gs_el_existente is not None:
+            ultima_tcPr.remove(gs_el_existente)
+        if nueva_gs > 1:
+            new_gs_el = OxmlElement("w:gridSpan")
+            new_gs_el.set(qn("w:val"), str(nueva_gs))
+            tcW_el = ultima_tcPr.find(qn("w:tcW"))
+            if tcW_el is not None:
+                tcW_el.addnext(new_gs_el)
+            else:
+                ultima_tcPr.insert(0, new_gs_el)
+
+        # Actualizar ancho de celda para que sume los anchos de las columnas absorbidas
+        if grid_widths:
+            fin_col = ultima_col + nueva_gs
+            new_width = sum(
+                grid_widths[c]
+                for c in range(ultima_col, min(fin_col, len(grid_widths)))
+            )
+            tcW_el = ultima_tcPr.find(qn("w:tcW"))
+            if tcW_el is None:
+                tcW_el = OxmlElement("w:tcW")
+                ultima_tcPr.insert(0, tcW_el)
+            tcW_el.set(qn("w:type"), "dxa")
+            tcW_el.set(qn("w:w"), str(new_width))
+
+        # ── Eliminar las celdas vacías trailing del <w:tr> ──
+        for tc, _, _ in celdas_trailing:
+            row._tr.remove(tc)
+
+
+def _ocultar_celdas_vacias_intermedias(tabla):
+    """
+    Para las celdas vacías que NO están al final de la fila (no-trailing)
+    — como las celdas A2:D2 vacías en la cabecera de EOLOVANOS, que están
+    ANTES de la celda con datos "Gravivano (m)" — aplica val="nil" en todos
+    sus bordes.
+
+    Se usa "nil" (y no "none") porque "nil" tiene la semántica de
+    "suprimir cualquier borde heredado del padre", incluyendo el tblBorders.
+    Aun así, si la celda ADYACENTE tiene un borde explícito single, puede ganar.
+    En la práctica, para cabeceras con bg_color aplicado esto produce el efecto
+    visual correcto porque las celdas vacías del header se ven como extensión
+    del color de fondo, sin borde visible molesto.
+    """
+    for row in tabla.rows:
+        tcs = list(row._tr.findall(qn("w:tc")))
+        for tc in tcs:
+            texto = "".join(t.text or "" for t in tc.iter(qn("w:t"))).strip()
+            if not texto:
+                # Usar "nil" para mayor potencia de supresión
+                tcPr = tc.find(qn("w:tcPr"))
+                if tcPr is None:
+                    tcPr = OxmlElement("w:tcPr")
+                    tc.insert(0, tcPr)
+                for old_b in tcPr.findall(qn("w:tcBorders")):
+                    tcPr.remove(old_b)
+                tcBorders = OxmlElement("w:tcBorders")
+                for side in ("top", "left", "bottom", "right"):
+                    el = OxmlElement(f"w:{side}")
+                    el.set(qn("w:val"),   "nil")
+                    el.set(qn("w:sz"),    "0")
+                    el.set(qn("w:space"), "0")
+                    el.set(qn("w:color"), "auto")
+                    tcBorders.append(el)
+                tcPr.append(tcBorders)
+                _vaciar_celda_xml(tc)
+
+
+def _crear_tabla_docx(doc, df, cell_formats, merges, es_loop=False):
+    """
+    Crea y retorna una tabla python-docx con datos, merges y formato.
+
+    Pipeline:
+    1. Crear tabla y aplicar bordes de cuadrícula.
+    2. Volcar los datos en las celdas.
+    3. Aplicar merges + formato (bg, bold, font_size, font_color).
+    4. Limpiar párrafos vacíos extra generados por merge().
+    5. Eliminar celdas vacías del final de cada fila ampliando la última
+       celda con datos → tabla verdaderamente asimétrica sin bordes fantasma.
+    6. Ocultar con val="nil" las celdas vacías restantes (no-trailing),
+       típicamente cabeceras de tablas regulares con merges parciales.
+
+    El parámetro es_loop se conserva por compatibilidad.
+    """
     todas_las_filas = [list(df.columns)] + df.values.tolist()
     n_filas = len(todas_las_filas)
     n_cols  = len(todas_las_filas[0]) if todas_las_filas else 1
 
     tabla = doc.add_table(rows=n_filas, cols=n_cols)
-    tabla.style = "Table Grid"
+    _aplicar_bordes_tabla(tabla)
 
     for fi, fila_datos in enumerate(todas_las_filas):
         for ci, val in enumerate(fila_datos):
@@ -833,6 +1130,18 @@ def _crear_tabla_docx(doc, df, cell_formats, merges):
             tabla.cell(fi, ci).text = text
 
     _aplicar_formato_tabla(tabla, cell_formats, merges)
+
+    # Paso 4: limpiar párrafos extra generados por merge()
+    _limpiar_parrafos_merge(tabla)
+
+    # Paso 5: eliminar celdas vacías trailing → tabla asimétrica real
+    _hacer_filas_asimetricas(tabla)
+
+    # Paso 6: solo en tablas de cantón — ocultar celdas vacías no-trailing.
+    # Las tablas regulares conservan bordes uniformes en todas las celdas.
+    if es_loop:
+        _ocultar_celdas_vacias_intermedias(tabla)
+
     return tabla
 
 
@@ -887,6 +1196,7 @@ def reemplazar_tablas(doc_path, diccionario, _docs_service=None, drive_service=N
             encontrado = False
 
             for para in list(_iter_all_paragraphs(doc)):
+                _consolidar_runs(para)
                 if placeholder not in _get_para_full_text(para):
                     continue
                 encontrado = True
@@ -994,6 +1304,7 @@ def reemplazar_loops(doc_path, diccionario, _docs_service=None, drive_service=No
 
             para_loop = None
             for para in list(_iter_all_paragraphs(doc)):
+                _consolidar_runs(para)
                 if placeholder in _get_para_full_text(para):
                     para_loop = para
                     break
@@ -1028,7 +1339,7 @@ def reemplazar_loops(doc_path, diccionario, _docs_service=None, drive_service=No
                         para_salto.append(run_salto)
                         ref_el.addprevious(para_salto)
 
-                    tabla = _crear_tabla_docx(doc, df, cell_formats, merges)
+                    tabla = _crear_tabla_docx(doc, df, cell_formats, merges, es_loop=True)
                     ref_el.addprevious(tabla._element)
 
                     tablas_insertadas += 1
