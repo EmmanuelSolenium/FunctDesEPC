@@ -4422,109 +4422,6 @@ def agregar_coordenadas(
 
 
 
-def tipo_armado(carac_postes, postes_orden, postes_export, armado_export, nombre_columna="Tipo de Armado"):
-    """
-    Determina el tipo de armado por poste según el primer dígito numérico del código.
-
-    Códigos MT(F)###-#:
-        1 → Bandera
-        2 → Triangular – Vano Largo
-        3 → Horizontal
-        4 → Vertical
-        5 → Compacta
-        6 → Autosoportado simple circuito
-        7 → Autosoportado doble circuito
-
-    Parámetros:
-        carac_postes:   DataFrame destino (un poste por fila, ordenado y sin repeticiones).
-        postes_orden:   Serie con los nombres de poste únicos y ordenados.
-        postes_export:  Serie con los nombres de poste del archivo de entrada (con repeticiones y desorden).
-        armado_export:  Serie con los códigos de armado, alineada con postes_export.
-        nombre_columna: Nombre de la columna que se añadirá a carac_postes.
-
-    Retorna:
-        DataFrame carac_postes con la columna de tipo de armado añadida.
-    """
-
-    TIPOS = {1: "Bandera", 2: "Triangular – Vano Largo", 3: "Horizontal",
-             4: "Vertical", 5: "Compacta", 6: "Autosoportado simple circuito",
-             7: "Autosoportado doble circuito"}
-
-    def extraer_tipo(codigo):
-        try:
-            if not isinstance(codigo, str):
-                return np.nan
-            if ' ' in codigo:
-                codigo = codigo.replace(' ', '')
-            if not re.search(r'MT\s*F?\s*\d{3}-\d', codigo, re.IGNORECASE) and re.search(r'MT\s*F?\s*\d{3}$', codigo, re.IGNORECASE):
-                codigo = codigo + '-1'
-            match = re.search(r'MT(F?)(\d{3})-(\d)', codigo, re.IGNORECASE)
-            if not match:
-                return np.nan
-            primer_digito = int(match.group(2)[0])
-            return TIPOS.get(primer_digito, np.nan)
-        except Exception:
-            return np.nan
-
-    postes_exp = postes_export.reset_index(drop=True).values
-    armado_exp = armado_export.reset_index(drop=True).values
-
-    # Mapa poste → tipo de armado (primera ocurrencia)
-    mapa = {}
-    for i, poste in enumerate(postes_exp):
-        if poste not in mapa:
-            mapa[poste] = extraer_tipo(armado_exp[i])
-
-    carac_postes[nombre_columna] = [mapa.get(p, np.nan) for p in postes_orden.values]
-
-    return carac_postes
-
-
-def numero_fases(carac_postes, postes_orden, postes_export, armado_export, nombre_columna="Número de Fases"):
-    """
-    Determina el número de fases por poste según el segundo dígito numérico del código de armado.
-
-    Código MT(F)###-#: el segundo dígito indica el número de fases.
-    Ejemplo: MTF631-1 → 3 fases.
-
-    Parámetros:
-        carac_postes:   DataFrame destino (un poste por fila, ordenado y sin repeticiones).
-        postes_orden:   Serie con los nombres de poste únicos y ordenados.
-        postes_export:  Serie con los nombres de poste del archivo de entrada (con repeticiones y desorden).
-        armado_export:  Serie con los códigos de armado, alineada con postes_export.
-        nombre_columna: Nombre de la columna que se añadirá a carac_postes.
-
-    Retorna:
-        DataFrame carac_postes con la columna de número de fases añadida.
-    """
-
-    def extraer_fases(codigo):
-        try:
-            if not isinstance(codigo, str):
-                return np.nan
-            if ' ' in codigo:
-                codigo = codigo.replace(' ', '')
-            if not re.search(r'MT\s*F?\s*\d{3}-\d', codigo, re.IGNORECASE) and re.search(r'MT\s*F?\s*\d{3}$', codigo, re.IGNORECASE):
-                codigo = codigo + '-1'
-            match = re.search(r'MT(F?)(\d{3})-(\d)', codigo, re.IGNORECASE)
-            if not match:
-                return np.nan
-            return int(match.group(2)[1])
-        except Exception:
-            return np.nan
-
-    postes_exp = postes_export.reset_index(drop=True).values
-    armado_exp = armado_export.reset_index(drop=True).values
-
-    # Mapa poste → número de fases (primera ocurrencia)
-    mapa = {}
-    for i, poste in enumerate(postes_exp):
-        if poste not in mapa:
-            mapa[poste] = extraer_fases(armado_exp[i])
-
-    carac_postes[nombre_columna] = [mapa.get(p, np.nan) for p in postes_orden.values]
-
-    return carac_postes
 
 
 def agregar_cantones(
@@ -4570,6 +4467,170 @@ def agregar_cantones(
     return carac_postes
 
 
+
+
+"""
+FUNCIONES CORREGIDAS — drop-in replacement para funciones_mecanicas.py
+Problema: tipo_armado, numero_fases y numero_perforaciones tomaban solo la
+PRIMERA ocurrencia del poste en postes_export. Si en esa primera ocurrencia
+el armado estaba vacío pero en una repetición posterior sí tenía valor,
+el resultado quedaba en blanco.
+ 
+Solución: recorrer TODAS las ocurrencias y tomar el primer valor válido
+(no NaN, no "", no "-", no "0").
+"""
+ 
+import re
+import numpy as np
+import pandas as pd
+ 
+ 
+# ─────────────────────────────────────────────────────────────────────────────
+# Auxiliar compartido
+# ─────────────────────────────────────────────────────────────────────────────
+ 
+def _es_valido(v):
+    """Devuelve True si v es un valor no-vacío y no-nulo."""
+    if v is None:
+        return False
+    if isinstance(v, float) and np.isnan(v):
+        return False
+    return str(v).strip() not in ("", "-", "0")
+ 
+ 
+def _primer_valido(valores):
+    """Retorna el primer valor válido de una lista, o np.nan si ninguno lo es."""
+    for v in valores:
+        if _es_valido(v):
+            return v
+    return np.nan
+ 
+ 
+# ─────────────────────────────────────────────────────────────────────────────
+# tipo_armado  (corregido)
+# ─────────────────────────────────────────────────────────────────────────────
+ 
+def tipo_armado(
+    carac_postes,
+    postes_orden,
+    postes_export,
+    armado_export,
+    nombre_columna="Tipo de Armado"
+):
+    """
+    Determina el tipo de armado por poste según el primer dígito numérico del código.
+ 
+    Códigos MT(F)###-#:
+        1 → Bandera
+        2 → Triangular – Vano Largo
+        3 → Horizontal
+        4 → Vertical
+        5 → Compacta
+        6 → Autosoportado simple circuito
+        7 → Autosoportado doble circuito
+ 
+    CORRECCIÓN: en lugar de tomar solo la primera ocurrencia del poste,
+    se recorren TODAS sus repeticiones y se usa el primer valor válido.
+    """
+ 
+    TIPOS = {
+        1: "Bandera",
+        2: "Triangular – Vano Largo",
+        3: "Horizontal",
+        4: "Vertical",
+        5: "Compacta",
+        6: "Autosoportado simple circuito",
+        7: "Autosoportado doble circuito",
+    }
+ 
+    def extraer_tipo(codigo):
+        try:
+            if not isinstance(codigo, str):
+                return np.nan
+            if " " in codigo:
+                codigo = codigo.replace(" ", "")
+            if not re.search(r"MT\s*F?\s*\d{3}-\d", codigo, re.IGNORECASE) and \
+               re.search(r"MT\s*F?\s*\d{3}$", codigo, re.IGNORECASE):
+                codigo = codigo + "-1"
+            match = re.search(r"MT(F?)(\d{3})-(\d)", codigo, re.IGNORECASE)
+            if not match:
+                return np.nan
+            primer_digito = int(match.group(2)[0])
+            return TIPOS.get(primer_digito, np.nan)
+        except Exception:
+            return np.nan
+ 
+    postes_exp = postes_export.reset_index(drop=True).values
+    armado_exp = armado_export.reset_index(drop=True).values
+ 
+    # ── CAMBIO CLAVE: construir mapa con primer valor válido entre
+    #    TODAS las ocurrencias del poste, no solo la primera ──────────────────
+    from collections import defaultdict
+    candidatos = defaultdict(list)   # poste → [tipo_extraido, ...]
+ 
+    for i, poste in enumerate(postes_exp):
+        candidatos[poste].append(extraer_tipo(armado_exp[i]))
+ 
+    mapa = {poste: _primer_valido(vals) for poste, vals in candidatos.items()}
+    # ─────────────────────────────────────────────────────────────────────────
+ 
+    carac_postes[nombre_columna] = [mapa.get(p, np.nan) for p in postes_orden.values]
+    return carac_postes
+ 
+ 
+# ─────────────────────────────────────────────────────────────────────────────
+# numero_fases  (corregido)
+# ─────────────────────────────────────────────────────────────────────────────
+ 
+def numero_fases(
+    carac_postes,
+    postes_orden,
+    postes_export,
+    armado_export,
+    nombre_columna="Número de Fases"
+):
+    """
+    Determina el número de fases por poste según el segundo dígito numérico
+    del código de armado.
+ 
+    CORRECCIÓN: idem tipo_armado — se consideran TODAS las ocurrencias.
+    """
+ 
+    def extraer_fases(codigo):
+        try:
+            if not isinstance(codigo, str):
+                return np.nan
+            if " " in codigo:
+                codigo = codigo.replace(" ", "")
+            if not re.search(r"MT\s*F?\s*\d{3}-\d", codigo, re.IGNORECASE) and \
+               re.search(r"MT\s*F?\s*\d{3}$", codigo, re.IGNORECASE):
+                codigo = codigo + "-1"
+            match = re.search(r"MT(F?)(\d{3})-(\d)", codigo, re.IGNORECASE)
+            if not match:
+                return np.nan
+            return int(match.group(2)[1])
+        except Exception:
+            return np.nan
+ 
+    postes_exp = postes_export.reset_index(drop=True).values
+    armado_exp = armado_export.reset_index(drop=True).values
+ 
+    from collections import defaultdict
+    candidatos = defaultdict(list)
+ 
+    for i, poste in enumerate(postes_exp):
+        candidatos[poste].append(extraer_fases(armado_exp[i]))
+ 
+    mapa = {poste: _primer_valido(vals) for poste, vals in candidatos.items()}
+ 
+    carac_postes[nombre_columna] = [mapa.get(p, np.nan) for p in postes_orden.values]
+    return carac_postes
+ 
+ 
+# ─────────────────────────────────────────────────────────────────────────────
+# numero_perforaciones  (corregido)
+# ─────────────────────────────────────────────────────────────────────────────
+ 
 def numero_perforaciones(
     carac_postes,
     postes_orden,
@@ -4579,58 +4640,60 @@ def numero_perforaciones(
     nombre_columna="Número de Perforaciones"
 ):
     """
-    Calcula el número de perforaciones por poste sumando las del armado primario y secundario.
-
-    Regla (tercer dígito del código MT(F)###-#):
-        - 5 → 2 perforaciones
-        - cualquier otro → 1 perforación
-        - sin armado (NaN o inválido) → 0 perforaciones
-
-    Ejemplo: MT335-2 → 1 perf. + MT131-1 → 1 perf. = 2... 
-             MT335-2 → 1 + MT335-1 → 1 = 2
-             MT335-2 (3er dig=5→2) + MT131-1 (3er dig=1→1) = 3
-
-    Parámetros:
-        carac_postes:            DataFrame destino (un poste por fila, ordenado y sin repeticiones).
-        postes_orden:            Serie con los nombres de poste únicos y ordenados.
-        postes_export:           Serie con los nombres de poste del archivo de entrada.
-        armado_primario_export:  Serie con códigos de armado primario, alineada con postes_export.
-        armado_secundario_export:Serie con códigos de armado secundario, alineada con postes_export.
-        nombre_columna:          Nombre de la columna que se añadirá a carac_postes.
-
-    Retorna:
-        DataFrame carac_postes con la columna de perforaciones añadida.
+    Calcula el número de perforaciones por poste sumando las del armado
+    primario y secundario.
+ 
+    CORRECCIÓN: para postes repetidos se busca el primer armado primario
+    válido y el primer armado secundario válido entre TODAS las ocurrencias,
+    en lugar de quedarse solo con la primera fila.
     """
-
+ 
     def perforaciones_armado(codigo):
         try:
             if not isinstance(codigo, str) or str(codigo).strip() in ("", "-", "0"):
                 return 0
-            if ' ' in codigo:
-                codigo = codigo.replace(' ', '')
-            if not re.search(r'MT\s*F?\s*\d{3}-\d', codigo, re.IGNORECASE) and re.search(r'MT\s*F?\s*\d{3}$', codigo, re.IGNORECASE):
-                codigo = codigo + '-1'
-            match = re.search(r'MT(F?)(\d{3})-(\d)', codigo, re.IGNORECASE)
+            if " " in codigo:
+                codigo = codigo.replace(" ", "")
+            if not re.search(r"MT\s*F?\s*\d{3}-\d", codigo, re.IGNORECASE) and \
+               re.search(r"MT\s*F?\s*\d{3}$", codigo, re.IGNORECASE):
+                codigo = codigo + "-1"
+            match = re.search(r"MT(F?)(\d{3})-(\d)", codigo, re.IGNORECASE)
             if not match:
                 return 0
             tercer_digito = int(match.group(2)[2])
             return 2 if tercer_digito == 5 else 1
         except Exception:
             return 0
-
+ 
     postes_exp  = postes_export.reset_index(drop=True).values
     armado_prim = armado_primario_export.reset_index(drop=True).values
     armado_sec  = armado_secundario_export.reset_index(drop=True).values
-
-    # Mapa poste → total perforaciones (primera ocurrencia)
-    mapa = {}
+ 
+    from collections import defaultdict
+    candidatos_prim = defaultdict(list)
+    candidatos_sec  = defaultdict(list)
+ 
     for i, poste in enumerate(postes_exp):
-        if poste not in mapa:
-            mapa[poste] = perforaciones_armado(armado_prim[i]) + perforaciones_armado(armado_sec[i])
-
+        candidatos_prim[poste].append(armado_prim[i])
+        candidatos_sec[poste].append(armado_sec[i])
+ 
+    mapa = {}
+    for poste in candidatos_prim:
+        prim_val = _primer_valido(candidatos_prim[poste])   # primer armado primario válido
+        sec_val  = _primer_valido(candidatos_sec[poste])    # primer armado secundario válido
+        # Si no hay ninguno válido, _primer_valido devuelve np.nan → perforaciones = 0
+        mapa[poste] = (
+            perforaciones_armado(prim_val if _es_valido(prim_val) else "")
+            + perforaciones_armado(sec_val  if _es_valido(sec_val)  else "")
+        )
+ 
     carac_postes[nombre_columna] = [mapa.get(p, np.nan) for p in postes_orden.values]
-
     return carac_postes
+ 
+ 
+
+
+
 
 
 def numero_reconectadores(
