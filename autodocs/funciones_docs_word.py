@@ -1600,3 +1600,117 @@ def reemplazar_tablas_local(doc_path, diccionario, ruta_excel_calculos):
         for o in omitidos:
             _log(f"   {o.get('alias')}: {o.get('razon')}")
     return {"reemplazados": reemplazados, "omitidos": omitidos}
+
+
+def reemplazar_loops_local(doc_path, diccionario, ruta_excel_calculos):
+    """
+    Version de reemplazar_loops() para archivos locales (sin Google Drive API).
+    Reemplaza placeholders {% loop alias %} en el .docx.
+    Por cada hoja del Excel cuyo nombre empiece con el prefijo definido
+    en el diccionario inserta una tabla (con salto de pagina entre tablas).
+    Preserva merges y formato de celda usando openpyxl.
+    """
+    doc          = Document(doc_path)
+    reemplazados = []
+    omitidos     = []
+
+    entradas = [
+        (alias, e) for alias, e in diccionario.items()
+        if e.get("type") == "loop" and e.get("value") is not None
+    ]
+
+    if not entradas:
+        _log("No se encontraron entradas de tipo loop.")
+        return {"reemplazados": [], "omitidos": omitidos}
+
+    wb_cache = {}  # cache para no abrir el mismo workbook varias veces
+
+    for alias, entrada in entradas:
+        valor       = entrada["value"]
+        prefijo     = valor.get("prefijo")
+        header_row  = valor.get("header_row")
+        placeholder = "{% loop " + alias + " %}"
+
+        try:
+            # Listar hojas con el prefijo indicado desde el archivo local
+            if ruta_excel_calculos not in wb_cache:
+                wb_cache[ruta_excel_calculos] = openpyxl.load_workbook(
+                    ruta_excel_calculos, read_only=True, data_only=True
+                )
+            wb    = wb_cache[ruta_excel_calculos]
+            hojas = list(wb.sheetnames)
+            if prefijo:
+                prefijo_lower = prefijo.lower()
+                hojas = [h for h in hojas if h.lower().startswith(prefijo_lower)]
+
+            if not hojas:
+                omitidos.append({"alias": alias,
+                                 "razon": f"No hay hojas con prefijo '{prefijo}'"})
+                continue
+
+            _log(f"   Loop '{alias}': {len(hojas)} hojas -> {hojas}")
+
+            para_loop = None
+            for para in list(_iter_all_paragraphs(doc)):
+                _consolidar_runs(para)
+                if placeholder in _get_para_full_text(para):
+                    para_loop = para
+                    break
+
+            if para_loop is None:
+                omitidos.append({"alias": alias,
+                                 "razon": f"placeholder '{placeholder}' no encontrado"})
+                continue
+
+            ref_el            = para_loop._element
+            tablas_insertadas = 0
+
+            for hoja in hojas:
+                try:
+                    df, cell_formats, merges = _cargar_datos_tabla_local(
+                        ruta_excel_calculos, hoja, header_row
+                    )
+                    if df is None or df.empty:
+                        _log(f"   Hoja '{hoja}' vacia, se omite.")
+                        continue
+
+                    if tablas_insertadas > 0:
+                        para_salto = OxmlElement("w:p")
+                        run_salto  = OxmlElement("w:r")
+                        br         = OxmlElement("w:br")
+                        br.set(qn("w:type"), "page")
+                        run_salto.append(br)
+                        para_salto.append(run_salto)
+                        ref_el.addprevious(para_salto)
+
+                    tabla = _crear_tabla_docx(doc, df, cell_formats, merges, es_loop=True)
+                    ref_el.addprevious(tabla._element)
+                    tablas_insertadas += 1
+                    _log(f"   Tabla '{hoja}' insertada "
+                         f"({len(df)+1} x {len(df.columns)}, {len(merges)} merges)")
+
+                except Exception as e_hoja:
+                    traceback.print_exc()
+                    omitidos.append({"alias": alias,
+                                     "razon": f"error en hoja '{hoja}': {e_hoja}"})
+
+            para_loop._element.getparent().remove(para_loop._element)
+            reemplazados.append({
+                "alias": alias, "hojas": hojas,
+                "tablas_insertadas": tablas_insertadas,
+            })
+
+        except Exception as e:
+            traceback.print_exc()
+            omitidos.append({"alias": alias, "razon": f"error: {e}"})
+
+    doc.save(doc_path)
+    _log(f"Loops locales reemplazados: {len(reemplazados)}")
+    for r in reemplazados:
+        _log(f"   {r['alias']} -> {r['tablas_insertadas']} tablas ({', '.join(r['hojas'])})")
+    if omitidos:
+        _log(f"Loops omitidos: {len(omitidos)}")
+        for o in omitidos:
+            _log(f"   {o.get('alias')}: {o.get('razon')}")
+    return {"reemplazados": reemplazados, "omitidos": omitidos}
+
