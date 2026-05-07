@@ -1193,21 +1193,22 @@ def reemplazar_tablas(doc_path, diccionario, _docs_service=None, drive_service=N
 
             n_filas    = len(df) + 1
             n_cols     = len(df.columns)
-            encontrado = False
+            ocurrencias = 0
 
             for para in list(_iter_all_paragraphs(doc)):
                 _consolidar_runs(para)
                 if placeholder not in _get_para_full_text(para):
                     continue
-                encontrado = True
+                ocurrencias += 1
                 tabla = _crear_tabla_docx(doc, df, cell_formats, merges)
                 para._element.addprevious(tabla._element)
                 para._element.getparent().remove(para._element)
-                _log(f"   '{alias}' -> {n_filas} filas x {n_cols} cols ({len(merges)} merges, {len(cell_formats)} formatos)")
-                break
+                _log(f"   '{alias}' ocurrencia {ocurrencias} -> {n_filas} filas x {n_cols} cols ({len(merges)} merges, {len(cell_formats)} formatos)")
 
-            if encontrado:
-                reemplazados.append({"alias": alias, "n_filas": n_filas, "n_cols": n_cols})
+            if ocurrencias > 0:
+                reemplazados.append({"alias": alias, "n_filas": n_filas, "n_cols": n_cols, "ocurrencias": ocurrencias})
+                if ocurrencias > 1:
+                    _log(f"   '{alias}' -> {ocurrencias} ocurrencias reemplazadas en total")
             else:
                 omitidos.append({"alias": alias, "razon": f"placeholder '{placeholder}' no encontrado"})
 
@@ -1383,3 +1384,219 @@ def obtener_ruta_credenciales():
     if not os.path.exists(ruta):
         raise FileNotFoundError(f"No existe: {ruta}")
     return ruta
+
+
+# ==============================
+# TABLAS DESDE ARCHIVO LOCAL
+# (para entornos sin Google Drive, ej. Colab con Drive montado)
+# ==============================
+
+def _cargar_datos_tabla_local(ruta_excel, sheet_name, header_row=None):
+    """
+    Lee una hoja de un .xlsx LOCAL y devuelve (df, cell_formats, merges).
+
+    Equivalente a _cargar_datos_tabla() pero sin Google Drive:
+    lee directamente desde una ruta en disco (o Drive montado en Colab).
+    Usa openpyxl para respetar celdas fusionadas en los encabezados,
+    evitando las columnas 'Unnamed: N' que genera pd.read_excel().
+
+    Parametros
+    ----------
+    ruta_excel  : str        – ruta local al .xlsx
+    sheet_name  : str|None   – nombre de la hoja; si es None usa la activa
+    header_row  : int|None   – fila de encabezado (1-based). Si es None o 0
+                               se detecta como la primera fila con contenido.
+    """
+    wb = openpyxl.load_workbook(ruta_excel, data_only=True)
+
+    if sheet_name and sheet_name in wb.sheetnames:
+        ws = wb[sheet_name]
+    else:
+        ws = wb.active
+
+    # Calcular rango real con datos
+    max_col_real = max_row_real = 0
+    first_row_con_datos = None
+    for fila in ws.iter_rows():
+        for celda in fila:
+            val = celda.value
+            if val is not None and str(val).strip() not in ("", "'"):
+                max_col_real = max(max_col_real, celda.column)
+                max_row_real = max(max_row_real, celda.row)
+                if first_row_con_datos is None:
+                    first_row_con_datos = celda.row
+    if max_col_real == 0:
+        max_col_real = ws.max_column or 1
+    if max_row_real == 0:
+        max_row_real = ws.max_row or 1
+
+    # Determinar la fila de encabezado (0-based)
+    if header_row and int(header_row) > 0:
+        header_idx = int(header_row) - 1
+        fila_c = list(ws.iter_rows(
+            min_row=header_idx + 1, max_row=header_idx + 1, max_col=max_col_real
+        ))
+        if fila_c:
+            tiene_cont = any(
+                c.value is not None and str(c.value).strip() not in ("", "'")
+                for c in fila_c[0]
+            )
+            if not tiene_cont and first_row_con_datos is not None:
+                header_idx = first_row_con_datos - 1
+    else:
+        header_idx = (first_row_con_datos - 1) if first_row_con_datos else 0
+
+    filas_excel = list(ws.iter_rows(
+        min_row=header_idx + 1,
+        max_row=max_row_real,
+        max_col=max_col_real,
+        values_only=False,
+    ))
+    if not filas_excel:
+        return None, {}, []
+
+    def _limpiar_enc(val):
+        if val is None:
+            return ""
+        s = str(val)
+        return s.lstrip("'") if s.startswith("'") else s
+
+    encabezados = [_limpiar_enc(c.value) for c in filas_excel[0]]
+    datos_filas = [
+        [str(c.value) if c.value is not None else "" for c in fila]
+        for fila in filas_excel[1:]
+    ]
+    df = pd.DataFrame(datos_filas, columns=encabezados).fillna("").astype(str)
+
+    _FILLS_IGNORADOS = {"00000000", "FFFFFFFF", "FF000000", "00FFFFFF"}
+    cell_formats = {}
+    for doc_ri, fila in enumerate(filas_excel):
+        for ci, celda in enumerate(fila):
+            if ci >= max_col_real:
+                break
+            has_value = celda.value is not None and str(celda.value).strip() not in ("", "'")
+            fmt = {}
+            fill = celda.fill
+            if fill and fill.fill_type not in (None, "none"):
+                color = fill.fgColor
+                if color and color.type == "rgb" and color.rgb not in _FILLS_IGNORADOS:
+                    fmt["bg_color"] = color.rgb
+            if has_value:
+                if celda.font and celda.font.bold:
+                    fmt["bold"] = True
+                if celda.font and celda.font.size:
+                    fmt["font_size"] = float(celda.font.size)
+                if celda.font and celda.font.color:
+                    fc = celda.font.color
+                    if fc.type == "rgb" and fc.rgb not in ("00000000", "FF000000"):
+                        fmt["font_color"] = fc.rgb
+            if fmt:
+                cell_formats[(doc_ri, ci)] = fmt
+
+    merges = []
+    for rng in ws.merged_cells.ranges:
+        doc_min_row = rng.min_row - 1 - header_idx
+        doc_max_row = rng.max_row - 1 - header_idx
+        min_col     = rng.min_col - 1
+        max_col     = min(rng.max_col - 1, max_col_real - 1)
+        if doc_min_row >= 0 and min_col < max_col_real:
+            merges.append({
+                "min_row":  doc_min_row, "max_row":  doc_max_row,
+                "min_col":  min_col,     "max_col":  max_col,
+                "row_span": doc_max_row - doc_min_row + 1,
+                "col_span": max_col - min_col + 1,
+            })
+
+    return df, cell_formats, merges
+
+
+def reemplazar_tablas_local(doc_path, diccionario, ruta_excel_calculos):
+    """
+    Version de reemplazar_tablas() para archivos locales (sin Google Drive).
+    Util en Colab cuando el Excel ya esta en disco o en Drive montado.
+
+    Usa openpyxl para leer cada hoja, preservando celdas fusionadas
+    y formato de celda (negrita, colores de fondo, tamaño de fuente).
+
+    Parametros
+    ----------
+    doc_path             : str  – ruta local al .docx (se modifica in-place)
+    diccionario          : dict – devuelto por cargar_diccionario()
+    ruta_excel_calculos  : str  – ruta local al Excel con los datos de tabla
+
+    Cada entrada del diccionario de tipo 'table' debe tener en 'value':
+        sheet      : nombre de la hoja del Excel
+        header_row : (opcional) fila de encabezado, 1-based
+    """
+    doc          = Document(doc_path)
+    reemplazados = []
+    omitidos     = []
+
+    entradas = [
+        (alias, e) for alias, e in diccionario.items()
+        if e.get("type") == "table" and e.get("value") is not None
+    ]
+
+    if not entradas:
+        _log("No se encontraron entradas de tipo table.")
+        return {"reemplazados": [], "omitidos": omitidos}
+
+    for alias, entrada in entradas:
+        placeholder = entrada.get("placeholder", "").strip()
+        valor       = entrada.get("value", {})
+        sheet_name  = valor.get("sheet")
+        header_row  = valor.get("header_row")
+
+        if not placeholder:
+            omitidos.append({"alias": alias, "razon": "placeholder vacio"})
+            continue
+        if not sheet_name:
+            omitidos.append({"alias": alias, "placeholder": placeholder,
+                             "razon": "sin sheet definido en el diccionario"})
+            continue
+
+        try:
+            df, cell_formats, merges = _cargar_datos_tabla_local(
+                ruta_excel_calculos, sheet_name, header_row
+            )
+        except Exception as e:
+            traceback.print_exc()
+            omitidos.append({"alias": alias, "placeholder": placeholder,
+                             "razon": f"error leyendo sheet '{sheet_name}': {e}"})
+            continue
+
+        if df is None or df.empty:
+            omitidos.append({"alias": alias, "placeholder": placeholder,
+                             "razon": f"sheet '{sheet_name}' vacio"})
+            continue
+
+        ocurrencias = 0
+        for para in list(_iter_all_paragraphs(doc)):
+            _consolidar_runs(para)
+            if placeholder not in _get_para_full_text(para):
+                continue
+            tabla = _crear_tabla_docx(doc, df, cell_formats, merges)
+            para._element.addprevious(tabla._element)
+            para._element.getparent().remove(para._element)
+            ocurrencias += 1
+
+        if ocurrencias > 0:
+            reemplazados.append({
+                "alias": alias, "sheet": sheet_name,
+                "n_filas": len(df) + 1, "n_cols": len(df.columns),
+                "merges": len(merges), "ocurrencias": ocurrencias,
+            })
+            _log(f"   '{alias}' -> sheet '{sheet_name}' "
+                 f"({len(df)+1} filas x {len(df.columns)} cols, "
+                 f"{len(merges)} merges, {len(cell_formats)} formatos)")
+        else:
+            omitidos.append({"alias": alias, "placeholder": placeholder,
+                             "razon": f"placeholder '{placeholder}' no encontrado"})
+
+    doc.save(doc_path)
+    _log(f"Tablas locales reemplazadas: {len(reemplazados)}")
+    if omitidos:
+        _log(f"Tablas omitidas: {len(omitidos)}")
+        for o in omitidos:
+            _log(f"   {o.get('alias')}: {o.get('razon')}")
+    return {"reemplazados": reemplazados, "omitidos": omitidos}

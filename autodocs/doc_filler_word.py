@@ -37,10 +37,10 @@ VERBOSE = True
 URL_DICCIONARIO = "https://docs.google.com/spreadsheets/d/14VDGM9Yg0YyHByRdFT3526CmMbB-Ur4d/edit?usp=drive_link&ouid=109812277537374132162&rtpof=true&sd=true"
 
 # Plantilla en formato .docx en Google Drive  <- coloca aqui tu enlace
-URL_PLANTILLA = "https://docs.google.com/document/d/1n-9GyhJ1zis4yL9sGh6kXgtr3tyLXxz5/edit?usp=drive_link&ouid=109812277537374132162&rtpof=true&sd=true"
+URL_PLANTILLA = "https://docs.google.com/document/d/1FmCYwAQBS3ZHNueWddxpJxrHWBq40UFI/edit?usp=drive_link&ouid=109812277537374132162&rtpof=true&sd=true"
 
 # Carpeta donde se subira el documento generado
-URL_CARPETA_DESTINO = "https://drive.google.com/drive/folders/1zUPZXuCLZyA63EK0HkzirBXY0Vw6CQkX?usp=drive_link"
+URL_CARPETA_DESTINO = "https://drive.google.com/drive/folders/1nha-g9MdbyaGTVq9TT05XeT7gP0tXbKk?usp=sharing"
 
 # Nombre del documento generado (sin extension)
 NOMBRE_DOCUMENTO = "Plantilla proyecto de redes"
