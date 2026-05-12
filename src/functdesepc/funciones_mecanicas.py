@@ -5129,3 +5129,79 @@ def concat_series_preferente(s1: pd.Series, s2: pd.Series) -> pd.Series:
 
 
 
+
+def get_diametro_base(
+    tabla: pd.DataFrame,
+    alturas: pd.Series,
+    cargas: pd.Series,
+) -> pd.Series:
+    """
+    Devuelve el diámetro de la base para cada par (altura, carga de rotura).
+ 
+    Lógica de aproximación (aplica igual a altura y carga de rotura):
+      1. Si el valor exacto existe en la tabla -> se usa directamente.
+      2. Si el valor más cercano está dentro del ±15 % -> se usa ese valor.
+      3. Si no, se usa el mayor valor que sea MENOR o igual al pedido.
+         Si no existe ninguno menor, se usa el mínimo disponible.
+ 
+    Parámetros
+    ----------
+    tabla   : DataFrame con columnas 'Altura (m)', 'Carga de Rotura (daN)'
+              y 'Diámetro base (cm)'.
+    alturas : Series con las alturas de entrada (m).
+    cargas  : Series con las cargas de rotura de entrada (daN).
+ 
+    Retorna
+    -------
+    Series con el diámetro de base (cm) para cada poste.
+    """
+ 
+    alturas_disponibles = np.sort(tabla["Altura (m)"].unique())
+    cargas_disponibles  = np.sort(tabla["Carga de Rotura (daN)"].unique())
+ 
+    def aproximar(valor: float, disponibles: np.ndarray) -> float:
+        # 1. Valor exacto
+        if valor in disponibles:
+            return valor
+ 
+        # 2. Valor más cercano dentro del ±15 %
+        idx_cercano = np.argmin(np.abs(disponibles - valor))
+        cercano = disponibles[idx_cercano]
+        if abs(cercano - valor) / valor <= 0.15:
+            return cercano
+ 
+        # 3. Mayor valor menor o igual al pedido
+        menores = disponibles[disponibles <= valor]
+        if len(menores) > 0:
+            return menores[-1]
+ 
+        # 4. No hay ninguno menor -> mínimo disponible
+        return disponibles[0]
+ 
+    resultados = []
+    for altura, carga in zip(alturas, cargas):
+        alt_aprox   = aproximar(altura, alturas_disponibles)
+        carga_aprox = aproximar(carga,  cargas_disponibles)
+ 
+        fila = tabla[
+            (tabla["Altura (m)"]            == alt_aprox) &
+            (tabla["Carga de Rotura (daN)"] == carga_aprox)
+        ]
+ 
+        # Si la combinación no existe, buscar la carga válida más cercana
+        # para la altura ya fijada
+        if fila.empty:
+            cargas_para_alt = np.sort(
+                tabla[tabla["Altura (m)"] == alt_aprox]["Carga de Rotura (daN)"].values
+            )
+            carga_aprox = aproximar(carga, cargas_para_alt)
+            fila = tabla[
+                (tabla["Altura (m)"]            == alt_aprox) &
+                (tabla["Carga de Rotura (daN)"] == carga_aprox)
+            ]
+ 
+        resultados.append(fila["Diámetro base (cm)"].values[0])
+ 
+    return pd.Series(resultados, index=alturas.index, name="Diámetro base (cm)")
+ 
+ 

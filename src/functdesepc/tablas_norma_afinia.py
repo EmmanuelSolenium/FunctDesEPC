@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 
 TABLA_AFINIA_VIENTO = {
     (11, 500):  {"A": {"rural": 61.00,   "urbana": 52.10},
@@ -667,3 +668,45 @@ ancla = pd.DataFrame(
 )
 
 ancla.columns = pd.MultiIndex.from_tuples(ancla.columns, names=["Diametro cable", "Tipo de suelo"])
+
+
+
+import pandas as pd
+
+data = {
+    "Denominación": [
+        "PH-11/500 daN", "PH-11/735 daN", "PH-11/1030 daN", "PH-11/1324 daN",
+        "PH-12/500 daN", "PH-12/735 daN", "PH-12/1030 daN", "PH-12/1324 daN",
+        "PH-12/1600 daN", "PH-12/2500 daN", "PH-12/4000 daN",
+        "PH-14/735 daN", "PH-14/1030 daN", "PH-14/1324 daN",
+        "PH-14/1600 daN", "PH-14/2500 daN", "PH-14/4000 daN",
+        "PH-16/1600 daN", "PH-16/2000 daN", "PH-16/2500 daN",
+    ],
+    "Altura (m)": [
+        11, 11, 11, 11,
+        12, 12, 12, 12, 12, 12, 12,
+        14, 14, 14, 14, 14, 14,
+        16, 16, 16,
+    ],
+    "Carga de Rotura (daN)": [
+        500, 735, 1030, 1324,
+        500, 735, 1030, 1324, 1600, 2500, 4000,
+        735, 1030, 1324, 1600, 2500, 4000,
+        1600, 2000, 2500,
+    ],
+    "Diámetro cima (cm)": [
+        14, 14, 19, 20,
+        14, 16, 19, 20, 23.5, 27, 34,
+        16, 19, 20, 23.5, 27, 34,
+        21, 26, 28,
+    ],
+    "Diámetro base (cm)": [
+        30.5, 30.5, 35.5, 36.5,
+        32, 34, 37, 38, 41.5, 45, 52,
+        37, 40, 41, 44.5, 48, 55,
+        45, 50, 52,
+    ],
+}
+
+datos_postes_hormigon = pd.DataFrame(data)
+
