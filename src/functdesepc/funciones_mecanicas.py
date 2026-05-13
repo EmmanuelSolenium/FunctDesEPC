@@ -5301,37 +5301,47 @@ def _cumple(row: pd.Series) -> bool:
 # Paso 1 y 2: ajuste fila a fila hasta cumplir los F.S.
 # ─────────────────────────────────────────────────────────────────────────────
  
+def _siguiente_multiplo(valor: float, paso: float = 0.1) -> float:
+    multiplo = np.ceil(round(valor / paso, 10)) * paso
+    if round(multiplo - valor, 10) < 1e-9:   # ya era múltiplo exacto
+        multiplo += paso
+    return round(multiplo, 10)
+
+
 def _ajustar_fila_hasta_cumplir(
     df: pd.DataFrame,
     idx: int,
     paso: float = 0.1,
     max_iter: int = 500,
 ) -> pd.DataFrame:
-    """
-    Para la fila `idx`, incrementa h en `paso` y, si no basta, luego D en
-    `paso`, alternando hasta que la fila cumpla los cuatro F.S.
-    """
     d = df.copy()
     iteraciones = 0
- 
+    primera_vez_h = True
+    primera_vez_D = True
+
     while not _cumple(d.loc[idx]) and iteraciones < max_iter:
-        # Intentar primero con h
+        # ── Intentar primero con h ──
         d_h = d.copy()
-        d_h.at[idx, 'h [m]'] = round(d_h.at[idx, 'h [m]'] + paso, 10)
+        h_actual = d_h.at[idx, 'h [m]']
+        h_nuevo = _siguiente_multiplo(h_actual, paso) if primera_vez_h else round(h_actual + paso, 10)
+        primera_vez_h = False
+        d_h.at[idx, 'h [m]'] = h_nuevo
         d_h = _recalcular_fs(d_h)
         if _cumple(d_h.loc[idx]):
             d = d_h
             break
- 
-        # Si h no fue suficiente, subir también D
+
+        # ── Si h no fue suficiente, subir también D ──
         d_d = d_h.copy()
-        d_d.at[idx, 'D [m]'] = round(d_d.at[idx, 'D [m]'] + paso, 10)
+        D_actual = d_d.at[idx, 'D [m]']
+        D_nuevo = _siguiente_multiplo(D_actual, paso) if primera_vez_D else round(D_actual + paso, 10)
+        primera_vez_D = False
+        d_d.at[idx, 'D [m]'] = D_nuevo
         d_d = _recalcular_fs(d_d)
         d = d_d
         iteraciones += 1
- 
+
     return d
- 
  
 # ─────────────────────────────────────────────────────────────────────────────
 # Paso 3: normalización / agrupación de (D, h)
