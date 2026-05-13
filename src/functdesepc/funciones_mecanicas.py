@@ -5205,3 +5205,270 @@ def get_diametro_base(
     return pd.Series(resultados, index=alturas.index, name="Diámetro base (cm)")
  
  
+# ─────────────────────────────────────────────────────────────────────────────
+# Constantes del modelo (deben coincidir con los valores del notebook)
+# ─────────────────────────────────────────────────────────────────────────────
+_C       = 0.35      # constante columna I del Excel
+_PHI_F   = 0.9       # ∅f
+_PHI_V   = 0.75      # ∅v
+_FC      = 21        # f'c [MPa]
+_TAN_ALF = np.tan(np.radians(0.57))  # tan(α)
+ 
+ 
+# ─────────────────────────────────────────────────────────────────────────────
+# Helpers: recalcular los factores de seguridad fila a fila
+# ─────────────────────────────────────────────────────────────────────────────
+ 
+def _recalcular_fs(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Recalcula todas las columnas intermedias y los cuatro F.S. a partir de
+    los valores actuales de 'D [m]', 'h [m]' y los datos de entrada
+    ('F.H.R (daN)', 'F.V.R (daN)', 'Altura poste [m]', 'Ch [daN/m3)').
+    Devuelve una copia del dataframe con las columnas actualizadas.
+    """
+    d = df.copy()
+ 
+    D  = d['D [m]']
+    h  = d['h [m]']
+    Hp = d['Altura poste [m]']
+    Ch = d['Ch [daN/m3)']
+    Fh = d['F.H.R (daN)']
+    Fv = d['F.V.R (daN)']
+ 
+    # G = P [daN]
+    d['G=P [daN]'] = (np.pi * (D / 2)**2 * h * 24 + 0.04) * 100 + Fv
+ 
+    # Me [daN·m]
+    d['Me [daN-M]'] = (
+        ((D * h**3) / 52.8) * Ch * _TAN_ALF
+        + _C * D * d['G=P [daN]']
+    )
+ 
+    # Mv [daN·m]
+    d['Mv [daN-m]'] = Fh * Hp
+ 
+    # F.S. (volcamiento)
+    d['F.S.'] = d['Me [daN-M]'] / d['Mv [daN-m]']
+ 
+    # Módulo resistente Sm [m³]  (usa D en mm dentro de la fórmula original)
+    d['Sm [m3]'] = np.pi * (D * 1000)**3 / 32
+ 
+    # ∅Mn [kN·m]
+    d['∅Mn [kN-m]'] = _PHI_F * 0.11 * np.sqrt(_FC) * d['Sm [m3]'] / 1e6
+ 
+    # Mu [kN·m]
+    d['Mu [kN-m]'] = d['Mv [daN-m]'] / 100
+ 
+    # F.S. flexión
+    d['F.S flexion'] = d['∅Mn [kN-m]'] / d['Mu [kN-m]']
+ 
+    # ∅Vn [kN]
+    d['∅Vn'] = (_PHI_V * 0.11 * np.sqrt(_FC) * np.pi * (D * 1000 / 2)**2) / 1e3
+ 
+    # Vu [kN]
+    d['Vu [kN]'] = Fh / 1000
+ 
+    # F.S. cortante
+    d['F.S cortante'] = d['∅Vn'] / d['Vu [kN]']
+ 
+    # Qact [kN/m²]
+    d['Qact [kN/m2]'] = (d['G=P [daN]'] / 100) / (np.pi * (D / 2)**2)
+ 
+    # Qadm [kN/m²]  (ctadm proviene del propio DataFrame, ya guardado en la col)
+    d['Qadm [kN/m2]'] = d['Qadm [kN/m2]']   # no cambia: depende sólo de ctadm y D
+    # ── en realidad sí depende de D: recalcular ──
+    # Qadm = ctadm*10 / ((D/2)^2 * π)   →  ctadm se rescata de la primera fila
+    ctadm = (d['Qadm [kN/m2]'].iloc[0] * np.pi * (D.iloc[0] / 2)**2) / 10
+    d['Qadm [kN/m2]'] = (ctadm * 10) / ((D / 2)**2 * np.pi)
+ 
+    # F.S. presión de contacto
+    d['F.S. presion de contacto'] = d['Qadm [kN/m2]'] / d['Qact [kN/m2]']
+ 
+    return d
+ 
+ 
+def _cumple(row: pd.Series) -> bool:
+    """True si la fila cumple todos los criterios de F.S."""
+    return (
+        row['F.S. presion de contacto'] >= 1.0
+        and row['F.S cortante']          >= 1.0
+        and row['F.S flexion']           >= 1.0
+        and row['F.S.']                  >= 2.0
+    )
+ 
+ 
+# ─────────────────────────────────────────────────────────────────────────────
+# Paso 1 y 2: ajuste fila a fila hasta cumplir los F.S.
+# ─────────────────────────────────────────────────────────────────────────────
+ 
+def _ajustar_fila_hasta_cumplir(
+    df: pd.DataFrame,
+    idx: int,
+    paso: float = 0.1,
+    max_iter: int = 500,
+) -> pd.DataFrame:
+    """
+    Para la fila `idx`, incrementa h en `paso` y, si no basta, luego D en
+    `paso`, alternando hasta que la fila cumpla los cuatro F.S.
+    """
+    d = df.copy()
+    iteraciones = 0
+ 
+    while not _cumple(d.loc[idx]) and iteraciones < max_iter:
+        # Intentar primero con h
+        d_h = d.copy()
+        d_h.at[idx, 'h [m]'] = round(d_h.at[idx, 'h [m]'] + paso, 10)
+        d_h = _recalcular_fs(d_h)
+        if _cumple(d_h.loc[idx]):
+            d = d_h
+            break
+ 
+        # Si h no fue suficiente, subir también D
+        d_d = d_h.copy()
+        d_d.at[idx, 'D [m]'] = round(d_d.at[idx, 'D [m]'] + paso, 10)
+        d_d = _recalcular_fs(d_d)
+        d = d_d
+        iteraciones += 1
+ 
+    return d
+ 
+ 
+# ─────────────────────────────────────────────────────────────────────────────
+# Paso 3: normalización / agrupación de (D, h)
+# ─────────────────────────────────────────────────────────────────────────────
+ 
+def _normalizar_grupos(df: pd.DataFrame, margen: float = 0.25) -> pd.DataFrame:
+    """
+    Agrupa filas cuyo (D, h) puede subirse para igualarse a otro grupo sin
+    exceder un 25 % de incremento en ambas dimensiones. Usa un enfoque greedy:
+    ordena grupos de mayor a menor y absorbe los menores cuando caben dentro
+    del margen.
+ 
+    Regla: una fila con (D0, h0) puede subir a (D1, h1) si y sólo si:
+        D1 <= D0 * (1 + margen)   Y   h1 <= h0 * (1 + margen)
+    (ambas condiciones deben cumplirse simultáneamente).
+    """
+    d = df.copy()
+ 
+    # Redondear a 4 decimales para evitar ruido numérico
+    d['D [m]'] = d['D [m]'].round(4)
+    d['h [m]'] = d['h [m]'].round(4)
+ 
+    # Obtener valores únicos de (D, h) ordenados de mayor a menor
+    pares = (
+        d[['D [m]', 'h [m]']]
+        .drop_duplicates()
+        .sort_values(['D [m]', 'h [m]'], ascending=False)
+        .reset_index(drop=True)
+    )
+ 
+    # Construir grupos: cada par "grande" intenta absorber pares menores
+    asignacion = {}   # (D, h) → (D_objetivo, h_objetivo)
+ 
+    for _, row_g in pares.iterrows():
+        Dg, hg = row_g['D [m]'], row_g['h [m]']
+        if (Dg, hg) in asignacion:
+            continue                    # ya fue absorbido por alguien mayor
+ 
+        # Este par se convierte en referencia de su propio grupo
+        asignacion[(Dg, hg)] = (Dg, hg)
+ 
+        # Intentar absorber pares menores que quepan dentro del margen
+        for _, row_s in pares.iterrows():
+            Ds, hs = row_s['D [m]'], row_s['h [m]']
+            if (Ds, hs) in asignacion:
+                continue
+            if Ds <= Dg and hs <= hg:               # el par es ≤ en ambas dim.
+                if Dg <= Ds * (1 + margen) and hg <= hs * (1 + margen):
+                    asignacion[(Ds, hs)] = (Dg, hg)  # absorber: subir al grupo
+ 
+    # Aplicar la asignación al dataframe
+    def _asignar(row):
+        clave = (row['D [m]'], row['h [m]'])
+        objetivo = asignacion.get(clave, clave)
+        row['D [m]'] = objetivo[0]
+        row['h [m]'] = objetivo[1]
+        return row
+ 
+    d = d.apply(_asignar, axis=1)
+    return d
+ 
+ 
+# ─────────────────────────────────────────────────────────────────────────────
+# Función principal
+# ─────────────────────────────────────────────────────────────────────────────
+ 
+def optimizar_cimentaciones(
+    Calc_cim: pd.DataFrame,
+    paso: float = 0.1,
+    max_iter_fila: int = 500,
+    margen_normalizacion: float = 0.25,
+) -> pd.DataFrame:
+    """
+    Optimiza las dimensiones de cimentación (D [m], h [m]) del dataframe
+    `Calc_cim` en tres etapas:
+ 
+    1. Verificación de F.S.: para cada fila comprueba que
+         - F.S. presion de contacto  >= 1
+         - F.S cortante              >= 1
+         - F.S flexion               >= 1
+         - F.S.                      >= 2
+    2. Ajuste iterativo: si algún F.S. falla, incrementa h en `paso` (0.1 m
+       por defecto); si con ese h aún no cumple, incrementa también D en
+       `paso`. Repite hasta cumplir todos los criterios.
+    3. Normalización: reduce el número de conjuntos únicos (D, h) subiendo
+       los valores más pequeños hasta los de otro grupo, siempre que ninguna
+       de las dos dimensiones supere un 25 % del valor original de esa fila.
+ 
+    Parámetros
+    ----------
+    Calc_cim            : DataFrame con las columnas calculadas en el notebook.
+    paso                : Incremento en metros para D y h  (default 0.1).
+    max_iter_fila       : Máximo de iteraciones de ajuste por fila (default 500).
+    margen_normalizacion: Porcentaje máximo de incremento permitido al normalizar
+                          (default 0.25 → 25 %).
+ 
+    Devuelve
+    --------
+    DataFrame con 'D [m]', 'h [m]' y todos los F.S. actualizados.
+    """
+ 
+    d = Calc_cim.copy()
+    d.reset_index(drop=True, inplace=True)
+ 
+    # ── PASO 1 & 2: ajuste fila a fila ──────────────────────────────────────
+    print("── Paso 1-2: ajustando dimensiones por fila ──")
+    for idx in d.index:
+        if not _cumple(d.loc[idx]):
+            print(f"  Fila {idx} no cumple → ajustando...")
+            d = _ajustar_fila_hasta_cumplir(d, idx, paso, max_iter_fila)
+            if not _cumple(d.loc[idx]):
+                print(f"  ⚠ Fila {idx}: no se alcanzó convergencia en {max_iter_fila} iteraciones.")
+            else:
+                print(f"  ✔ Fila {idx}: D={d.at[idx,'D [m]']:.2f} m, h={d.at[idx,'h [m]']:.2f} m")
+ 
+    n_grupos_antes = d[['D [m]', 'h [m]']].drop_duplicates().shape[0]
+    print(f"\nGrupos únicos (D, h) antes de normalizar: {n_grupos_antes}")
+ 
+    # ── PASO 3: normalización de grupos ─────────────────────────────────────
+    print("── Paso 3: normalizando grupos (D, h) ──")
+    d = _normalizar_grupos(d, margen_normalizacion)
+ 
+    # Recalcular F.S. con los nuevos (D, h) tras la normalización
+    d = _recalcular_fs(d)
+ 
+    n_grupos_despues = d[['D [m]', 'h [m]']].drop_duplicates().shape[0]
+    print(f"Grupos únicos (D, h) después de normalizar: {n_grupos_despues}")
+    print(f"Reducción: {n_grupos_antes - n_grupos_despues} grupos eliminados\n")
+ 
+    # ── PASO 4: verificación final ───────────────────────────────────────────
+    filas_no_cumplen = [idx for idx in d.index if not _cumple(d.loc[idx])]
+    if filas_no_cumplen:
+        print(f"⚠ Atención: {len(filas_no_cumplen)} fila(s) no cumplen F.S. "
+              f"tras normalización (la normalización sólo sube valores, "
+              f"así que esto no debería ocurrir): {filas_no_cumplen}")
+    else:
+        print("✔ Todas las filas cumplen los F.S. requeridos.")
+ 
+    return d
+ 
