@@ -1013,6 +1013,8 @@ def exportar_nuevo_formato(
     validacion_poste_retenidas=None,
     tipo_retenidas_ancla=None,
     dimension_ancla=None,
+    cimentaciones_postes_mt=None,
+    calculos_de_cimentaciones=None,
 ):
     """
     Vuelca los DataFrames sobre la plantilla nueva (calculos_mecanicos_afinia.xlsx)
@@ -1034,6 +1036,8 @@ def exportar_nuevo_formato(
       Validación Poste Retenidas |     2      |     3
       Tipo Retenidas y Ancla     |     2      |     3
       Dimensión Ancla            |     1      |     2
+      Calculos de Cimentaciones  |     2      |     3      (fila 1 = título, fila 2 = encabezados)
+      Cimentaciones postes MT    |     1      |     2
     """
     import pandas as pd
     import unicodedata
@@ -1054,6 +1058,8 @@ def exportar_nuevo_formato(
         "Validación Poste Retenidas":  (2, 3),
         "Tipo Retenidas y Ancla":      (2, 3),
         "Dimensión Ancla":             (1, 2),
+        "Calculos de Cimentaciones":   (2, 3),
+        "Cimentaciones postes MT":     (1, 2),
     }
 
     # ── Estilo fijo de celdas de datos (igual en todas las hojas del template) ─
@@ -1153,6 +1159,8 @@ def exportar_nuevo_formato(
         ("Validación Poste Retenidas",  validacion_poste_retenidas),
         ("Tipo Retenidas y Ancla",      tipo_retenidas_ancla),
         ("Dimensión Ancla",             dimension_ancla),
+        ("Calculos de Cimentaciones",   calculos_de_cimentaciones),
+        ("Cimentaciones postes MT",     cimentaciones_postes_mt),
     ]
     escritas, omitidas = [], []
     for sname, df in tablas:
@@ -1195,4 +1203,4 @@ def exportar_nuevo_formato(
 
 
 # ── Ejemplo de uso ─────────────────────────────────────────────────────────────
-# exportar_nuevo_formato(ruta_template=DATA+"calculos_mecanicos_afinia.xlsx", ruta_salida=DATA+"calculos_mecanicos_nuevo.xlsx", eovanos=eovanos, van_reg=van_reg, tab_fle=tab_fle, tablas_p=tablas_p, tab_fle_s=tab_fle_s, tablas_s=tablas_s, datos_iniciales_red_mt=datos_iniciales_red_mt, informacion_del_apoyo=informacion_del_apoyo, calculo_esfuerzos_apoyo=calculo_esfuerzos_apoyo, analisis_hipotesis_normales=analisis_hipotesis_normales, analisis_hipotesis_anormales=analisis_hipotesis_anormales, calculo_poste_retenidas=calculo_poste_retenidas, validacion_poste_retenidas=validacion_poste_retenidas, tipo_retenidas_ancla=tipo_retenidas_ancla, dimension_ancla=dimension_ancla)
+# exportar_nuevo_formato(ruta_template=DATA+"calculos_mecanicos_afinia.xlsx", ruta_salida=DATA+"calculos_mecanicos_nuevo.xlsx", eovanos=eovanos, van_reg=van_reg, tab_fle=tab_fle, tablas_p=tablas_p, tab_fle_s=tab_fle_s, tablas_s=tablas_s, datos_iniciales_red_mt=datos_iniciales_red_mt, informacion_del_apoyo=informacion_del_apoyo, calculo_esfuerzos_apoyo=calculo_esfuerzos_apoyo, analisis_hipotesis_normales=analisis_hipotesis_normales, analisis_hipotesis_anormales=analisis_hipotesis_anormales, calculo_poste_retenidas=calculo_poste_retenidas, validacion_poste_retenidas=validacion_poste_retenidas, tipo_retenidas_ancla=tipo_retenidas_ancla, dimension_ancla=dimension_ancla, cimentaciones_postes_mt=cimentaciones_postes_mt, calculos_de_cimentaciones=calculos_de_cimentaciones)
