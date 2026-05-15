@@ -2721,24 +2721,28 @@ def resumen_cantones(
     - Poste Final
 
     Cada fila representa un cantón.
+    Los postes sin cantón asignado (None, NaN, "") se ignoran
+    al estimar el poste inicial y final de cada cantón.
     """
 
     # ------------------------------------------------------------
-    # Expandir relación poste–cantón
+    # Expandir relación poste–cantón (ignorando entradas sin cantón)
     # ------------------------------------------------------------
     registros = []
 
     for idx, c in cantones.items():
         if isinstance(c, list):
             for ci in c:
-                registros.append((ci, idx))
+                if ci is not None and ci == ci and ci != "":  # excluir None / NaN / ""
+                    registros.append((ci, idx))
         else:
-            registros.append((c, idx))
+            if c is not None and c == c and c != "":          # excluir None / NaN / ""
+                registros.append((c, idx))
 
     df = pd.DataFrame(registros, columns=["canton", "idx"]).sort_values("idx")
 
     # ------------------------------------------------------------
-    # Cantones únicos en orden de exportación
+    # Cantones únicos en orden de aparición
     # ------------------------------------------------------------
     cantones_ordenados = []
     for c in df["canton"]:
@@ -2769,7 +2773,7 @@ def resumen_cantones(
         filas_extra = n - len(reg_van)
         reg_van = pd.concat(
             [reg_van, pd.DataFrame(np.nan, index=range(filas_extra), columns=reg_van.columns)],
-            ignore_index=True
+            ignore_index=True,
         )
 
     # ------------------------------------------------------------
@@ -2780,7 +2784,6 @@ def resumen_cantones(
     reg_van[col3] = poste_fin
 
     return reg_van
-
 
 
 
@@ -5823,6 +5826,8 @@ def calcular_cantones_v2(tipo: pd.Series, numero_en_ruta: pd.Series,
                 cantones[idx] = canton_actual
  
     return pd.Series(cantones, dtype=object)
+
+
  
 def llenar_armados(postes: pd.Series, armados: pd.Series) -> pd.Series:
     """
