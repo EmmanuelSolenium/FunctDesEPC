@@ -2789,26 +2789,29 @@ def resumen_cantones(
 
 def longitud_canton(
     reg_van,
-    cantones,                 # Series en orden de exportación (int o list)
-    longitudes,               # Series en orden de exportación
+    cantones,
+    longitudes,
     col="Longitud Total del cantón"
 ):
     """
     Calcula la longitud total de cada cantón (hasta n-1)
     y agrega/reemplaza la columna en reg_van.
+    Los postes sin cantón asignado (None, NaN, "") se ignoran.
     """
 
     # ------------------------------------------------------------
-    # Expandir relación poste – cantón
+    # Expandir relación poste – cantón (ignorando entradas sin cantón)
     # ------------------------------------------------------------
     registros = []
 
     for idx, c in cantones.items():
         if isinstance(c, list):
             for ci in c:
-                registros.append((ci, idx))
+                if ci is not None and ci == ci and ci != "":
+                    registros.append((ci, idx))
         else:
-            registros.append((c, idx))
+            if c is not None and c == c and c != "":
+                registros.append((c, idx))
 
     df = pd.DataFrame(registros, columns=["canton", "idx"]).sort_values("idx")
 
