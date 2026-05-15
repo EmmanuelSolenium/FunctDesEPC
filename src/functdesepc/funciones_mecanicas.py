@@ -5824,3 +5824,40 @@ def calcular_cantones_v2(tipo: pd.Series, numero_en_ruta: pd.Series,
  
     return pd.Series(cantones, dtype=object)
  
+def llenar_armados(postes: pd.Series, armados: pd.Series) -> pd.Series:
+    """
+    Llena los valores vacíos en armados usando el valor del poste repetido correspondiente.
+    
+    Args:
+        postes: Series con identificadores de postes (puede tener repetidos)
+        armados: Series con armados (puede tener NaN en posiciones de postes repetidos)
+    
+    Returns:
+        Series de armados con los NaN rellenados
+    """
+    if len(postes) != len(armados):
+        raise ValueError("postes y armados deben tener el mismo tamaño")
+    
+    armados_salida = armados.copy()
+    
+    # Agrupar índices por poste
+    poste_indices = {}
+    for idx, poste in enumerate(postes):
+        if poste not in poste_indices:
+            poste_indices[poste] = []
+        poste_indices[poste].append(idx)
+    
+    # Para cada poste que aparece más de una vez
+    for poste, indices in poste_indices.items():
+        if len(indices) > 1:
+            # Buscar el primer valor no nulo en armados para esos índices
+            valores = armados_salida.iloc[indices]
+            valor_referencia = valores.dropna().iloc[0] if not valores.dropna().empty else None
+            
+            if valor_referencia is not None:
+                # Rellenar los NaN con el valor de referencia
+                for idx in indices:
+                    if pd.isna(armados_salida.iloc[idx]):
+                        armados_salida.iloc[idx] = valor_referencia
+    
+    return armados_salida
