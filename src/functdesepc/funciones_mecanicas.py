@@ -2538,6 +2538,20 @@ def clasificar_cantones(
 
 
 
+def _expandir_cantones(cantones):
+    """
+    Expande la Series cantones a pares (canton, idx), omitiendo nulos.
+    Filtra None, NaN y cadenas vacías tanto en entradas simples como en listas.
+    """
+    registros = []
+    for idx, c in cantones.items():
+        items = c if isinstance(c, list) else [c]
+        for ci in items:
+            if ci is not None and ci == ci and ci != "":
+                registros.append((ci, idx))
+    return pd.DataFrame(registros, columns=["canton", "idx"]).sort_values("idx")
+
+
 def max_canton(
     van_reg,     # DataFrame base
     cantones,    # Series con cantón o lista de cantones por poste
@@ -2554,18 +2568,9 @@ def max_canton(
     """
 
     # ------------------------------------------------------------
-    # Expandir relación poste–cantón
+    # Expandir relación poste–cantón (ignorando entradas sin cantón)
     # ------------------------------------------------------------
-    pares = []
-
-    for idx, c in cantones.items():
-        if isinstance(c, list):
-            for ci in c:
-                pares.append((ci, idx))
-        else:
-            pares.append((c, idx))
-
-    df = pd.DataFrame(pares, columns=["canton", "idx"])
+    df = _expandir_cantones(cantones)
 
     # ------------------------------------------------------------
     # Calcular máximo por cantón (regla n-1)
@@ -2635,18 +2640,9 @@ def min_canton(
     """
 
     # ------------------------------------------------------------
-    # Expandir relación poste – cantón
+    # Expandir relación poste – cantón (ignorando entradas sin cantón)
     # ------------------------------------------------------------
-    registros = []
-
-    for idx, c in cantones.items():
-        if isinstance(c, list):
-            for ci in c:
-                registros.append((ci, idx))
-        else:
-            registros.append((c, idx))
-
-    df = pd.DataFrame(registros, columns=["canton", "idx"]).sort_values("idx")
+    df = _expandir_cantones(cantones)
 
     # ------------------------------------------------------------
     # Cantones únicos en orden de aparición
@@ -2728,18 +2724,7 @@ def resumen_cantones(
     # ------------------------------------------------------------
     # Expandir relación poste–cantón (ignorando entradas sin cantón)
     # ------------------------------------------------------------
-    registros = []
-
-    for idx, c in cantones.items():
-        if isinstance(c, list):
-            for ci in c:
-                if ci is not None and ci == ci and ci != "":  # excluir None / NaN / ""
-                    registros.append((ci, idx))
-        else:
-            if c is not None and c == c and c != "":          # excluir None / NaN / ""
-                registros.append((c, idx))
-
-    df = pd.DataFrame(registros, columns=["canton", "idx"]).sort_values("idx")
+    df = _expandir_cantones(cantones)
 
     # ------------------------------------------------------------
     # Cantones únicos en orden de aparición
@@ -2802,18 +2787,7 @@ def longitud_canton(
     # ------------------------------------------------------------
     # Expandir relación poste – cantón (ignorando entradas sin cantón)
     # ------------------------------------------------------------
-    registros = []
-
-    for idx, c in cantones.items():
-        if isinstance(c, list):
-            for ci in c:
-                if ci is not None and ci == ci and ci != "":
-                    registros.append((ci, idx))
-        else:
-            if c is not None and c == c and c != "":
-                registros.append((c, idx))
-
-    df = pd.DataFrame(registros, columns=["canton", "idx"]).sort_values("idx")
+    df = _expandir_cantones(cantones)
 
     # ------------------------------------------------------------
     # Cantones únicos en orden de aparición
@@ -2874,21 +2848,13 @@ def agregar_vano_regulacion(
     """
     Calcula el vano de regulación por cantón (método de Truxá)
     y agrega/reemplaza la columna en van_reg.
+    Los postes sin cantón asignado (None, NaN, "") se ignoran.
     """
 
     # ------------------------------------------------------------
-    # Expandir relación poste – cantón
+    # Expandir relación poste – cantón (ignorando entradas sin cantón)
     # ------------------------------------------------------------
-    registros = []
-
-    for idx, c in cantones.items():
-        if isinstance(c, list):
-            for ci in c:
-                registros.append((ci, idx))
-        else:
-            registros.append((c, idx))
-
-    df = pd.DataFrame(registros, columns=["canton", "idx"]).sort_values("idx")
+    df = _expandir_cantones(cantones)
 
     # ------------------------------------------------------------
     # Cantones únicos en orden de aparición
@@ -2980,9 +2946,12 @@ def canton_eovanos(
         for idx in idxs:
             c = cantones.loc[idx]
             if isinstance(c, list):
-                cantones_poste.extend(c)
+                for ci in c:
+                    if ci is not None and ci == ci and ci != "":
+                        cantones_poste.append(ci)
             else:
-                cantones_poste.append(c)
+                if c is not None and c == c and c != "":
+                    cantones_poste.append(c)
 
         # eliminar duplicados conservando orden
         cantones_unicos = list(dict.fromkeys(cantones_poste))
@@ -3228,9 +3197,11 @@ def tab_fle_canton(
     for poste, c in zip(postes_export, cantones):
         if isinstance(c, list):
             for cc in c:
-                canton_postes.setdefault(cc, []).append(poste)
+                if cc is not None and cc == cc and cc != "":
+                    canton_postes.setdefault(cc, []).append(poste)
         else:
-            canton_postes.setdefault(c, []).append(poste)
+            if c is not None and c == c and c != "":
+                canton_postes.setdefault(c, []).append(poste)
 
     canton_vanos = {}
     vano_actual = 1
