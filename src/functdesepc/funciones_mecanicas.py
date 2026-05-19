@@ -4339,8 +4339,16 @@ def agregar_coordenadas(
     y: pd.Series
 ) -> pd.DataFrame:
     """
-    Convierte coordenadas UTM a geográficas (WGS84) y las agrega a carac_postes,
-    respetando el orden de postes únicos definido en postes_orden.
+    Convierte coordenadas UTM a MAGNA-SIRGAS / Colombia Bogotá zone (EPSG:3116)
+    y las agrega a carac_postes, respetando el orden de postes únicos.
+
+    El CRS origen se determina automáticamente por zona UTM y hemisferio:
+        - Hemisferio norte: EPSG:326XX (ej: zona 18N → EPSG:32618)
+        - Hemisferio sur:   EPSG:327XX (ej: zona 18S → EPSG:32718)
+
+    El CRS destino es siempre EPSG:3116 (MAGNA-SIRGAS / Colombia Bogotá zone),
+    una proyección Transverse Mercator nacional colombiana, independiente de
+    las zonas UTM internacionales.
 
     Parámetros:
         carac_postes:  DataFrame destino (un poste por fila, ordenado y sin repeticiones).
@@ -4351,23 +4359,31 @@ def agregar_coordenadas(
         y:             Serie con coordenadas Norte en UTM, alineada con postes_export.
 
     Retorna:
-        DataFrame carac_postes con columnas 'X' e 'Y' añadidas.
+        DataFrame carac_postes con columnas 'X' e 'Y' en EPSG:3116 añadidas.
     """
+    from pyproj import Transformer
 
-    def utm_a_geo(zb, xe, yn):
+    EPSG_DESTINO = 3116  # MAGNA-SIRGAS / Colombia Bogotá zone
+
+    def utm_a_magna(zb, xe, yn):
         try:
             if pd.isna(zb) or pd.isna(xe) or pd.isna(yn):
                 return None, None
             zb = str(zb).strip()
             numero_zona = int(''.join(filter(str.isdigit, zb)))
             letra_banda = ''.join(filter(str.isalpha, zb)).upper()
-            lat, lon = utm_lib.to_latlon(
-                float(xe), float(yn),
-                numero_zona,
-                letra_banda                  # ← fix: zona letra en lugar de northern=
+            hemisferio_norte = letra_banda >= 'N' if letra_banda else True
+            epsg_origen = 32600 + numero_zona if hemisferio_norte else 32700 + numero_zona
+            transformer = Transformer.from_crs(
+                f"EPSG:{epsg_origen}",
+                f"EPSG:{EPSG_DESTINO}",
+                always_xy=True
             )
-            return round(lon, 6), round(lat, 6)
-        except Exception:
+            # always_xy=True garantiza orden (Easting, Northing) → (X, Y)
+            x_magna, y_magna = transformer.transform(float(xe), float(yn))
+            return round(x_magna, 3), round(y_magna, 3)
+        except Exception as e:
+            print(f"Error en utm_a_magna: {e}")
             return None, None
 
     df_export = pd.DataFrame({
@@ -4381,22 +4397,20 @@ def agregar_coordenadas(
 
     mapa_coords = {}
     for _, fila in df_unicos.iterrows():
-        lon, lat = utm_a_geo(fila["zona_banda"], fila["x"], fila["y"])
-        mapa_coords[fila["poste"]] = (lon, lat)
+        x_magna, y_magna = utm_a_magna(fila["zona_banda"], fila["x"], fila["y"])
+        mapa_coords[fila["poste"]] = (x_magna, y_magna)
 
-    lons, lats = [], []
+    xs, ys = [], []
     for poste in postes_orden.values:
-        lon, lat = mapa_coords.get(poste, (None, None))
-        lons.append(lon)
-        lats.append(lat)
+        xm, ym = mapa_coords.get(poste, (None, None))
+        xs.append(xm)
+        ys.append(ym)
 
     carac_postes = carac_postes.drop(columns=["X", "Y"], errors="ignore")
-    carac_postes["X"] = pd.array(lons, dtype="Float64")
-    carac_postes["Y"] = pd.array(lats, dtype="Float64")
+    carac_postes["X"] = pd.array(xs, dtype="Float64")
+    carac_postes["Y"] = pd.array(ys, dtype="Float64")
 
     return carac_postes
-
-
 
 
 
