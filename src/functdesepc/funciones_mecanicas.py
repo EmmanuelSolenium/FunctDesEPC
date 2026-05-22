@@ -5854,3 +5854,154 @@ def llenar_armados(postes: pd.Series, armados: pd.Series) -> pd.Series:
                         armados_salida.iloc[idx] = valor_referencia
     
     return armados_salida
+
+
+
+
+
+def _tiene_armado_7(armado) -> bool:
+    """
+    Retorna True si el armado es un string cuyo PRIMER DÍGITO NUMÉRICO es '7'.
+    Cualquier otro valor (NaN, None, número, string sin dígitos o cuyo primer
+    dígito no sea '7') → False.
+
+    Ejemplos:
+        "MT732-1"  → True   (primer dígito encontrado: '7')
+        "MT332-1"  → False  (primer dígito encontrado: '3')
+        None/NaN   → False
+    """
+    if not isinstance(armado, str):
+        return False
+    for ch in armado:
+        if ch.isdigit():
+            return ch == "7"
+    return False  # sin dígitos
+
+
+def ajustar_tiros(
+    est_v_max: pd.DataFrame,
+    armado1: pd.Series,
+    armado2: pd.Series,
+    numero_en_ruta: pd.Series,
+) -> pd.DataFrame:
+    """
+    Ajusta in-place todas las columnas de tiro adelante y tiro atrás dentro
+    de est_v_max según las reglas de armado 7.
+
+    Busca automáticamente todas las columnas cuyo nivel 1 del MultiIndex sea
+    "Tiro Atrás (kg-f)" o "Tiro Adelante (kg-f)" y las reemplaza con los
+    valores ajustados.
+
+    Parámetros
+    ----------
+    est_v_max      : pd.DataFrame con MultiIndex en columnas.
+    armado1        : pd.Series — armado primario (ej: prim1).
+    armado2        : pd.Series — armado secundario (ej: prim2, sec1, etc.).
+    numero_en_ruta : pd.Series — número del poste en su ruta (0 = inicio).
+
+    Retorna
+    -------
+    pd.DataFrame  — est_v_max con las columnas de tiro modificadas.
+
+    Reglas
+    ------
+    Condición inicial (fila n):
+        Solo se modifica si el PRIMER DÍGITO NUMÉRICO de armado1 o armado2 es '7'.
+        Ej: "MT732-1" → primer dígito = '7' → aplica.
+        Si ninguno cumple → fila sin cambio.
+
+    Regla 1 — Casos extremos o inicio/fin de ruta:
+        Si el poste es el primero del series, el último, su numero_en_ruta == 0,
+        o el numero_en_ruta del poste siguiente == 0:
+            tiro_atras  *= 2  y  tiro_adelante *= 2
+
+    Regla 2 — Ambos armados 7 o armado único:
+        Si (armado1 tiene 7 Y armado2 tiene 7) o solo uno de los dos es string
+        (el otro es NaN/None/no-string):
+            tiro_atras  *= 2  y  tiro_adelante *= 2
+
+    Regla 3 — Mixto (uno tiene 7, el otro no):
+        Se evalúan los vecinos n-1 y n+1:
+        - tiro_atras  *= 2  solo si n-1 tiene al menos un armado con primer dígito 7.
+        - tiro_adelante *= 2  solo si n+1 tiene al menos un armado con primer dígito 7.
+        Si el vecino no tiene ningún armado 7 → ese tiro queda sin modificar.
+    """
+
+    # ── Identificar columnas de tiro en el MultiIndex ─────────────────────
+    COL_AT = "Tiro Atrás (kg-f)"
+    COL_AD = "Tiro Adelante (kg-f)"
+
+    cols_at = [c for c in est_v_max.columns if c[1] == COL_AT]
+    cols_ad = [c for c in est_v_max.columns if c[1] == COL_AD]
+
+    if not cols_at and not cols_ad:
+        raise ValueError(
+            f"No se encontraron columnas con nivel 1 == '{COL_AT}' o '{COL_AD}' "
+            f"en est_v_max. Verifica los nombres del MultiIndex."
+        )
+
+    # ── Resetear índices para trabajar con posición entera ────────────────
+    a1 = armado1.reset_index(drop=True)
+    a2 = armado2.reset_index(drop=True)
+    nr = numero_en_ruta.reset_index(drop=True)
+    n  = len(a1)
+
+    # Construir factores de ajuste para tiro atrás y tiro adelante
+    factor_at = pd.Series(1.0, index=range(n))
+    factor_ad = pd.Series(1.0, index=range(n))
+
+    for i in range(n):
+
+        # ── Condición inicial ─────────────────────────────────────────────
+        tiene7_n = _tiene_armado_7(a1.iloc[i]) or _tiene_armado_7(a2.iloc[i])
+        if not tiene7_n:
+            continue
+
+        # ── Regla 1 ───────────────────────────────────────────────────────
+        es_primero           = (i == 0)
+        es_ultimo            = (i == n - 1)
+        nr_es_cero           = (nr.iloc[i] == 0)
+        siguiente_nr_es_cero = (not es_ultimo) and (nr.iloc[i + 1] == 0)
+
+        if es_primero or es_ultimo or nr_es_cero or siguiente_nr_es_cero:
+            factor_at.iloc[i] = 2.0
+            factor_ad.iloc[i] = 2.0
+            continue
+
+        # ── Regla 2 ───────────────────────────────────────────────────────
+        a1_valido = isinstance(a1.iloc[i], str)
+        a2_valido = isinstance(a2.iloc[i], str)
+        ambos_7   = _tiene_armado_7(a1.iloc[i]) and _tiene_armado_7(a2.iloc[i])
+        unico     = (a1_valido and not a2_valido) or (not a1_valido and a2_valido)
+
+        if ambos_7 or unico:
+            factor_at.iloc[i] = 2.0
+            factor_ad.iloc[i] = 2.0
+            continue
+
+        # ── Regla 3 ───────────────────────────────────────────────────────
+        vecino_ant_tiene7 = (
+            _tiene_armado_7(a1.iloc[i - 1]) or _tiene_armado_7(a2.iloc[i - 1])
+        ) if i > 0 else False
+
+        vecino_sig_tiene7 = (
+            _tiene_armado_7(a1.iloc[i + 1]) or _tiene_armado_7(a2.iloc[i + 1])
+        ) if i < n - 1 else False
+
+        if vecino_ant_tiene7:
+            factor_at.iloc[i] = 2.0
+        if vecino_sig_tiene7:
+            factor_ad.iloc[i] = 2.0
+
+    # ── Aplicar factores a todas las columnas de tiro en est_v_max ───────
+    # Restaurar índice original para alineación correcta
+    factor_at.index = est_v_max.index
+    factor_ad.index = est_v_max.index
+
+    for col in cols_at:
+        est_v_max[col] = est_v_max[col].astype(float) * factor_at
+
+    for col in cols_ad:
+        est_v_max[col] = est_v_max[col].astype(float) * factor_ad
+
+    return est_v_max
