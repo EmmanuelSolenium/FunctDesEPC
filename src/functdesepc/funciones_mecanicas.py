@@ -5816,46 +5816,6 @@ def calcular_cantones_v2(tipo: pd.Series, numero_en_ruta: pd.Series,
     return pd.Series(cantones, dtype=object)
 
 
- 
-def llenar_armados(postes: pd.Series, armados: pd.Series) -> pd.Series:
-    """
-    Llena los valores vacíos en armados usando el valor del poste repetido correspondiente.
-    
-    Args:
-        postes: Series con identificadores de postes (puede tener repetidos)
-        armados: Series con armados (puede tener NaN en posiciones de postes repetidos)
-    
-    Returns:
-        Series de armados con los NaN rellenados
-    """
-    if len(postes) != len(armados):
-        raise ValueError("postes y armados deben tener el mismo tamaño")
-    
-    armados_salida = armados.copy()
-    
-    # Agrupar índices por poste
-    poste_indices = {}
-    for idx, poste in enumerate(postes):
-        if poste not in poste_indices:
-            poste_indices[poste] = []
-        poste_indices[poste].append(idx)
-    
-    # Para cada poste que aparece más de una vez
-    for poste, indices in poste_indices.items():
-        if len(indices) > 1:
-            # Buscar el primer valor no nulo en armados para esos índices
-            valores = armados_salida.iloc[indices]
-            valor_referencia = valores.dropna().iloc[0] if not valores.dropna().empty else None
-            
-            if valor_referencia is not None:
-                # Rellenar los NaN con el valor de referencia
-                for idx in indices:
-                    if pd.isna(armados_salida.iloc[idx]):
-                        armados_salida.iloc[idx] = valor_referencia
-    
-    return armados_salida
-
-
 
 
 
@@ -5910,11 +5870,6 @@ def ajustar_tiros(
         Ej: "MT732-1" → primer dígito = '7' → aplica.
         Si ninguno cumple → fila sin cambio.
 
-    Regla 1 — Casos extremos o inicio/fin de ruta:
-        Si el poste es el primero del series, el último, su numero_en_ruta == 0,
-        o el numero_en_ruta del poste siguiente == 0:
-            tiro_atras  *= 2  y  tiro_adelante *= 2
-
     Regla 2 — Ambos armados 7 o armado único:
         Si (armado1 tiene 7 Y armado2 tiene 7) o solo uno de los dos es string
         (el otro es NaN/None/no-string):
@@ -5943,29 +5898,15 @@ def ajustar_tiros(
     # ── Resetear índices para trabajar con posición entera ────────────────
     a1 = armado1.reset_index(drop=True)
     a2 = armado2.reset_index(drop=True)
-    nr = numero_en_ruta.reset_index(drop=True)
     n  = len(a1)
 
-    # Construir factores de ajuste para tiro atrás y tiro adelante
     factor_at = pd.Series(1.0, index=range(n))
     factor_ad = pd.Series(1.0, index=range(n))
 
     for i in range(n):
 
         # ── Condición inicial ─────────────────────────────────────────────
-        tiene7_n = _tiene_armado_7(a1.iloc[i]) or _tiene_armado_7(a2.iloc[i])
-        if not tiene7_n:
-            continue
-
-        # ── Regla 1 ───────────────────────────────────────────────────────
-        es_primero           = (i == 0)
-        es_ultimo            = (i == n - 1)
-        nr_es_cero           = (nr.iloc[i] == 0)
-        siguiente_nr_es_cero = (not es_ultimo) and (nr.iloc[i + 1] == 0)
-
-        if es_primero or es_ultimo or nr_es_cero or siguiente_nr_es_cero:
-            factor_at.iloc[i] = 2.0
-            factor_ad.iloc[i] = 2.0
+        if not (_tiene_armado_7(a1.iloc[i]) or _tiene_armado_7(a2.iloc[i])):
             continue
 
         # ── Regla 2 ───────────────────────────────────────────────────────
@@ -5979,7 +5920,7 @@ def ajustar_tiros(
             factor_ad.iloc[i] = 2.0
             continue
 
-        # ── Regla 3 ───────────────────────────────────────────────────────
+        # ── Regla 3 — mixto ───────────────────────────────────────────────
         vecino_ant_tiene7 = (
             _tiene_armado_7(a1.iloc[i - 1]) or _tiene_armado_7(a2.iloc[i - 1])
         ) if i > 0 else False
@@ -5994,7 +5935,6 @@ def ajustar_tiros(
             factor_ad.iloc[i] = 2.0
 
     # ── Aplicar factores a todas las columnas de tiro en est_v_max ───────
-    # Restaurar índice original para alineación correcta
     factor_at.index = est_v_max.index
     factor_ad.index = est_v_max.index
 
@@ -6005,3 +5945,4 @@ def ajustar_tiros(
         est_v_max[col] = est_v_max[col].astype(float) * factor_ad
 
     return est_v_max
+
