@@ -3400,8 +3400,9 @@ def limpiar_flechado(tablas_flechado: pd.DataFrame) -> pd.DataFrame:
 
 
 
-def clasificar_cantones_secundarios(tipo_postes: pd.Series) -> pd.Series:
-    salida = []
+def clasificar_cantones_secundarios(tipo_postes: pd.Series,
+                                    numero_en_ruta: pd.Series) -> pd.Series:
+    salida = [np.nan] * len(tipo_postes)
     canton = 1
 
     def es_1a(v):
@@ -3413,56 +3414,57 @@ def clasificar_cantones_secundarios(tipo_postes: pd.Series) -> pd.Series:
     def es_1c(v):
         return not isinstance(v, str)
 
-    n = len(tipo_postes)
+    # Resetear índices para trabajar con posición entera
+    tipo_postes = tipo_postes.reset_index(drop=True)
+    numero_en_ruta = numero_en_ruta.reset_index(drop=True)
 
-    # encontrar primer poste válido
-    idx_primer_valido = next(
-        (i for i, v in enumerate(tipo_postes) if not es_1c(v)),
-        None
-    )
+    rutas = _canton_get_rutas(numero_en_ruta)
 
-    for i, v in enumerate(tipo_postes):
+    for ruta_inicio, ruta_fin in rutas:
 
-        # --- 1.c ---
-        if es_1c(v):
-            salida.append(np.nan)
-            continue
+        # encontrar primer poste válido dentro de esta ruta
+        idx_primer_valido = next(
+            (i for i in range(ruta_inicio, ruta_fin + 1) if not es_1c(tipo_postes[i])),
+            None
+        )
 
-        prev_v = tipo_postes[i - 1] if i > 0 else None
-        next_v = tipo_postes[i + 1] if i < n - 1 else None
+        for i in range(ruta_inicio, ruta_fin + 1):
+            v = tipo_postes[i]
 
-        prev_es_1c = (i == 0) or es_1c(prev_v)
-        next_es_1c = (i == n - 1) or es_1c(next_v)
+            # --- 1.c ---
+            if es_1c(v):
+                salida[i] = np.nan
+                continue
 
-        # --- 1.a ---
-        if es_1a(v):
+            prev_v = tipo_postes[i - 1] if i > ruta_inicio else None
+            next_v = tipo_postes[i + 1] if i < ruta_fin else None
 
-            # inicio y final
-            if not prev_es_1c and not next_es_1c:
-                salida.append([f"{canton}S", f"{canton + 1}S"])
+            prev_es_1c = (i == ruta_inicio) or es_1c(prev_v)
+            next_es_1c = (i == ruta_fin) or es_1c(next_v)
+
+            # --- 1.a ---
+            if es_1a(v):
+
+                # inicio y final
+                if not prev_es_1c and not next_es_1c:
+                    salida[i] = [f"{canton}S", f"{canton + 1}S"]
+                    canton += 1
+                    continue
+
+                # inicio
+                if i == idx_primer_valido or prev_es_1c:
+                    salida[i] = f"{canton}S"
+                    continue
+
+                # final
+                salida[i] = f"{canton}S"
                 canton += 1
                 continue
 
-            # inicio
-            if i == idx_primer_valido or prev_es_1c:
-                salida.append(f"{canton}S")
+            # --- 1.b ---
+            if es_1b(v):
+                salida[i] = f"{canton}S"
                 continue
-
-            # final
-            salida.append(f"{canton}S")
-            canton += 1
-            continue
-
-        # --- 1.b ---
-        if es_1b(v):
-
-            # inicio
-            if i == idx_primer_valido or prev_es_1c:
-                salida.append(f"{canton}S")
-            else:
-                salida.append(f"{canton}S")
-
-            continue
 
     return pd.Series(salida, index=tipo_postes.index)
 
