@@ -4329,7 +4329,6 @@ def agregar_vano_regulacion_s(
 
     return van_reg
 
-
 def agregar_coordenadas(
     carac_postes: pd.DataFrame,
     postes_orden: pd.Series,
@@ -4339,16 +4338,20 @@ def agregar_coordenadas(
     y: pd.Series
 ) -> pd.DataFrame:
     """
-    Convierte coordenadas UTM a MAGNA-SIRGAS / Colombia Bogotá zone (EPSG:3116)
+    Convierte coordenadas UTM a MAGNA-SIRGAS / Origen Nacional (EPSG:9377)
     y las agrega a carac_postes, respetando el orden de postes únicos.
+
+    Sistemas de coordenadas relevantes:
+        - UTM WGS84    (EPSG:326XX): sistema internacional por zonas, datum WGS84.
+        - MAGNA UTM    (EPSG:311X):  igual que UTM pero datum MAGNA-SIRGAS.
+        - EPSG:3116:   MAGNA-SIRGAS / Colombia Bogotá zone, TM nacional parcial.
+        - EPSG:9377:   MAGNA-SIRGAS / Origen Nacional, TM único para todo Colombia,
+                       estándar oficial IGAC. Coordenadas en metros con offsets
+                       grandes (E~4,800,000 / N~2,500,000) para cubrir el país entero.
 
     El CRS origen se determina automáticamente por zona UTM y hemisferio:
         - Hemisferio norte: EPSG:326XX (ej: zona 18N → EPSG:32618)
         - Hemisferio sur:   EPSG:327XX (ej: zona 18S → EPSG:32718)
-
-    El CRS destino es siempre EPSG:3116 (MAGNA-SIRGAS / Colombia Bogotá zone),
-    una proyección Transverse Mercator nacional colombiana, independiente de
-    las zonas UTM internacionales.
 
     Parámetros:
         carac_postes:  DataFrame destino (un poste por fila, ordenado y sin repeticiones).
@@ -4359,13 +4362,14 @@ def agregar_coordenadas(
         y:             Serie con coordenadas Norte en UTM, alineada con postes_export.
 
     Retorna:
-        DataFrame carac_postes con columnas 'X' e 'Y' en EPSG:3116 añadidas.
+        DataFrame carac_postes con columnas 'X' (Este_9377) e 'Y' (Norte_9377)
+        en metros referidos a MAGNA-SIRGAS / Origen Nacional (EPSG:9377).
     """
     from pyproj import Transformer
 
-    EPSG_DESTINO = 3116  # MAGNA-SIRGAS / Colombia Bogotá zone
+    EPSG_DESTINO = 9377  # MAGNA-SIRGAS / Origen Nacional
 
-    def utm_a_magna(zb, xe, yn):
+    def utm_a_9377(zb, xe, yn):
         try:
             if pd.isna(zb) or pd.isna(xe) or pd.isna(yn):
                 return None, None
@@ -4377,13 +4381,13 @@ def agregar_coordenadas(
             transformer = Transformer.from_crs(
                 f"EPSG:{epsg_origen}",
                 f"EPSG:{EPSG_DESTINO}",
-                always_xy=True
+                always_xy=True  # garantiza orden (Easting, Northing) en entrada y salida
             )
-            # always_xy=True garantiza orden (Easting, Northing) → (X, Y)
-            x_magna, y_magna = transformer.transform(float(xe), float(yn))
-            return round(x_magna, 3), round(y_magna, 3)
+            # transformer.transform(Easting, Northing) → (Este_9377, Norte_9377)
+            este_9377, norte_9377 = transformer.transform(float(xe), float(yn))
+            return round(este_9377, 3), round(norte_9377, 3)
         except Exception as e:
-            print(f"Error en utm_a_magna: {e}")
+            print(f"Error en utm_a_9377: {e}")
             return None, None
 
     df_export = pd.DataFrame({
@@ -4397,23 +4401,20 @@ def agregar_coordenadas(
 
     mapa_coords = {}
     for _, fila in df_unicos.iterrows():
-        x_magna, y_magna = utm_a_magna(fila["zona_banda"], fila["x"], fila["y"])
-        mapa_coords[fila["poste"]] = (x_magna, y_magna)
+        este, norte = utm_a_9377(fila["zona_banda"], fila["x"], fila["y"])
+        mapa_coords[fila["poste"]] = (este, norte)
 
     xs, ys = [], []
     for poste in postes_orden.values:
-        xm, ym = mapa_coords.get(poste, (None, None))
-        xs.append(xm)
-        ys.append(ym)
+        este, norte = mapa_coords.get(poste, (None, None))
+        xs.append(este)
+        ys.append(norte)
 
     carac_postes = carac_postes.drop(columns=["X", "Y"], errors="ignore")
-    carac_postes["X"] = pd.array(xs, dtype="Float64")
-    carac_postes["Y"] = pd.array(ys, dtype="Float64")
+    carac_postes["X"] = pd.array(xs, dtype="Float64")  # Este_9377
+    carac_postes["Y"] = pd.array(ys, dtype="Float64")  # Norte_9377
 
     return carac_postes
-
-
-
 
 def agregar_cantones(
     carac_postes,
