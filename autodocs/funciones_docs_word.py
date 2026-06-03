@@ -955,7 +955,7 @@ def _limpiar_parrafos_merge(tabla):
                 parrafos.pop()
 
 
-def _hacer_filas_asimetricas(tabla):
+def _hacer_filas_asimetricas(tabla, n_header_rows=None):
     """
     Crea una tabla verdaderamente asimétrica en OOXML eliminando las celdas
     vacías del FINAL de cada fila y ampliando la última celda con datos
@@ -988,7 +988,9 @@ def _hacer_filas_asimetricas(tabla):
             w = gridCol.get(qn("w:w"))
             grid_widths.append(int(w) if w else 0)
 
-    for row in tabla.rows:
+    for row_idx, row in enumerate(tabla.rows):
+        if n_header_rows is not None and row_idx >= n_header_rows:
+            continue
         tcs = list(row._tr.findall(qn("w:tc")))
         if not tcs:
             continue
@@ -1135,7 +1137,8 @@ def _crear_tabla_docx(doc, df, cell_formats, merges, es_loop=False):
     _limpiar_parrafos_merge(tabla)
 
     # Paso 5: eliminar celdas vacías trailing → tabla asimétrica real
-    _hacer_filas_asimetricas(tabla)
+    n_header_rows = max((m["max_row"] + 1 for m in merges), default=1)
+    _hacer_filas_asimetricas(tabla, n_header_rows=n_header_rows)
 
     # Paso 6: solo en tablas de cantón — ocultar celdas vacías no-trailing.
     # Las tablas regulares conservan bordes uniformes en todas las celdas.
