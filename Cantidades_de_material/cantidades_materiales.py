@@ -23,9 +23,8 @@ algo falla, el error quede aislado en una sola etapa y sea fácil de reparar.
 El flujo completo lo orquesta `generar_cantidades_materiales`, pero cada etapa
 puede ejecutarse y depurarse por separado:
 
-    descargar_archivo_drive    ->  trae el catálogo desde Google Drive
-    cargar_catalogo            ->  lee el .xlsx y construye el catálogo en memoria
-    extraer_armados_planilla   ->  lista los armados de cada poste
+    cargar_catalogo            ->  lee el .xlsx desde Drive montado y construye el catálogo
+    extraer_armados_planilla   ->  lista los armados de cada poste desde est_v_max
     calcular_cantidades        ->  suma usando los multiplicadores
     exportar_cantidades_excel  ->  escribe el .xlsx de salida
 
@@ -93,83 +92,7 @@ def _normalizar_texto(texto) -> str:
 
 
 # =====================================================================
-#  1. DESCARGA DEL CATÁLOGO DESDE GOOGLE DRIVE
-# =====================================================================
-
-def extraer_file_id_drive(enlace_o_id: str) -> str:
-    """
-    Extrae el file-id de un enlace de Google Drive. Acepta tanto el id directo
-    como las formas habituales de URL:
-
-        https://drive.google.com/file/d/<ID>/view?usp=sharing
-        https://drive.google.com/open?id=<ID>
-        https://drive.google.com/uc?id=<ID>
-        <ID>
-    """
-    if enlace_o_id is None:
-        raise ValueError("El enlace/id de Drive está vacío.")
-    s = str(enlace_o_id).strip()
-    # /file/d/<ID>/
-    m = re.search(r"/d/([A-Za-z0-9_-]+)", s)
-    if m:
-        return m.group(1)
-    # ?id=<ID>  o  &id=<ID>
-    m = re.search(r"[?&]id=([A-Za-z0-9_-]+)", s)
-    if m:
-        return m.group(1)
-    # ya es un id "pelado"
-    if re.fullmatch(r"[A-Za-z0-9_-]{20,}", s):
-        return s
-    raise ValueError(f"No se pudo extraer un file-id de Drive desde: {enlace_o_id!r}")
-
-
-def descargar_archivo_drive(enlace_o_id: str,
-                            destino: str,
-                            force: bool = False,
-                            quiet: bool = False) -> str:
-    """
-    Descarga un archivo público de Google Drive a `destino` usando `gdown`.
-
-    Esta etapa está deliberadamente aislada: si la descarga falla (permisos,
-    red, id inválido) el error se origina aquí y no contamina el resto del
-    cálculo. Si ya existe el archivo y `force=False`, no lo vuelve a descargar.
-
-    NOTA: en un entorno Colab con Drive ya montado normalmente NO se necesita
-    esta función; basta con apuntar `ruta` al archivo dentro de
-    /content/drive/MyDrive/... Úsala solo cuando el catálogo se sirva por un
-    enlace de Drive en lugar de estar montado.
-
-    Devuelve la ruta local del archivo descargado.
-    """
-    if (not force) and os.path.exists(destino) and os.path.getsize(destino) > 0:
-        if not quiet:
-            print(f"[drive] Ya existe, no se re-descarga: {destino}")
-        return destino
-
-    try:
-        import gdown  # import perezoso: solo se exige si se usa la descarga
-    except ImportError as e:
-        raise ImportError(
-            "Se requiere el paquete 'gdown' para descargar desde Drive. "
-            "Instálalo con:  pip install gdown"
-        ) from e
-
-    file_id = extraer_file_id_drive(enlace_o_id)
-    url = f"https://drive.google.com/uc?id={file_id}"
-    os.makedirs(os.path.dirname(os.path.abspath(destino)) or ".", exist_ok=True)
-    salida = gdown.download(url, destino, quiet=quiet)
-    if not salida or not os.path.exists(destino):
-        raise RuntimeError(
-            f"gdown no pudo descargar el archivo (id={file_id}). "
-            "Verifica que el enlace sea público ('cualquiera con el enlace')."
-        )
-    if not quiet:
-        print(f"[drive] Descargado: {destino}")
-    return destino
-
-
-# =====================================================================
-#  2. CARGA DEL CATÁLOGO DE CANTIDADES POR ARMADO
+#  1. CARGA DEL CATÁLOGO DE CANTIDADES POR ARMADO
 # =====================================================================
 
 @dataclass
@@ -628,10 +551,8 @@ def exportar_cantidades_excel(resultado: Dict[str, pd.DataFrame],
 # =====================================================================
 
 def generar_cantidades_materiales(
-    ruta_planilla: str,
-    ruta_catalogo: Optional[str] = None,
-    enlace_catalogo_drive: Optional[str] = None,
-    destino_catalogo: str = "Cantidades_de_postes.xlsx",
+    est_df: pd.DataFrame,
+    ruta_catalogo: str,
     hojas_catalogo: Optional[Sequence[str]] = None,
     columnas_armado: Sequence[Tuple[str, str]] = COLUMNAS_ARMADO_DEFAULT,
     alias: Optional[Dict[str, str]] = None,
@@ -643,44 +564,35 @@ def generar_cantidades_materiales(
     Orquesta el flujo completo, ejecutando cada etapa por separado y atrapando
     su error para que sea fácil saber DÓNDE falló.
 
-    Indica el catálogo de UNA de estas dos formas:
-      * `ruta_catalogo`         -> archivo ya disponible localmente / en Drive montado.
-      * `enlace_catalogo_drive` -> enlace de Drive; se descarga a `destino_catalogo`.
+    Parámetros
+    ----------
+    est_df : pd.DataFrame
+        DataFrame de la planilla de estructuras ya cargado (p.ej. est_v_max).
+        Se usa directamente sin volver a leer el archivo desde disco.
+    ruta_catalogo : str
+        Ruta al archivo Cantidades_de_postes.xlsx en Drive montado.
 
     Devuelve un dict con las claves:
         'catalogo', 'armados', 'totales', 'no_encontrados', 'detalle', 'ruta_salida'
     """
     etapa = "inicio"
     try:
-        # --- Etapa 1: obtener el catálogo ---
-        etapa = "obtención del catálogo"
-        if ruta_catalogo is None:
-            if enlace_catalogo_drive is None:
-                raise ValueError(
-                    "Debes indicar 'ruta_catalogo' o 'enlace_catalogo_drive'.")
-            ruta_catalogo = descargar_archivo_drive(
-                enlace_catalogo_drive, destino_catalogo, verbose=verbose)
-
-        # --- Etapa 2: cargar catálogo ---
+        # --- Etapa 1: cargar catálogo desde Drive montado ---
         etapa = "carga del catálogo"
         catalogo = cargar_catalogo(ruta_catalogo, hojas=hojas_catalogo, verbose=verbose)
 
-        # --- Etapa 3: cargar planilla ---
-        etapa = "carga de la planilla"
-        est_df = cargar_planilla(ruta_planilla)
-
-        # --- Etapa 4: extraer armados ---
+        # --- Etapa 2: extraer armados del DataFrame ya en memoria ---
         etapa = "extracción de armados"
         armados = extraer_armados_planilla(est_df, columnas_armado=columnas_armado)
         if verbose:
             print(f"[planilla] {armados['nombre_poste'].nunique()} postes, "
-                  f"{len(armados)} armados instalados.")
+                  f"{len(armados)} armados instalados en total.")
 
-        # --- Etapa 5: calcular cantidades ---
+        # --- Etapa 3: calcular cantidades ---
         etapa = "cálculo de cantidades"
         resultado = calcular_cantidades(armados, catalogo, alias=alias, verbose=verbose)
 
-        # --- Etapa 6: exportar ---
+        # --- Etapa 4: exportar ---
         etapa = "exportación a Excel"
         exportar_cantidades_excel(resultado, ruta_salida,
                                   incluir_detalle=incluir_detalle, verbose=verbose)
