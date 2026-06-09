@@ -376,56 +376,60 @@ def extraer_armados_planilla(
 #  4. CÁLCULO DE CANTIDADES TOTALES
 # =====================================================================
 
-def aplicar_alias(armado_norm: str, alias: Optional[Dict[str, str]]) -> str:
+def _construir_indice_catalogo(catalogo) -> dict:
     """
-    Aplica un mapa de equivalencias manual sobre el código normalizado.
+    Construye un índice  { nucleo : clave_interna_catalogo }  donde nucleo es
+    el resultado de normalizar_codigo_armado sobre el código original del
+    catálogo, y clave_interna es la clave con la que catalogo.materiales indexa
+    sus multiplicadores.
 
-    `alias` se da en términos legibles, p.ej. {"MTF731-1": "MTF 731"}; aquí se
-    normalizan ambos lados para comparar. Devuelve el código normalizado
-    resultante (al que apunta el alias) o el mismo si no hay alias.
+    Permite resolver en O(1) cualquier código de la planilla contra el catálogo
+    comparando únicamente núcleos alfanuméricos, sin aliases manuales.
     """
-    if not alias:
-        return armado_norm
-    alias_norm = {normalizar_codigo_armado(k): normalizar_codigo_armado(v)
-                  for k, v in alias.items()}
-    return alias_norm.get(armado_norm, armado_norm)
+    return {normalizar_codigo_armado(orig): clave
+            for clave, orig in catalogo.armados.items()}
 
 
 def calcular_cantidades(
     armados_planilla: pd.DataFrame,
     catalogo: Catalogo,
-    alias: Optional[Dict[str, str]] = None,
     verbose: bool = True,
 ) -> Dict[str, pd.DataFrame]:
     """
     Suma los materiales de todos los armados de todos los postes.
 
+    El match entre planilla y catálogo se hace por núcleo alfanumérico: dos
+    códigos son equivalentes si, al eliminar cualquier separador o sufijo,
+    sus letras y números coinciden. Así "MTF331-1", "MTF 331-1", "MTF_331_1"
+    y "MTF331-1 (2)" apuntan todos al mismo armado del catálogo.
+
     Devuelve un diccionario con tres DataFrames:
 
       'totales'        -> codigo | material | unidad | cantidad_total
-      'no_encontrados' -> armados de la planilla que no existen en el catálogo
-                          (con cuántas veces aparecen) -> para corregir con alias
+      'no_encontrados' -> armados cuyo núcleo no existe en el catálogo
       'detalle'        -> aporte de cada armado a cada material (trazabilidad)
-
-    El cálculo nunca falla silenciosamente: los armados sin correspondencia se
-    reportan en 'no_encontrados' en lugar de descartarse sin avisar.
     """
+    # Índice nucleo -> clave_interna del catálogo (construido una sola vez)
+    indice = _construir_indice_catalogo(catalogo)
+
     # Acumuladores
-    totales: Dict[str, float] = {}            # clave_material -> cantidad
+    totales: Dict[str, float] = {}
     detalle_rows: List[dict] = []
-    faltantes: Dict[str, dict] = {}           # armado_orig -> {conteo, norm}
+    faltantes: Dict[str, dict] = {}
 
     for _, fila in armados_planilla.iterrows():
         armado_orig = fila["armado"]
-        norm = aplicar_alias(fila["armado_norm"], alias)
+        nucleo = fila["armado_norm"]          # ya es el núcleo alfanumérico
 
-        if norm not in catalogo.materiales:
+        clave_cat = indice.get(nucleo)
+
+        if clave_cat is None:
             info = faltantes.setdefault(
-                armado_orig, {"armado": armado_orig, "armado_norm": norm, "veces": 0})
+                armado_orig, {"armado": armado_orig, "nucleo": nucleo, "veces": 0})
             info["veces"] += 1
             continue
 
-        for clave_mat, mult in catalogo.materiales[norm].items():
+        for clave_mat, mult in catalogo.materiales[clave_cat].items():
             totales[clave_mat] = totales.get(clave_mat, 0.0) + mult
             detalle_rows.append({
                 "nombre_poste": fila["nombre_poste"],
@@ -452,7 +456,7 @@ def calcular_cantidades(
 
     # --- Tabla de no encontrados ---
     df_faltantes = (pd.DataFrame(list(faltantes.values()),
-                                 columns=["armado", "armado_norm", "veces"])
+                                 columns=["armado", "nucleo", "veces"])
                     .sort_values("armado")
                     .reset_index(drop=True))
 
@@ -466,7 +470,7 @@ def calcular_cantidades(
             print(f"[calculo] ⚠ Armados SIN correspondencia en el catálogo "
                   f"({len(df_faltantes)}):")
             for _, r in df_faltantes.iterrows():
-                print(f"          - {r['armado']!r} (aparece {r['veces']} vez/veces)")
+                print(f"          - {r['armado']!r}  núcleo={r['nucleo']!r}  (aparece {r['veces']} vez/veces)")
             print("          Añádelos al diccionario `alias` o al catálogo.")
         else:
             print("[calculo] ✅ Todos los armados de la planilla se encontraron.")
@@ -502,7 +506,7 @@ def exportar_cantidades_excel(resultado: Dict[str, pd.DataFrame],
     df_tot.columns = ["Código", "Material", "Unidad", "Cantidad total"]
     df_falt = resultado["no_encontrados"].copy()
     if len(df_falt):
-        df_falt.columns = ["Armado (planilla)", "Código normalizado", "Veces"]
+        df_falt.columns = ["Armado (planilla)", "Núcleo buscado", "Veces"]
 
     with pd.ExcelWriter(ruta_salida, engine="openpyxl") as writer:
         df_tot.to_excel(writer, sheet_name="Cantidades", index=False)
@@ -555,7 +559,6 @@ def generar_cantidades_materiales(
     ruta_catalogo: str,
     hojas_catalogo: Optional[Sequence[str]] = None,
     columnas_armado: Sequence[Tuple[str, str]] = COLUMNAS_ARMADO_DEFAULT,
-    alias: Optional[Dict[str, str]] = None,
     ruta_salida: str = "Cantidades_totales_proyecto.xlsx",
     incluir_detalle: bool = True,
     verbose: bool = True,
@@ -590,7 +593,7 @@ def generar_cantidades_materiales(
 
         # --- Etapa 3: calcular cantidades ---
         etapa = "cálculo de cantidades"
-        resultado = calcular_cantidades(armados, catalogo, alias=alias, verbose=verbose)
+        resultado = calcular_cantidades(armados, catalogo, verbose=verbose)
 
         # --- Etapa 4: exportar ---
         etapa = "exportación a Excel"
