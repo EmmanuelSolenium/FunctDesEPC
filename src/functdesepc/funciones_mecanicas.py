@@ -3373,9 +3373,20 @@ def limpiar_flechado(tablas_flechado: pd.DataFrame) -> pd.DataFrame:
 
     # -------------------------
     # PASADA 2 — SECUNDARIOS
+    # Detecta cambios de ruta por salto no secuencial en N°Vano explícito.
+    # Los N°Vano vienen en grupos de 4 (1 explícito + 3 NaN); la comparación
+    # se hace solo entre valores explícitos consecutivos, ignorando los NaN.
+    # El número de ruta se almacena en la columna auxiliar "_ruta_sec" y se
+    # propaga a las filas NaN del mismo grupo. Esta columna se incluye en el
+    # MultiIndex de salida para que tab_fle_canton_v2 pueda respetar los
+    # cortes de ruta al asignar vanos a cantones.
     # -------------------------
     contador = base_sec
     ultimo_s = None
+    ruta_actual = 0
+    ultimo_vano_explicito = None  # persiste entre bloques secundarios
+
+    df["_ruta_sec"] = 0
 
     i = 0
     while i < len(df):
@@ -3390,11 +3401,18 @@ def limpiar_flechado(tablas_flechado: pd.DataFrame) -> pd.DataFrame:
             val = df.at[i, col_vano]
 
             if not pd.isna(val):
+                vano_orig = int(val)
+                # Salto no secuencial → nueva ruta
+                if ultimo_vano_explicito is not None and vano_orig != ultimo_vano_explicito + 1:
+                    ruta_actual += 1
+                ultimo_vano_explicito = vano_orig
                 contador += 1
                 ultimo_s = f"{contador}S"
                 df.at[i, col_vano] = ultimo_s
+                df.at[i, "_ruta_sec"] = ruta_actual
             else:
                 df.at[i, col_vano] = ultimo_s
+                df.at[i, "_ruta_sec"] = ruta_actual
 
             i += 1
 
@@ -3406,19 +3424,24 @@ def limpiar_flechado(tablas_flechado: pd.DataFrame) -> pd.DataFrame:
     # ============================================================
     # 5. Reestructuración a MultiIndex
     # ============================================================
-    columnas_datos = df.columns[df.columns.get_loc("Temp (°C)\\") + 1 :]
+    columnas_datos = [
+        c for c in df.columns[df.columns.get_loc("Temp (°C)\\") + 1 :]
+        if c != "_ruta_sec"
+    ]
 
     registros = []
 
     for _, row in df.iterrows():
         vano_id = row["N° Vano"]
         tipo = row["Temp (°C)\\"]
-        valores = row[columnas_datos].tolist()
+        ruta = row["_ruta_sec"]
+        valores = [row[c] for c in columnas_datos]
 
         for col, val in zip(columnas_datos, valores):
             registros.append({
                 "Vano": vano_id,
                 "Tipo": tipo,
+                "_ruta_sec": ruta,
                 "Col": col,
                 "Valor": val
             })
@@ -3428,7 +3451,7 @@ def limpiar_flechado(tablas_flechado: pd.DataFrame) -> pd.DataFrame:
     tabla_final = (
         nuevo
         .pivot_table(
-            index=["Vano", "Tipo"],
+            index=["Vano", "Tipo", "_ruta_sec"],
             columns="Col",
             values="Valor",
             aggfunc="first"
@@ -3621,45 +3644,69 @@ def tab_fle_canton_v2(
     def separar_columnas(tabla):
         """
         Separa columnas de vanos normales y secundarios.
-        Retorna dos dicts: {vano_id: {'flecha': col, 'tiro': col}}
+
+        Retorna:
+          normales    : {vano_id: {'flecha': col, 'tiro': col}}
+          secundarios : {ruta: {vano_id: {'flecha': col, 'tiro': col}}}
+
+        Si tabla.columns tiene 2 niveles (vano, tipo) — formato antiguo sin
+        detección de ruta — todos los vanos secundarios se agrupan en ruta 0.
+        Si tiene 3 niveles (vano, tipo, _ruta_sec) — formato nuevo de
+        limpiar_flechado — se agrupan por el tercer nivel.
         """
-        normales, secundarios = {}, {}
+        normales = {}
+        secundarios = {}  # {ruta: {vano_id: {flecha/tiro}}}
+
+        n_niveles = tabla.columns.nlevels
+
         for col in tabla.columns:
-            vano_id, tipo = col
-            # identificar si es secundario
+            if n_niveles == 3:
+                vano_id, tipo, ruta = col
+            else:
+                vano_id, tipo = col
+                ruta = 0
+
             es_s = isinstance(vano_id, str) and str(vano_id).endswith("S")
-            d = secundarios if es_s else normales
-            if vano_id not in d:
-                d[vano_id] = {}
-            if tipo == "Flecha (m)":
-                d[vano_id]["flecha"] = col
-            elif tipo == "Tiro H. (kg)":
-                d[vano_id]["tiro"] = col
+
+            if not es_s:
+                if vano_id not in normales:
+                    normales[vano_id] = {}
+                if tipo == "Flecha (m)":
+                    normales[vano_id]["flecha"] = col
+                elif tipo == "Tiro H. (kg)":
+                    normales[vano_id]["tiro"] = col
+            else:
+                if ruta not in secundarios:
+                    secundarios[ruta] = {}
+                if vano_id not in secundarios[ruta]:
+                    secundarios[ruta][vano_id] = {}
+                if tipo == "Flecha (m)":
+                    secundarios[ruta][vano_id]["flecha"] = col
+                elif tipo == "Tiro H. (kg)":
+                    secundarios[ruta][vano_id]["tiro"] = col
+
         return normales, secundarios
 
     def asignar_vanos_a_cantones(norm_cantones, cols_dict):
         """
-        Agrupa postes válidos por cantón, luego asigna n-1 vanos
-        a cada cantón de forma independiente.
+        Asigna vanos a cantones respetando los cortes de ruta.
 
-        Para cada cantón con k postes válidos → k-1 vanos,
-        tomados en orden secuencial del pool global de vanos.
+        cols_dict puede tener dos formas:
+          - Formato plano {vano_id: {...}}  → comportamiento original (primarios).
+          - Formato agrupado {ruta: {vano_id: {...}}}  → secundarios con cortes de ruta.
+
+        Para el formato agrupado, los vanos de cada ruta se distribuyen entre los
+        cantones en orden de aparición. Al agotarse los vanos de una ruta, el cantón
+        en curso NO recibe vanos de la siguiente ruta: se cierra y la siguiente ruta
+        comienza desde el siguiente cantón. Esto evita que los vanos de derivaciones
+        independientes se mezclen con los de la ruta principal.
         """
         def normalizar_vano_id(x):
-            if pd.isna(x):
-                return -1  # o manejar como quieras
-
             x_str = str(x).replace("S", "")
-
             try:
-                return int(float(x_str))  # <-- clave: soporta "1.0"
-            except:
-                return -1  # fallback seguro
-
-        vanos_ids = sorted(
-            cols_dict.keys(),
-            key=lambda x: normalizar_vano_id(x)
-        )
+                return int(float(x_str))
+            except Exception:
+                return -1
 
         # Agrupar postes válidos por cantón, conservando orden de aparición
         canton_postes = {}
@@ -3667,21 +3714,58 @@ def tab_fle_canton_v2(
         for lista_c in norm_cantones:
             if not lista_c:
                 continue
-            # poste con [c1,c2]: cuenta para c1 (fin) y c2 (inicio)
             for c in lista_c:
                 if c not in canton_postes:
                     canton_postes[c] = 0
                     cantones_orden.append(c)
                 canton_postes[c] += 1
 
-        # Asignar vanos secuencialmente: cada cantón con k postes toma k-1 vanos
-        canton_vanos = {}
-        vano_idx = 0
-        for c in cantones_orden:
-            n_postes = canton_postes[c]
-            n_vanos = max(n_postes - 1, 0)
-            canton_vanos[c] = vanos_ids[vano_idx: vano_idx + n_vanos]
-            vano_idx += n_vanos
+        # Detectar si es formato agrupado por ruta (secundarios) o plano (primarios)
+        es_agrupado = cols_dict and isinstance(next(iter(cols_dict.values())), dict) and \
+                      all(isinstance(v, dict) and not any(k in v for k in ("flecha", "tiro"))
+                          for v in cols_dict.values())
+
+        if not es_agrupado:
+            # ── Formato plano: comportamiento original ──────────────────────────
+            vanos_ids = sorted(cols_dict.keys(), key=normalizar_vano_id)
+            canton_vanos = {}
+            vano_idx = 0
+            for c in cantones_orden:
+                n_vanos = max(canton_postes[c] - 1, 0)
+                canton_vanos[c] = vanos_ids[vano_idx: vano_idx + n_vanos]
+                vano_idx += n_vanos
+            return canton_vanos
+
+        # ── Formato agrupado por ruta: asignación con cortes estrictos ──────────
+        # Ordenar rutas numéricamente
+        rutas_orden = sorted(cols_dict.keys())
+
+        # Construir lista de listas de vano_ids por ruta, cada una ordenada
+        vanos_por_ruta = [
+            sorted(cols_dict[r].keys(), key=normalizar_vano_id)
+            for r in rutas_orden
+        ]
+
+        canton_vanos = {c: [] for c in cantones_orden}
+        canton_idx = 0
+        vanos_dados_al_canton = 0  # vanos ya asignados al cantón actual en esta ruta
+
+        for vanos_ruta in vanos_por_ruta:
+            for vano in vanos_ruta:
+                if canton_idx >= len(cantones_orden):
+                    break
+                c = cantones_orden[canton_idx]
+                n_necesarios = max(canton_postes[c] - 1, 0)
+                canton_vanos[c].append(vano)
+                vanos_dados_al_canton += 1
+                if vanos_dados_al_canton >= n_necesarios:
+                    canton_idx += 1
+                    vanos_dados_al_canton = 0
+            # Fin de ruta: cerrar el cantón actual aunque no haya completado
+            # sus vanos pedidos, para no mezclar con la ruta siguiente.
+            if vanos_dados_al_canton > 0:
+                canton_idx += 1
+                vanos_dados_al_canton = 0
 
         return canton_vanos
 
@@ -3712,6 +3796,13 @@ def tab_fle_canton_v2(
 
     cols_normales, cols_secundarios = separar_columnas(tabla_fle)
 
+    # cols_normales es plano {vano_id: ...}
+    # cols_secundarios es agrupado {ruta: {vano_id: ...}}
+    # Para construir_df necesitamos un dict plano {vano_id: ...} con todos los secundarios
+    cols_sec_plano = {}
+    for ruta_dict in cols_secundarios.values():
+        cols_sec_plano.update(ruta_dict)
+
     canton_vanos_n = asignar_vanos_a_cantones(norm_cant,   cols_normales)
     canton_vanos_s = asignar_vanos_a_cantones(norm_cant_s, cols_secundarios)
 
@@ -3725,7 +3816,7 @@ def tab_fle_canton_v2(
     ]
 
     tablas_secundarios = [
-        construir_df(c, canton_vanos_s.get(c, []), cols_secundarios, tabla_fle)
+        construir_df(c, canton_vanos_s.get(c, []), cols_sec_plano, tabla_fle)
         for c in cantones_s_orden
         if c in canton_vanos_s
     ]
