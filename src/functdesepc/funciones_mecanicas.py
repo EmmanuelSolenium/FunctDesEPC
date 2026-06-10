@@ -939,7 +939,6 @@ def calcular_ftve(
 
     return mec
 
-
 def calcular_flee(
     mec,
     postes_reco,
@@ -954,7 +953,7 @@ def calcular_flee(
     del equipo (FLEE).
 
     Fórmula:
-        FLEE = HE * LE * PE
+        FLEE = LE * PE / HE
 
     Condiciones:
     - Solo se calcula para postes con reconectador
@@ -962,7 +961,12 @@ def calcular_flee(
     - Valores por defecto (solo para postes con reconectador):
         * LE = 0.75 m
         * HE = 5.0 m
-        * PE = 600 kg
+        * PE = 600 daN
+    - Lógica de PE (igual que calcular_fve):
+        * PE ausente o vacío   → PE_def (600 daN) para todos
+        * PE con 1 valor       → ese valor como peso para todos los postes con reco
+        * PE con N valores     → el i-ésimo peso corresponde al i-ésimo poste con reco
+    - LE y HE mantienen su lógica original (indexados por nombre de poste)
     """
 
     # Inicializar columna
@@ -971,8 +975,27 @@ def calcular_flee(
     # Valores por defecto
     LE_def = 0.75
     HE_def = 5.0
-    PE_def = 600.0  # daN (solo postes con reconectador)
+    PE_def = 600.0
 
+    postes_reco_lista = list(postes_reco)
+
+    # --- Construir mapa poste → PE (misma lógica que calcular_fve) ---
+    if PE is None or len(PE) == 0:
+        mapa_pe = {poste: PE_def for poste in postes_reco_lista}
+
+    elif len(PE) == 1:
+        peso_unico = PE.iloc[0] if hasattr(PE, 'iloc') else PE[0]
+        mapa_pe = {poste: peso_unico for poste in postes_reco_lista}
+
+    else:
+        mapa_pe = {}
+        for i, poste in enumerate(postes_reco_lista):
+            if i < len(PE):
+                mapa_pe[poste] = PE.iloc[i] if hasattr(PE, 'iloc') else PE[i]
+            else:
+                mapa_pe[poste] = PE_def
+
+    # --- Aplicar al dataframe ---
     for idx, row in mec.iterrows():
 
         poste = row[col_poste]
@@ -993,15 +1016,12 @@ def calcular_flee(
             he = HE_def
 
         # PE
-        if PE is not None and poste in PE.index:
-            pe = PE.loc[poste]
-        else:
-            pe = PE_def
+        pe = mapa_pe.get(poste, PE_def)
 
-        # Cálculo FLEE
-        mec.at[idx, col_flee] =  le * pe / he
+        mec.at[idx, col_flee] = le * pe / he
 
     return mec
+
 
 def calcular_fve(
     mec,
