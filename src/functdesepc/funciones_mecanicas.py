@@ -1003,8 +1003,6 @@ def calcular_flee(
 
     return mec
 
-
-
 def calcular_fve(
     mec,
     postes_reco,
@@ -1021,8 +1019,11 @@ def calcular_fve(
     Condiciones:
     - Solo se aplica a postes con reconectador
     - Postes sin reconectador → FVE = 0
-    - Valor por defecto (solo postes con reconectador):
-        * PE = 600 daN
+    - Lógica de PE:
+        * PE ausente o vacío   → PE_def (600 daN) para todos
+        * PE con 1 valor       → ese valor como peso para todos los postes con reco
+        * PE con N valores     → el i-ésimo peso corresponde al i-ésimo poste con reco
+                                  (mismo orden que postes_reco)
     """
 
     # Inicializar columna
@@ -1030,6 +1031,29 @@ def calcular_fve(
 
     PE_def = 600.0  # daN
 
+    # --- Construir mapa poste → peso ---
+    postes_reco_lista = list(postes_reco)
+
+    if PE is None or len(PE) == 0:
+        # Opción 1: sin lista → peso por defecto para todos
+        mapa_pe = {poste: PE_def for poste in postes_reco_lista}
+
+    elif len(PE) == 1:
+        # Opción 2: un solo valor → peso uniforme para todos
+        peso_unico = PE.iloc[0] if hasattr(PE, 'iloc') else PE[0]
+        mapa_pe = {poste: peso_unico for poste in postes_reco_lista}
+
+    else:
+        # Opción 3: N valores → asignación posicional
+        mapa_pe = {}
+        for i, poste in enumerate(postes_reco_lista):
+            if i < len(PE):
+                mapa_pe[poste] = PE.iloc[i] if hasattr(PE, 'iloc') else PE[i]
+            else:
+                # más postes que pesos → defecto para los sobrantes
+                mapa_pe[poste] = PE_def
+
+    # --- Aplicar al dataframe ---
     for idx, row in mec.iterrows():
 
         poste = row[col_poste]
@@ -1037,15 +1061,11 @@ def calcular_fve(
         if poste not in postes_reco.values:
             continue
 
-        # Peso del equipo
-        if PE is not None and poste in PE.index:
-            pe = PE.loc[poste]
-        else:
-            pe = PE_def
-
-        mec.at[idx, col_fve] = pe
+        mec.at[idx, col_fve] = mapa_pe.get(poste, PE_def)
 
     return mec
+
+
 
 def agregar_columna_suma(
     df,
