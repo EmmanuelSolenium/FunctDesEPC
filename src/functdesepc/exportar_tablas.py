@@ -999,6 +999,218 @@ def exportar_nuevo_formato(
     ruta_template,
     ruta_salida,
     eovanos,
+    van_reg,
+    tab_fle,
+    tablas_p,
+    tab_fle_s,
+    tablas_s,
+    datos_iniciales_red_mt,
+    informacion_del_apoyo,
+    calculo_esfuerzos_apoyo,
+    analisis_hipotesis_normales,
+    analisis_hipotesis_anormales,
+    calculo_poste_retenidas=None,
+    validacion_poste_retenidas=None,
+    tipo_retenidas_ancla=None,
+    dimension_ancla=None,
+    cimentaciones_postes_mt=None,
+    calculos_de_cimentaciones=None,
+):
+    """
+    Vuelca los DataFrames sobre la plantilla nueva (calculos_mecanicos_afinia.xlsx)
+    conservando todo el formato de encabezados original.
+
+    Configuración por hoja (del Diccionario_Template):
+      header_row = fila que contiene los nombres de columna (para mapeo DF→Excel)
+      data_start = primera fila donde se escriben los datos
+
+      Hoja                       | header_row | data_start
+      Datos Iniciales Red MT     |     2      |     3      (dict dice 1, col names reales en fila 2)
+      VANOS IDEALES DE REGULACIÓN|     6      |     7
+      EOLOVANOS                  |     3      |     4
+      Información del Apoyo      |     4      |     5
+      Cálculo Esfuerzos Apoyo    |     2      |     3
+      Análisis Hip. Normales     |     3      |     4
+      Análisis Hip. Anormales    |     3      |     4
+      Cálculo Poste Retenidas    |     2      |     3
+      Validación Poste Retenidas |     2      |     3
+      Tipo Retenidas y Ancla     |     2      |     3
+      Dimensión Ancla            |     1      |     2
+      Calculos de Cimentaciones  |     2      |     3      (fila 1 = título, fila 2 = encabezados)
+      Cimentaciones postes MT    |     1      |     2
+    """
+    import pandas as pd
+    import unicodedata
+    import copy
+    from openpyxl import load_workbook
+    from openpyxl.styles import Font, Alignment, Border, Side
+
+    # ── Configuración: (header_row, data_start) ───────────────────────────────
+    SHEET_CFG = {
+        "Datos Iniciales Red MT":      (2, 3),
+        "VANOS IDEALES DE REGULACIÓN": (6, 7),
+        "EOLOVANOS":                   (3, 4),
+        "Información del Apoyo":       (4, 5),
+        "Cálculo Esfuerzos Apoyo":     (2, 3),
+        "Análisis Hip. Normales":      (3, 4),
+        "Análisis Hip. Anormales":     (3, 4),
+        "Cálculo Poste Retenidas":     (2, 3),
+        "Validación Poste Retenidas":  (2, 3),
+        "Tipo Retenidas y Ancla":      (2, 3),
+        "Dimensión Ancla":             (1, 2),
+        "Calculos de Cimentaciones":   (2, 3),
+        "Cimentaciones postes MT":     (1, 2),
+    }
+
+    # ── Estilo fijo de celdas de datos (igual en todas las hojas del template) ─
+    _medium = Side(style="medium", color="FF000000")
+    DATA_BORDER = Border(left=_medium, right=_medium, top=_medium, bottom=_medium)
+    DATA_FONT   = Font(name="Arial", size=7, bold=False)
+    DATA_ALIGN  = Alignment(wrap_text=True)
+
+    # ── Helpers ────────────────────────────────────────────────────────────────
+    def _clean(val):
+        try:
+            if pd.isna(val):
+                return None
+        except (TypeError, ValueError):
+            pass
+        return val
+
+    def _val(val):
+        v = _clean(val)
+        return round(v, 4) if isinstance(v, float) else v
+
+    def _norm(text):
+        if text is None:
+            return ""
+        s = str(text).strip().lower()
+        s = unicodedata.normalize("NFKD", s)
+        return "".join(c for c in s if not unicodedata.combining(c))
+
+    def _build_col_map(ws, header_row):
+        """Devuelve {nombre_normalizado: col_idx} leyendo la fila header_row."""
+        col_map = {}
+        for c in range(1, ws.max_column + 1):
+            v = ws.cell(header_row, c).value
+            if v is not None:
+                col_map[_norm(v)] = c
+        return col_map
+
+    def _map_columns(df_cols, col_map):
+        """Empareja columnas del DF con columnas de Excel por nombre normalizado."""
+        result = []
+        for col in df_cols:
+            key = _norm(col)
+            idx = col_map.get(key)
+            if idx is None:                          # búsqueda parcial como fallback
+                for mk, mc in col_map.items():
+                    if key in mk or mk in key:
+                        idx = mc
+                        break
+            result.append((col, idx))
+        return result
+
+    def _write_df(ws, df, header_row, data_start):
+        """
+        Preserva las filas 1…data_start-1 del template, borra desde data_start
+        en adelante y escribe el DataFrame con el estilo de datos del template.
+        El mapeo DF→columnas Excel se hace por nombre contra header_row.
+        """
+        if df is None or len(df) == 0:
+            return
+
+        # 1. Leer mapa de columnas ANTES de borrar
+        col_map = _build_col_map(ws, header_row)
+        mapping = _map_columns(list(df.columns), col_map)
+
+        # 2. Borrar filas de datos existentes
+        n_delete = ws.max_row - data_start + 1
+        if n_delete > 0:
+            ws.delete_rows(data_start, n_delete)
+
+        # 3. Escribir nuevos datos
+        for rel, (_, row) in enumerate(df.iterrows()):
+            abs_row = data_start + rel
+            for col_name, xcol in mapping:
+                if xcol is None:
+                    continue
+                cell = ws.cell(abs_row, xcol, value=_val(row[col_name]))
+                cell.font      = DATA_FONT
+                cell.border    = DATA_BORDER
+                cell.alignment = DATA_ALIGN
+
+    # ── 1. Cargar plantilla ────────────────────────────────────────────────────
+    wb = load_workbook(ruta_template)
+
+    # ── 2. Hojas de cálculo (EOLOVANOS y VANOS IDEALES) ───────────────────────
+    for sname, df in [("EOLOVANOS", eovanos), ("VANOS IDEALES DE REGULACIÓN", van_reg)]:
+        hr, ds = SHEET_CFG[sname]
+        _write_df(wb[sname], df, hr, ds)
+
+    # ── 3. Tablas AFINIA ───────────────────────────────────────────────────────
+    tablas = [
+        ("Datos Iniciales Red MT",      datos_iniciales_red_mt),
+        ("Información del Apoyo",       informacion_del_apoyo),
+        ("Cálculo Esfuerzos Apoyo",     calculo_esfuerzos_apoyo),
+        ("Análisis Hip. Normales",      analisis_hipotesis_normales),
+        ("Análisis Hip. Anormales",     analisis_hipotesis_anormales),
+        ("Cálculo Poste Retenidas",     calculo_poste_retenidas),
+        ("Validación Poste Retenidas",  validacion_poste_retenidas),
+        ("Tipo Retenidas y Ancla",      tipo_retenidas_ancla),
+        ("Dimensión Ancla",             dimension_ancla),
+        ("Calculos de Cimentaciones",   calculos_de_cimentaciones),
+        ("Cimentaciones postes MT",     cimentaciones_postes_mt),
+    ]
+    escritas, omitidas = [], []
+    for sname, df in tablas:
+        if df is None or len(df) == 0:
+            omitidas.append(sname)
+            continue
+        if sname not in wb.sheetnames:
+            omitidas.append(f"{sname} (no existe en template)")
+            continue
+        hr, ds = SHEET_CFG[sname]
+        _write_df(wb[sname], df, hr, ds)
+        escritas.append(sname)
+
+    # ── 4. Hojas de flechado (cantones) ───────────────────────────────────────
+    for s in [s for s in wb.sheetnames if s.startswith("Canton_")]:
+        del wb[s]
+
+    for i, (hdr, dat) in enumerate(zip(tab_fle, tablas_p)):
+        ws = wb.create_sheet(title=f"Canton_{i + 1}")
+        nxt = _escribir_header_tabla(ws, hdr, start_row=1, start_col=1)
+        _escribir_datos_tabla(ws, dat, start_row=nxt, start_col=1)
+        _auto_col_width(ws)
+
+    for i, (hdr, dat) in enumerate(zip(tab_fle_s, tablas_s)):
+        ws = wb.create_sheet(title=f"Canton_{i + 1}S")
+        nxt = _escribir_header_tabla(ws, hdr, start_row=1, start_col=1)
+        _escribir_datos_tabla(ws, dat, start_row=nxt, start_col=1)
+        _auto_col_width(ws)
+
+    # ── 5. Guardar ────────────────────────────────────────────────────────────
+    wb.save(ruta_salida)
+
+    om_str = f"\n   ⚠️  Omitidas: {', '.join(omitidas)}" if omitidas else ""
+    print(
+        f"✅ Guardado: {ruta_salida}\n"
+        f"   • Tablas AFINIA     : {len(escritas)} hojas{om_str}\n"
+        f"   • Cantones normales : {len(tab_fle)}\n"
+        f"   • Cantones secund.  : {len(tab_fle_s)}"
+    )
+
+
+# ── Ejemplo de uso ─────────────────────────────────────────────────────────────
+# exportar_nuevo_formato(ruta_template=DATA+"calculos_mecanicos_afinia.xlsx", ruta_salida=DATA+"calculos_mecanicos_nuevo.xlsx", eovanos=eovanos, van_reg=van_reg, tab_fle=tab_fle, tablas_p=tablas_p, tab_fle_s=tab_fle_s, tablas_s=tablas_s, datos_iniciales_red_mt=datos_iniciales_red_mt, informacion_del_apoyo=informacion_del_apoyo, calculo_esfuerzos_apoyo=calculo_esfuerzos_apoyo, analisis_hipotesis_normales=analisis_hipotesis_normales, analisis_hipotesis_anormales=analisis_hipotesis_anormales, calculo_poste_retenidas=calculo_poste_retenidas, validacion_poste_retenidas=validacion_poste_retenidas, tipo_retenidas_ancla=tipo_retenidas_ancla, dimension_ancla=dimension_ancla, cimentaciones_postes_mt=cimentaciones_postes_mt, calculos_de_cimentaciones=calculos_de_cimentaciones)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+def exportar_nuevo_formato_v2(
+    ruta_template,
+    ruta_salida,
+    eovanos,
     eovanos_s,
     van_reg,
     tab_fle,
@@ -1018,6 +1230,11 @@ def exportar_nuevo_formato(
     calculos_de_cimentaciones=None,
 ):
     """
+    Versión 2 de exportar_nuevo_formato.
+    Diferencia respecto a v1: agrega soporte para la hoja 'EOLOVANOS SECUNDARIO'
+    mediante el parámetro eovanos_s. Si eovanos_s es None o está vacío, la hoja
+    queda intacta (sin datos) sin generar error.
+
     Vuelca los DataFrames sobre la plantilla nueva (calculos_mecanicos_afinia.xlsx)
     conservando todo el formato de encabezados original.
 
@@ -1146,12 +1363,14 @@ def exportar_nuevo_formato(
     # ── 1. Cargar plantilla ────────────────────────────────────────────────────
     wb = load_workbook(ruta_template)
 
-    # ── 2. Hojas de cálculo (EOLOVANOS y VANOS IDEALES) ───────────────────────
+    # ── 2. Hojas de cálculo (EOLOVANOS, EOLOVANOS SECUNDARIO y VANOS IDEALES) ──
     for sname, df in [
         ("EOLOVANOS",                   eovanos),
         ("EOLOVANOS SECUNDARIO",        eovanos_s),
         ("VANOS IDEALES DE REGULACIÓN", van_reg),
     ]:
+        if sname not in wb.sheetnames:
+            continue
         hr, ds = SHEET_CFG[sname]
         _write_df(wb[sname], df, hr, ds)
 
@@ -1209,5 +1428,5 @@ def exportar_nuevo_formato(
     )
 
 
-# ── Ejemplo de uso ─────────────────────────────────────────────────────────────
-# exportar_nuevo_formato(ruta_template=DATA+"calculos_mecanicos_afinia.xlsx", ruta_salida=DATA+"calculos_mecanicos_nuevo.xlsx", eovanos=eovanos, van_reg=van_reg, tab_fle=tab_fle, tablas_p=tablas_p, tab_fle_s=tab_fle_s, tablas_s=tablas_s, datos_iniciales_red_mt=datos_iniciales_red_mt, informacion_del_apoyo=informacion_del_apoyo, calculo_esfuerzos_apoyo=calculo_esfuerzos_apoyo, analisis_hipotesis_normales=analisis_hipotesis_normales, analisis_hipotesis_anormales=analisis_hipotesis_anormales, calculo_poste_retenidas=calculo_poste_retenidas, validacion_poste_retenidas=validacion_poste_retenidas, tipo_retenidas_ancla=tipo_retenidas_ancla, dimension_ancla=dimension_ancla, cimentaciones_postes_mt=cimentaciones_postes_mt, calculos_de_cimentaciones=calculos_de_cimentaciones)
+# ── Ejemplo de uso v2 ──────────────────────────────────────────────────────────
+# exportar_nuevo_formato_v2(ruta_template=DATA+"calculos_mecanicos_afinia.xlsx", ruta_salida=DATA+"calculos_mecanicos_nuevo.xlsx", eovanos=eovanos, eovanos_s=eovanos_s, van_reg=van_reg, tab_fle=tab_fle, tablas_p=tablas_p, tab_fle_s=tab_fle_s, tablas_s=tablas_s, datos_iniciales_red_mt=datos_iniciales_red_mt, informacion_del_apoyo=informacion_del_apoyo, calculo_esfuerzos_apoyo=calculo_esfuerzos_apoyo, analisis_hipotesis_normales=analisis_hipotesis_normales, analisis_hipotesis_anormales=analisis_hipotesis_anormales, calculo_poste_retenidas=calculo_poste_retenidas, validacion_poste_retenidas=validacion_poste_retenidas, tipo_retenidas_ancla=tipo_retenidas_ancla, dimension_ancla=dimension_ancla, cimentaciones_postes_mt=cimentaciones_postes_mt, calculos_de_cimentaciones=calculos_de_cimentaciones)
