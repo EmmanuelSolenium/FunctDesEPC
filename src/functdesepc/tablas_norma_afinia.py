@@ -78,168 +78,66 @@ TABLA_AFINIA_VIENTO_DF = df_tabla_afinia_viento(TABLA_AFINIA_VIENTO)
 # ============================================================
 #  TABLA 36 - CAPACIDAD MECÁNICA DE POSTES  (AFINIA)
 # ============================================================
+TABLA_AFINIA_CAPACIDAD_MECANICA_DF = pd.DataFrame({
+    "Tipo de poste": [
+        "PH-11/500 daN",  "PH-11/735 daN",  "PH-11/1030 daN", "PH-11/1324 daN",
+        "PH-12/500 daN",  "PH-12/735 daN",  "PH-12/1030 daN", "PH-12/1324 daN",
+        "PH-14/735 daN",  "PH-14/1030 daN", "PH-14/1324 daN",
+        "PH-12/1600 daN", "PH-12/2500 daN", "PH-12/4000 daN",
+        "PH-14/1600 daN", "PH-14/2500 daN", "PH-14/4000 daN",
+    ],
+    "altura_m": [
+        11,   11,   11,   11,
+        12,   12,   12,   12,
+        14,   14,   14,
+        12,   12,   12,
+        14,   14,   14,
+    ],
+    "carga_flexion_daN": [
+        500,  735,  1030, 1324,
+        500,  735,  1030, 1324,
+        735,  1030, 1324,
+        1600, 2500, 4000,
+        1600, 2500, 4000,
+    ],
+    "momento_torsion_daN_m": [
+        351,   380,   891,  1079,   # PH-11
+        351,   380,   891,  1079,   # PH-12
+        568,   891,  1079,          # PH-14
+        None,  None,  None,         # PH-12 1600/2500/4000 → no figura en tabla
+        None,  None,  None,         # PH-14 1600/2500/4000 → no figura en tabla
+    ],
+    "hN": [
+         709,   709,  2539,  3240,
+         568,   568,  2034,  2608,
+         652,  1372,  1779,
+        5096,  8831, 22194,
+        3466,  6046, 15225,
+    ],
+    "hN_0_4m": [
+         936,   936,  3199,  4067,
+         742,   742,  2538,  3243,
+         821,  1687,  2180,
+        6212, 10604, 26131,
+        4164,  7159, 17680,
+    ],
+    "hN_0_8m": [
+        1074,  1074,  3591,  4558,
+         847,   847,  2835,  3616,
+         920,  1869,  2412,
+        7581, 12755, 30842,
+        5003,  8482, 20561,
+    ],
+    "hN_3_3m": [
+         6888,  6888, 18228, 22720,
+         4919,  4919, 13060, 16365,
+         4139,  7474,  9478,
+        27487, 43322, 94253,
+        16112, 25346, 55400,
+    ],
+})
 
-TABLA_AFINIA_CAPACIDAD_MECANICA = {
-    (11, 500):  {
-        "esfuerzo_flexion_daN": 500,
-        "momento_torsion_daN_m": 351,
-        "hN": 709,
-        "hN_0_4": 936,
-        "hN_0_8": 1074,
-        "hN_3_3": 6888
-    },
-    (11, 735):  {
-        "esfuerzo_flexion_daN": 735,
-        "momento_torsion_daN_m": 380,
-        "hN": 709,
-        "hN_0_4": 936,
-        "hN_0_8": 1074,
-        "hN_3_3": 6888
-    },
-    (11, 1030): {
-        "esfuerzo_flexion_daN": 1030,
-        "momento_torsion_daN_m": 891,
-        "hN": 2539,
-        "hN_0_4": 3199,
-        "hN_0_8": 3591,
-        "hN_3_3": 18228
-    },
-    (11, 1324): {
-        "esfuerzo_flexion_daN": 1324,
-        "momento_torsion_daN_m": 1079,
-        "hN": 3240,
-        "hN_0_4": 4067,
-        "hN_0_8": 4558,
-        "hN_3_3": 22720
-    },
 
-    (12, 500):  {
-        "esfuerzo_flexion_daN": 500,
-        "momento_torsion_daN_m": 351,
-        "hN": 568,
-        "hN_0_4": 742,
-        "hN_0_8": 847,
-        "hN_3_3": 4919
-    },
-    (12, 735):  {
-        "esfuerzo_flexion_daN": 735,
-        "momento_torsion_daN_m": 380,
-        "hN": 568,
-        "hN_0_4": 742,
-        "hN_0_8": 847,
-        "hN_3_3": 4919
-    },
-    (12, 1030): {
-        "esfuerzo_flexion_daN": 1030,
-        "momento_torsion_daN_m": 891,
-        "hN": 2034,
-        "hN_0_4": 2538,
-        "hN_0_8": 2835,
-        "hN_3_3": 13060
-    },
-    (12, 1324): {
-        "esfuerzo_flexion_daN": 1324,
-        "momento_torsion_daN_m": 1079,
-        "hN": 2608,
-        "hN_0_4": 3243,
-        "hN_0_8": 3616,
-        "hN_3_3": 16365
-    },
-    (12, 1600): {
-        "esfuerzo_flexion_daN": 1600,
-        "momento_torsion_daN_m": 5096,
-        "hN": 6212,
-        "hN_0_4": 7581,
-        "hN_0_8": 0,        # NO SE PROPORCIONA EN TABLA ORIGINAL
-        "hN_3_3": 27487
-    },
-    (12, 2500): {
-        "esfuerzo_flexion_daN": 2500,
-        "momento_torsion_daN_m": 8831,
-        "hN": 10604,
-        "hN_0_4": 12755,
-        "hN_0_8": 0,        # NO SE PROPORCIONA EN TABLA ORIGINAL
-        "hN_3_3": 43322
-    },
-    (12, 4000): {
-        "esfuerzo_flexion_daN": 4000,
-        "momento_torsion_daN_m": 22194,
-        "hN": 26131,
-        "hN_0_4": 30842,
-        "hN_0_8": 0,        # NO SE PROPORCIONA EN TABLA ORIGINAL
-        "hN_3_3": 94253
-    },
-
-    (14, 735):  {
-        "esfuerzo_flexion_daN": 735,
-        "momento_torsion_daN_m": 568,
-        "hN": 652,
-        "hN_0_4": 821,
-        "hN_0_8": 920,
-        "hN_3_3": 4139
-    },
-    (14, 1030): {
-        "esfuerzo_flexion_daN": 1030,
-        "momento_torsion_daN_m": 891,
-        "hN": 1372,
-        "hN_0_4": 1687,
-        "hN_0_8": 1869,
-        "hN_3_3": 7474
-    },
-    (14, 1324): {
-        "esfuerzo_flexion_daN": 1324,
-        "momento_torsion_daN_m": 1079,
-        "hN": 1779,
-        "hN_0_4": 2180,
-        "hN_0_8": 2412,
-        "hN_3_3": 9478
-    },
-    (14, 1600): {
-        "esfuerzo_flexion_daN": 1600,
-        "momento_torsion_daN_m": 3466,
-        "hN": 4164,
-        "hN_0_4": 5003,
-        "hN_0_8": 0,        # NO SE PROPORCIONA
-        "hN_3_3": 16112
-    },
-    (14, 2500): {
-        "esfuerzo_flexion_daN": 2500,
-        "momento_torsion_daN_m": 6046,
-        "hN": 7159,
-        "hN_0_4": 8482,
-        "hN_0_8": 0,
-        "hN_3_3": 25346
-    },
-    (14, 4000): {
-        "esfuerzo_flexion_daN": 4000,
-        "momento_torsion_daN_m": 15225,
-        "hN": 17680,
-        "hN_0_4": 20561,
-        "hN_0_8": 0,
-        "hN_3_3": 55400
-    },
-}
-
-# ============================================================
-# Convertir a DataFrame
-# ============================================================
-
-def df_tabla_afinia_capacidad(tabla_dict):
-    registros = []
-    for (altura, carga), valores in tabla_dict.items():
-        fila = {
-            "altura_m": altura,
-            "carga_flexion_daN": carga,
-            "momento_torsion_daN_m": valores["momento_torsion_daN_m"],
-            "hN": valores["hN"],
-            "hN_0_4m": valores["hN_0_4"],
-            "hN_0_8m": valores["hN_0_8"],
-            "hN_3_3m": valores["hN_3_3"],
-        }
-        registros.append(fila)
-    return pd.DataFrame(registros)
-
-TABLA_AFINIA_CAPACIDAD_MECANICA_DF = df_tabla_afinia_capacidad(TABLA_AFINIA_CAPACIDAD_MECANICA)
 
 
 
