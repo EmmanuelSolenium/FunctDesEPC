@@ -1166,95 +1166,130 @@ def calcular_FTEC(
     return mec
 
 
-
 def calcular_EVU(
     mec,
     postes,
     altura_postes,
     carga_rotura_poste,
     tabla_capacidad,
-    Hn=None,
+    lista_hN=None,
     nombre_columna="E.V.U."
 ):
     """
-    Calcula el Esfuerzo Vertical Último (E.V.U) por poste,
-    tomando de la tabla el valor MENOR más cercano de altura
-    y carga de rotura.
+    Calcula el Esfuerzo Vertical Último (E.V.U) por poste.
+
+    Selección de fila en tabla (altura y carga de rotura):
+    - Se aplica el criterio del 5%: si algún valor disponible
+      está dentro del ±5% del objetivo, se toma el más cercano
+      (aunque sea mayor). Si no, se toma el mayor valor <= objetivo.
+
+    Selección de columna hN:
+    - lista_hN es None o vacía  → columna "hN" para todos los postes
+    - lista_hN tiene 1 valor    → esa columna para todos los postes
+    - lista_hN tiene N valores  → un offset distinto por poste (posicional)
+
+    Valores válidos de lista_hN (offsets numéricos):
+        0   → "hN"
+        0.4 → "hN_0_4m"
+        0.8 → "hN_0_8m"
+        3.3 → "hN_3_3m"
     """
 
-    mec[nombre_columna] = 0.0
-
-    # Columnas de referencia Hn
-    hn_offsets = {
-        "hN": 0.0,
-        "hN_0_4m": 0.4,
-        "hN_0_8m": 0.8,
-        "hN_3_3m": 3.3
+    # ----------------------------------------------------------
+    # Mapa offset → columna
+    # ----------------------------------------------------------
+    offset_a_col = {
+        0:   "hN",
+        0.4: "hN_0_4m",
+        0.8: "hN_0_8m",
+        3.3: "hN_3_3m",
     }
+
+    def _resolver_col(offset):
+        if offset is None:
+            return "hN"
+        offsets_disp = list(offset_a_col.keys())
+        col_sel = min(offsets_disp, key=lambda o: abs(o - float(offset)))
+        return offset_a_col[col_sel]
+
+    # ----------------------------------------------------------
+    # Construir mapa posicional: idx_en_postes → nombre_columna
+    # ----------------------------------------------------------
+    postes_lista = list(postes.index)
+
+    if lista_hN is None or len(lista_hN) == 0:
+        col_por_poste = {idx: "hN" for idx in postes_lista}
+    elif len(lista_hN) == 1:
+        col_unica = _resolver_col(lista_hN[0])
+        col_por_poste = {idx: col_unica for idx in postes_lista}
+    else:
+        col_por_poste = {}
+        for pos, idx in enumerate(postes_lista):
+            col_por_poste[idx] = _resolver_col(lista_hN[pos]) if pos < len(lista_hN) else "hN"
+
+    # ----------------------------------------------------------
+    # Helper: selección con criterio 5%
+    # ----------------------------------------------------------
+    def _seleccionar_5pct(objetivo, valores_disponibles):
+        """
+        - Si algún valor está dentro del ±5% del objetivo → el más cercano.
+        - Si no → el mayor valor <= objetivo.
+        - Si no hay ninguno <= objetivo → None (sin resultado).
+        """
+        valores = np.array(sorted(valores_disponibles), dtype=float)
+        dif_rel = np.abs(valores - objetivo) / objetivo
+        mask_5 = dif_rel <= 0.05
+        if mask_5.any():
+            return valores[mask_5][np.argmin(np.abs(valores[mask_5] - objetivo))]
+        menores = valores[valores <= objetivo]
+        if len(menores) > 0:
+            return menores[-1]
+        return None
+
+    # ----------------------------------------------------------
+    # Cálculo por poste
+    # ----------------------------------------------------------
+    mec[nombre_columna] = 0.0
 
     for idx in postes.index:
 
         poste = postes.loc[idx]
         h_poste = float(altura_postes.loc[idx])
         carga = float(carga_rotura_poste.loc[idx])
-
-        # ---------------- Hn efectivo ----------------
-        if Hn is None:
-            hn_val = h_poste - 2.0
-        else:
-            hn_val = float(Hn.loc[idx])
+        col_sel = col_por_poste.get(idx, "hN")
 
         # ------------------------------------------------
-        # 1) Selección de altura menor más cercana
+        # 1) Selección de altura con criterio 5%
         # ------------------------------------------------
-        alturas_validas = tabla_capacidad[
-            tabla_capacidad["altura_m"] <= h_poste
-        ]
+        alturas_disp = tabla_capacidad["altura_m"].unique()
+        altura_sel = _seleccionar_5pct(h_poste, alturas_disp)
 
-        if alturas_validas.empty:
+        if altura_sel is None:
             mec.loc[mec[postes.name] == poste, nombre_columna] = np.nan
             continue
 
-        altura_sel = alturas_validas["altura_m"].max()
-
-        tabla_altura = alturas_validas[
-            alturas_validas["altura_m"] == altura_sel
-        ]
+        tabla_altura = tabla_capacidad[tabla_capacidad["altura_m"] == altura_sel]
 
         # ------------------------------------------------
-        # 2) Selección de carga menor más cercana
+        # 2) Selección de carga con criterio 5%
         # ------------------------------------------------
-        cargas_validas = tabla_altura[
-            tabla_altura["carga_flexion_daN"] <= carga
-        ]
+        cargas_disp = tabla_altura["carga_flexion_daN"].unique()
+        carga_sel = _seleccionar_5pct(carga, cargas_disp)
 
-        if cargas_validas.empty:
+        if carga_sel is None:
             mec.loc[mec[postes.name] == poste, nombre_columna] = np.nan
             continue
 
-        carga_sel = cargas_validas["carga_flexion_daN"].max()
-
-        fila = cargas_validas[
-            cargas_validas["carga_flexion_daN"] == carga_sel
+        fila = tabla_altura[
+            tabla_altura["carga_flexion_daN"] == carga_sel
         ].iloc[0]
 
         # ------------------------------------------------
-        # 3) Selección de columna Hn más cercana
+        # 3) Leer valor de la columna hN seleccionada
         # ------------------------------------------------
-        diferencias = {
-            col: abs(hn_val - (altura_sel - off))
-            for col, off in hn_offsets.items()
-        }
-
-        col_sel = min(diferencias, key=diferencias.get)
-
-        EVU = fila[col_sel]
-
-        mec.loc[mec[postes.name] == poste, nombre_columna] = EVU
+        mec.loc[mec[postes.name] == poste, nombre_columna] = fila[col_sel]
 
     return mec
-
-
 
 def calcular_FI(
     mec,
