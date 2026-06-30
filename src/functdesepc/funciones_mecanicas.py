@@ -431,6 +431,21 @@ def construir_c2t1_vano(
     return tabla1
 
 
+def col_vano_peso(df: pd.DataFrame) -> pd.Series:
+    """
+    Obtiene la columna ("Estructura", "Vano Peso (m)").
+
+    El software que exporta estos Excel cambió de estructura y en
+    versiones nuevas esa misma columna aparece bajo el índice
+    ("Conductor Principal1", "Vano peso (m)"). Esta función intenta
+    primero el índice antiguo y, si no existe, usa el nuevo.
+    """
+    if ("Estructura", "Vano Peso (m)") in df.columns:
+        return df[("Estructura", "Vano Peso (m)")]
+    else:
+        return df[("Conductor Principal1", "Vano peso (m)")]
+
+
 import re
 
 def convertir_texto_kgf_a_daN(texto):
