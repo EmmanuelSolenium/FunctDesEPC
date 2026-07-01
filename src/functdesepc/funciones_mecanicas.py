@@ -2625,6 +2625,16 @@ def clasificar_cantones(
 
     for i in range(n):
 
+        tipo_i = tipo_poste.iloc[i]
+        nr_i   = numero_en_ruta.iloc[i]
+
+        # Poste de amarre sin armado primario (nr==0, tipo nan): no pertenece
+        # a ningún cantón primario de la derivación.  Se omite sin incrementar
+        # el contador para que el siguiente poste con tipo real abra el cantón.
+        if nr_i == 0 and pd.isna(tipo_i) and iniciar_nuevo:
+            resultado[i] = None
+            continue
+
         if iniciar_nuevo:
             canton_actual += 1
             iniciar_nuevo = False
