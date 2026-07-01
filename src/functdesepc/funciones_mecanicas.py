@@ -2571,6 +2571,24 @@ def clasificar_cantones(
     n = len(postes_exportacion)
 
     # ------------------------------------------------------------
+    # Pre-calcular la ruta de cada fila y el número de postes con
+    # tipo válido por ruta.  Una ruta con menos de 2 postes válidos
+    # no puede formar un cantón primario y se omite completamente.
+    # ------------------------------------------------------------
+    route_of = [None] * n
+    route_start = 0
+    for i in range(n):
+        if numero_en_ruta.iloc[i] == 0:
+            route_start = i
+        route_of[i] = route_start
+
+    valid_count = {}   # route_start → nº de postes con tipo no-nan en esa ruta
+    for i in range(n):
+        if pd.notna(tipo_poste.iloc[i]):
+            rs = route_of[i]
+            valid_count[rs] = valid_count.get(rs, 0) + 1
+
+    # ------------------------------------------------------------
     # Identificar inicio / fin de cantón por poste
     # ------------------------------------------------------------
     inicio = [False] * n
@@ -2609,12 +2627,10 @@ def clasificar_cantones(
         # --------------------------------------------------------
         if es_ultimo:
             inicio[i] = False
-        
+
         #El primero no puede terminar un ruta
         if (numero_en_ruta.iloc[i] == 0) and not (es_ultimo):
             fin[i] = False
-            
-        
 
     # ------------------------------------------------------------
     # Asignar cantones en orden de exportación
@@ -2627,11 +2643,18 @@ def clasificar_cantones(
 
         tipo_i = tipo_poste.iloc[i]
         nr_i   = numero_en_ruta.iloc[i]
+        rs_i   = route_of[i]
 
         # Poste de amarre sin armado primario (nr==0, tipo nan): no pertenece
         # a ningún cantón primario de la derivación.  Se omite sin incrementar
         # el contador para que el siguiente poste con tipo real abra el cantón.
         if nr_i == 0 and pd.isna(tipo_i) and iniciar_nuevo:
+            resultado[i] = None
+            continue
+
+        # Ruta con menos de 2 postes válidos: no puede formar cantón.
+        # Se omite sin alterar el contador ni el estado iniciar_nuevo.
+        if valid_count.get(rs_i, 0) < 2:
             resultado[i] = None
             continue
 
