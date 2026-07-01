@@ -2673,6 +2673,15 @@ def clasificar_cantones(
                 continue
             canton_actual += 1
             iniciar_nuevo = False
+            # ── CORRECCIÓN cantón de un solo poste ───────────────────────────
+            # Si este poste ANC/FL es el primero de su ruta (veníamos de
+            # iniciar_nuevo=True), no existe cantón anterior que cerrar.
+            # Tratarlo como inicio puro aunque fin[i] sea True; de lo contrario
+            # se generaría un cantón huérfano [canton_actual, canton_actual+1]
+            # que va del poste a sí mismo (p. ej. el cantón 7 de EPP3→EPP3).
+            resultado[i] = canton_actual
+            continue
+            # ─────────────────────────────────────────────────────────────────
 
         if inicio[i] and fin[i]:
             # Fin e inicio simultáneo (NO ocurre en el último poste)
