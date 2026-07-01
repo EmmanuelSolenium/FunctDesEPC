@@ -2659,6 +2659,18 @@ def clasificar_cantones(
             continue
 
         if iniciar_nuevo:
+            # No abrir un cantón nuevo si no hay al menos otro poste válido
+            # más adelante en la misma ruta con el que cerrarlo.
+            # Esto evita crear cantones huérfanos de un solo poste (ej: cantón 7
+            # que aparece cuando un FL/ANC queda como último poste de su ruta).
+            hay_poste_siguiente_en_ruta = any(
+                pd.notna(tipo_poste.iloc[j])
+                for j in range(i + 1, n)
+                if route_of[j] == rs_i
+            )
+            if not hay_poste_siguiente_en_ruta:
+                resultado[i] = None
+                continue
             canton_actual += 1
             iniciar_nuevo = False
 
