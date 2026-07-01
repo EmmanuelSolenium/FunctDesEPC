@@ -2588,7 +2588,12 @@ def clasificar_cantones(
             fin[i] = True
 
         # --- Regla 2: cambio de ruta ---
-        if nr == 0:
+        # Solo se abre cantón en el poste de inicio de ruta (nr == 0) si ese
+        # poste tiene un armado primario válido (tipo no es nan).  Cuando el
+        # tipo es nan el poste es un nodo de amarre de la ruta principal que
+        # Redlin exporta sin armado en esta vista; el cantón primario de la
+        # derivación debe iniciarse en el primer poste con tipo real.
+        if nr == 0 and pd.notna(tipo):
             inicio[i] = True
 
         if nr != 0:
