@@ -3651,30 +3651,32 @@ def clasificar_cantones_secundarios(tipo_postes: pd.Series) -> pd.Series:
 
     return pd.Series(salida, index=tipo_postes.index)
 
-
 def clasificar_cantones_secundarios_v2(tipo_postes: pd.Series,
                                        numero_en_ruta: pd.Series) -> pd.Series:
     salida = [np.nan] * len(tipo_postes)
     canton = 1
+    canton_abierto = False   # <-- NUEVO
 
     def es_1a(v):
         return isinstance(v, str) and ("ANC" in v or "FL" in v)
-
     def es_1b(v):
         return isinstance(v, str) and not es_1a(v)
-
     def es_1c(v):
         return not isinstance(v, str)
 
-    # Resetear índices para trabajar con posición entera
     tipo_postes = tipo_postes.reset_index(drop=True)
     numero_en_ruta = numero_en_ruta.reset_index(drop=True)
-
     rutas = _canton_get_rutas(numero_en_ruta)
 
     for ruta_inicio, ruta_fin in rutas:
 
-        # encontrar primer poste válido dentro de esta ruta
+        # Un cambio de ruta/derivación siempre cierra el cantón que haya
+        # quedado abierto, sin importar el tipo de poste con el que
+        # terminó la ruta anterior.
+        if canton_abierto:
+            canton += 1
+            canton_abierto = False
+
         idx_primer_valido = next(
             (i for i in range(ruta_inicio, ruta_fin + 1) if not es_1c(tipo_postes[i])),
             None
@@ -3682,40 +3684,33 @@ def clasificar_cantones_secundarios_v2(tipo_postes: pd.Series,
 
         for i in range(ruta_inicio, ruta_fin + 1):
             v = tipo_postes[i]
-
-            # --- 1.c ---
             if es_1c(v):
                 salida[i] = np.nan
                 continue
 
             prev_v = tipo_postes[i - 1] if i > ruta_inicio else None
             next_v = tipo_postes[i + 1] if i < ruta_fin else None
-
             prev_es_1c = (i == ruta_inicio) or es_1c(prev_v)
             next_es_1c = (i == ruta_fin) or es_1c(next_v)
 
-            # --- 1.a ---
             if es_1a(v):
-
-                # inicio y final
                 if not prev_es_1c and not next_es_1c:
                     salida[i] = [f"{canton}S", f"{canton + 1}S"]
                     canton += 1
+                    canton_abierto = True     # <-- el nuevo cantón queda abierto
                     continue
-
-                # inicio
                 if i == idx_primer_valido or prev_es_1c:
                     salida[i] = f"{canton}S"
+                    canton_abierto = True     # <-- NUEVO
                     continue
-
-                # final
                 salida[i] = f"{canton}S"
                 canton += 1
+                canton_abierto = False        # <-- se cerró correctamente
                 continue
 
-            # --- 1.b ---
             if es_1b(v):
                 salida[i] = f"{canton}S"
+                canton_abierto = True         # <-- NUEVO
                 continue
 
     return pd.Series(salida, index=tipo_postes.index)
