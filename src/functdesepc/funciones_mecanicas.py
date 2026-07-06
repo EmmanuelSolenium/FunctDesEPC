@@ -6264,3 +6264,20 @@ def ajustar_tiros(
 
     return est_v_max
 
+def sumar_columnas_retenidas(
+    est_v_max,
+    grupo_columna="Estructura",
+    prefijo="RT0",
+):
+    cols_retenidas = [
+        col for col in est_v_max.columns
+        if col[0] == grupo_columna and str(col[1]).startswith(prefijo)
+    ]
+
+    if not cols_retenidas:
+        raise ValueError(
+            f"No se encontraron columnas en el grupo '{grupo_columna}' "
+            f"que empiecen con el prefijo '{prefijo}'."
+        )
+
+    return est_v_max[cols_retenidas].sum(axis=1, skipna=True)
