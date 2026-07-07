@@ -2215,6 +2215,59 @@ def calcular_tiro_maximo(
     return carac_postes
 
 
+def _resolver_mapa_calibre_por_lista(
+    postes_orden,
+    postes_con_retenida,
+    postes_calibre_1_2,
+):
+    """
+    Construye un mapa {poste: calibre} a partir de una lista de postes con
+    calibre 1/2". Todo poste con retenida que NO esté en la lista se asume
+    de calibre 3/8".
+
+    Parámetros:
+        postes_orden:          Serie/iterable con los nombres de poste únicos
+                                (el universo completo de postes del proyecto).
+        postes_con_retenida:   Set/iterable con los nombres de los postes que
+                                SÍ tienen retenida real (previamente
+                                determinado, ej. vía identificar_retenida).
+        postes_calibre_1_2:    Lista/iterable con los nombres de los postes
+                                que tienen calibre 1/2". Puede venir en
+                                cualquier orden, puede faltar cualquier poste
+                                (esos se asumen 3/8"), y puede estar vacía
+                                (todas las retenidas existentes son 3/8").
+
+    Reglas:
+        - Todo nombre en postes_calibre_1_2 DEBE corresponder a un poste con
+          retenida real (presente en postes_con_retenida). Si no es así, se
+          lanza un ValueError describiendo qué poste(s) causan el problema.
+        - Los postes con retenida que no aparezcan en postes_calibre_1_2 se
+          asumen de calibre "3/8".
+
+    Retorna:
+        dict {poste: "1/2" o "3/8"} solo para los postes con retenida real.
+    """
+
+    postes_con_retenida = set(postes_con_retenida)
+    postes_calibre_1_2 = set(postes_calibre_1_2) if postes_calibre_1_2 else set()
+
+    # Validación: todo poste listado como 1/2" debe tener retenida real
+    postes_invalidos = postes_calibre_1_2 - postes_con_retenida
+    if postes_invalidos:
+        raise ValueError(
+            "Los siguientes postes fueron indicados con calibre de retenida "
+            "1/2\" pero no tienen una retenida real detectada en el proyecto: "
+            f"{sorted(postes_invalidos)}. Revisa la lista 'postes_calibre_1_2' "
+            "o verifica que dichos postes efectivamente tengan retenida."
+        )
+
+    mapa_calibre = {}
+    for poste in postes_orden:
+        if poste not in postes_con_retenida:
+            continue
+        mapa_calibre[poste] = "1/2" if poste in postes_calibre_1_2 else "3/8"
+
+    return mapa_calibre
 
 
 def calcular_fuerza_residual_retenidas(
@@ -2302,6 +2355,197 @@ def calcular_fuerza_residual_retenidas(
             calibre = calibre_retenida.iloc[i]
         else:
             calibre = calibre_retenida
+
+        tablas_calibre = obtener_tablas_calibre(calibre)
+
+        # 1. Verificar retenidas
+        ret_vals = retenidas.loc[mask]
+        ret_vals = ret_vals[ret_vals > 0]
+
+        if ret_vals.empty:
+            continue
+
+        # 2. Alturas
+        Hn = altura_postes.iloc[i]
+        Hj = altura_retenidas.iloc[i]
+        delta_h = Hn - Hj
+
+        # 3. Tipo de retenida
+        tipo_fila = tipo_retenida.iloc[i]
+
+        if tipo_fila["Bisectora"] == "X":
+            es_90 = False
+        elif tipo_fila["Conjunto a 90º"] == "X":
+            es_90 = True
+        else:
+            continue
+
+        # 4. Selección de tabla
+        if es_90:
+            tabla = tablas_calibre[1]
+            betas = tabla.index.get_level_values("β (°)").unique()
+            beta_sel = valor_cercano(betas, 90)
+        else:
+            tabla = tablas_calibre[0]
+
+        carga_poste = capacidad_poste.iloc[i]
+
+        if es_90:
+            cargas_tabla = tabla.index.get_level_values("Carga (daN)").unique()
+        else:
+            cargas_tabla = tabla.index
+
+        carga_sel = valor_cercano(cargas_tabla, carga_poste)
+        col_long = seleccionar_longitud(delta_h)
+
+        if es_90:
+            A = tabla.loc[(beta_sel, carga_sel), (col_long, "A")]
+            B = tabla.loc[(beta_sel, carga_sel), (col_long, "B")]
+            C = tabla.loc[(beta_sel, carga_sel), (col_long, "C")]
+        else:
+            A = tabla.loc[carga_sel, (col_long, "A")]
+            B = tabla.loc[carga_sel, (col_long, "B")]
+            C = tabla.loc[carga_sel, (col_long, "C")]
+
+        # 5. Fuerzas
+        Ru = obtener_ru(calibre)
+        fres = flmc.iloc[i] * A * Hj / Hn
+        fver = flmc.iloc[i] * B
+        trac = flmc.iloc[i] * C * 1.5
+        tp = tipo_poste.iloc[i]
+
+        if tp == "ANC":
+            pretr = max(2 * abs(A * flmc.iloc[i] - carga_poste / 1.5), 0.05 * Ru)
+        else:
+            pretr = max(2 * abs(A * flmc.iloc[i] - carga_poste / 2.5), 0.05 * Ru)
+
+        carac_postes.loc[carac_postes[postes_orden.name] == poste, col_fres] = fres
+        carac_postes.loc[i, col_fvert] = fver
+        carac_postes.loc[i, col_trac]  = trac
+        carac_postes.loc[i, col_pret]  = pretr
+        carac_postes.loc[i, col_rot]   = Ru
+
+    return carac_postes
+
+
+def calcular_fuerza_residual_retenidas_v2(
+    carac_postes,
+    postes_orden,
+    postes_export,
+    retenidas,
+    flmc,
+    altura_postes,
+    capacidad_poste,
+    tablas_coeficientes,
+    tipo_retenida,
+    tipo_poste,
+    tabla_cables_acero,
+    postes_calibre_1_2=None,
+    altura_retenidas=None,
+    col_fres="Fuerza Residual Fres (daN)",
+    col_fvert="Fuerza vertical por retenida Fvert (daN)",
+    col_trac="Tracción total cable ret.(daN)",
+    col_pret="Pretensionado de la Retenida (daN)",
+    col_rot="Carga rotura cable ret. (daN)",
+):
+    """
+    Versión 2 de calcular_fuerza_residual_retenidas.
+
+    En vez de recibir 'calibre_retenida' (string único o pd.Series alineada
+    posicionalmente con postes_orden), recibe 'postes_calibre_1_2': una
+    lista/iterable con los NOMBRES de los postes que tienen calibre de
+    retenida 1/2". Todo poste con retenida real que no esté en esa lista
+    se asume de calibre 3/8". La lista puede:
+        - venir en cualquier orden,
+        - omitir postes (esos se asumen 3/8"),
+        - estar vacía o ser None (todas las retenidas existentes son 3/8").
+
+    Si algún nombre en postes_calibre_1_2 no corresponde a un poste con
+    retenida real detectada (valor > 0 en 'retenidas' para ese poste), se
+    lanza un ValueError indicando cuáles postes causan el problema.
+
+    El resto del comportamiento (fórmulas, selección de tablas, etc.) es
+    idéntico a calcular_fuerza_residual_retenidas.
+    """
+
+    for c in [col_fres, col_fvert, col_trac, col_pret, col_rot]:
+        carac_postes[c] = np.nan
+
+    if altura_retenidas is None:
+        altura_retenidas = altura_postes
+
+    # --------------------------------------------------
+    # Determinar postes con retenida real (independiente del tipo_retenida,
+    # basta con que 'retenidas' tenga un valor > 0 para alguna repetición
+    # del poste en postes_export)
+    # --------------------------------------------------
+    postes_con_retenida = set()
+    for poste in postes_orden:
+        mask = postes_export == poste
+        if not mask.any():
+            continue
+        ret_vals = retenidas.loc[mask]
+        if (ret_vals > 0).any():
+            postes_con_retenida.add(poste)
+
+    mapa_calibre = _resolver_mapa_calibre_por_lista(
+        postes_orden=postes_orden,
+        postes_con_retenida=postes_con_retenida,
+        postes_calibre_1_2=postes_calibre_1_2,
+    )
+
+    # --------------------------------------------------
+    # Funciones auxiliares
+    # --------------------------------------------------
+    def obtener_ru(calibre):
+        fila = tabla_cables_acero[
+            tabla_cables_acero["Denominación"].astype(str).str.contains(str(calibre))
+        ]
+        if fila.empty:
+            return np.nan
+        return float(fila.iloc[0]["Carga de Rotura (daN)"])
+
+    def seleccionar_longitud(delta_h):
+        if delta_h <= 1.2:
+            return "≤1.2 m"
+        elif delta_h <= 2.2:
+            return "1.2 < L ≤ 2.2 m"
+        else:
+            return ">3.0 m"
+
+    def valor_cercano(valores, objetivo):
+        valores = np.array(sorted(valores))
+        dif_rel = np.abs(valores - objetivo) / objetivo
+        mask_5 = dif_rel <= 0.05
+        if mask_5.any():
+            return valores[mask_5][np.argmin(np.abs(valores[mask_5] - objetivo))]
+        menores = valores[valores <= objetivo]
+        if len(menores) > 0:
+            return menores[-1]
+        return valores[0]
+
+    def obtener_tablas_calibre(calibre):
+        if calibre == "3/8":
+            return [tablas_coeficientes[0], tablas_coeficientes[2]]
+        else:
+            return [tablas_coeficientes[1], tablas_coeficientes[3]]
+
+    # --------------------------------------------------
+    # Iteración por poste
+    # --------------------------------------------------
+    for i, poste in enumerate(postes_orden):
+
+        mask = postes_export == poste
+
+        if not mask.any():
+            continue
+
+        # Calibre del poste actual (por nombre, vía mapa_calibre)
+        calibre = mapa_calibre.get(poste)
+
+        if calibre is None:
+            # Poste sin retenida real: no se calcula nada (igual que antes)
+            continue
 
         tablas_calibre = obtener_tablas_calibre(calibre)
 
@@ -5199,6 +5443,54 @@ def agregar_calibre_retenida(ret, calibre="3/8", col_referencia="Fuerza Residual
     return ret
 
 
+def agregar_calibre_retenida_v2(
+    ret,
+    postes_calibre_1_2=None,
+    col_poste="Numero de apoyo",
+    col_referencia="Fuerza Residual Fres (daN)",
+    nombre_columna="CABLE DE LA RETENIDA ",
+):
+    """
+    Versión 2 de agregar_calibre_retenida.
+
+    En vez de recibir 'calibre' (string único aplicado a todos los postes),
+    recibe 'postes_calibre_1_2': una lista/iterable con los NOMBRES de los
+    postes (según col_poste, típicamente 'Numero de apoyo') que tienen
+    calibre de retenida 1/2". Todo poste con retenida real (detectado por
+    tener valor no nulo en col_referencia) que no esté en esa lista se
+    asume de calibre 3/8". La lista puede:
+        - venir en cualquier orden,
+        - omitir postes (esos se asumen 3/8"),
+        - estar vacía o ser None (todas las retenidas existentes son 3/8").
+
+    Si algún nombre en postes_calibre_1_2 no corresponde a un poste con
+    retenida real (según col_referencia), se lanza un ValueError indicando
+    cuáles postes causan el problema.
+
+    Parámetros:
+        ret:                DataFrame de retenidas.
+        postes_calibre_1_2: Lista/iterable con nombres de poste de calibre 1/2".
+        col_poste:          Columna de ret con el nombre del poste.
+        col_referencia:     Columna usada para detectar postes con retenida.
+        nombre_columna:     Nombre de la columna que se añadirá a ret.
+
+    Retorna:
+        DataFrame ret con la columna de calibre añadida.
+    """
+    postes_con_retenida = set(ret.loc[ret[col_referencia].notna(), col_poste])
+
+    mapa_calibre = _resolver_mapa_calibre_por_lista(
+        postes_orden=ret[col_poste],
+        postes_con_retenida=postes_con_retenida,
+        postes_calibre_1_2=postes_calibre_1_2,
+    )
+
+    ret[nombre_columna] = [
+        mapa_calibre.get(poste) if pd.notna(ref) else None
+        for poste, ref in zip(ret[col_poste], ret[col_referencia])
+    ]
+    return ret
+
 
 def agregar_tipo_retenida(ret, carac_postes, col_referencia="Fuerza Residual Fres (daN)", nombre_columna="TIPO DE RETENIDAS"):
     """
@@ -5330,6 +5622,74 @@ def agregar_fuerza_maxima_ancla(
 
     return ret
 
+
+def agregar_fuerza_maxima_ancla_v2(
+    ret,
+    postes_orden,
+    postes_export,
+    postes_calibre_1_2,
+    tipo_suelo,
+    tabla_ancla,
+    col_referencia="Fuerza Residual Fres (daN)",
+    nombre_columna="Fuerza maxima del Ancla (daN)"
+):
+    """
+    Versión 2 de agregar_fuerza_maxima_ancla.
+
+    En vez de recibir 'calibre_retenida' (string único o pd.Series alineada
+    posicionalmente con postes_export), recibe 'postes_calibre_1_2': una
+    lista/iterable con los NOMBRES de los postes con calibre de retenida
+    1/2". Todo poste con retenida real (según col_referencia en ret) que no
+    esté en esa lista se asume de calibre 3/8". La lista puede:
+        - venir en cualquier orden,
+        - omitir postes (esos se asumen 3/8"),
+        - estar vacía o ser None (todas las retenidas existentes son 3/8").
+
+    Si algún nombre en postes_calibre_1_2 no corresponde a un poste con
+    retenida real, se lanza un ValueError indicando cuáles postes causan
+    el problema.
+
+    Parámetros:
+        ret:                 DataFrame de retenidas.
+        postes_orden:        Serie con nombres de poste únicos y ordenados.
+        postes_export:       Serie con nombres de poste del archivo de entrada.
+        postes_calibre_1_2:  Lista/iterable con nombres de poste de calibre 1/2".
+        tipo_suelo:          String: "normal" → Suelo Normal, "flojo" → Suelo Flojo,
+                             cualquier otro valor → asume Suelo Normal.
+        tabla_ancla:         DataFrame MultiIndex con columnas (Diametro cable, Tipo de suelo).
+        col_referencia:      Columna usada para detectar postes con retenida.
+        nombre_columna:      Nombre de la columna que se añadirá a ret.
+
+    Retorna:
+        DataFrame ret con la columna de fuerza máxima del ancla añadida.
+    """
+
+    def obtener_carga(calibre):
+        try:
+            diametro = f'{calibre}"'
+            suelo_lower = str(tipo_suelo).strip().lower()
+            suelo = "Suelo Flojo" if suelo_lower == "flojo" else "Suelo Normal"
+            return tabla_ancla.loc["Carga máxima (daN)", (diametro, suelo)]
+        except Exception:
+            return np.nan
+
+    postes_con_retenida = set(
+        postes_orden.values[pd.notna(ret[col_referencia].values)]
+    )
+
+    mapa_calibre = _resolver_mapa_calibre_por_lista(
+        postes_orden=postes_orden.values,
+        postes_con_retenida=postes_con_retenida,
+        postes_calibre_1_2=postes_calibre_1_2,
+    )
+
+    ret[nombre_columna] = [
+        obtener_carga(mapa_calibre.get(p)) if pd.notna(ret[col_referencia].iloc[i]) else None
+        for i, p in enumerate(postes_orden.values)
+    ]
+
+    return ret
+
 def llenar_dimension_ancla(
     dimension_ancla,
     postes_orden,
@@ -5387,6 +5747,89 @@ def llenar_dimension_ancla(
 
     for i, poste in enumerate(postes_orden.values):
         tiene_retenida = ret is not None and pd.notna(ret[col_referencia].iloc[i])
+        if not tiene_retenida:
+            continue
+        valores = obtener_valores(mapa_calibre.get(poste))
+        for col, val in valores.items():
+            dimension_ancla.loc[i, col] = val
+
+    return dimension_ancla
+
+
+def llenar_dimension_ancla_v2(
+    dimension_ancla,
+    postes_orden,
+    postes_export,
+    postes_calibre_1_2,
+    tipo_suelo,
+    tabla_ancla,
+    col_referencia="Fuerza Residual Fres (daN)",
+    ret=None
+):
+    """
+    Versión 2 de llenar_dimension_ancla.
+
+    En vez de recibir 'calibre_retenida' (string único o pd.Series alineada
+    posicionalmente con postes_export), recibe 'postes_calibre_1_2': una
+    lista/iterable con los NOMBRES de los postes con calibre de retenida
+    1/2". Todo poste con retenida real (según col_referencia en ret) que no
+    esté en esa lista se asume de calibre 3/8". La lista puede:
+        - venir en cualquier orden,
+        - omitir postes (esos se asumen 3/8"),
+        - estar vacía o ser None (todas las retenidas existentes son 3/8").
+
+    Si algún nombre en postes_calibre_1_2 no corresponde a un poste con
+    retenida real, se lanza un ValueError indicando cuáles postes causan
+    el problema.
+
+    Parámetros:
+        dimension_ancla:     DataFrame con columnas a, b, c, Y a llenar.
+        postes_orden:        Serie con nombres de poste únicos y ordenados.
+        postes_export:       Serie con nombres de poste del archivo de entrada.
+        postes_calibre_1_2:  Lista/iterable con nombres de poste de calibre 1/2".
+        tipo_suelo:          String: "normal" → Suelo Normal, "flojo" → Suelo Flojo,
+                             cualquier otro valor → asume Suelo Normal.
+        tabla_ancla:         DataFrame MultiIndex con columnas (Diametro cable, Tipo de suelo).
+        col_referencia:      Columna de ret usada para detectar postes con retenida.
+        ret:                 DataFrame ret (necesario para detectar postes con retenida).
+
+    Retorna:
+        DataFrame dimension_ancla con las columnas a, b, c e Y llenas.
+    """
+
+    def obtener_valores(calibre):
+        try:
+            diametro = f'{calibre}"'
+            suelo_lower = str(tipo_suelo).strip().lower()
+            suelo = "Suelo Flojo" if suelo_lower == "flojo" else "Suelo Normal"
+            col = (diametro, suelo)
+            return {
+                "a (base Mayor)":  tabla_ancla.loc["a (m)",  col],
+                "b (altura)":      tabla_ancla.loc["b (m)",  col],
+                "c (Base menor)":  tabla_ancla.loc["c (m)",  col],
+                "Y (profundidad)": tabla_ancla.loc["H (m)",  col],
+            }
+        except Exception:
+            return {"a (base Mayor)": None, "b (altura)": None, "c (Base menor)": None, "Y (profundidad)": None}
+
+    if ret is None:
+        raise ValueError(
+            "llenar_dimension_ancla_v2 requiere el parámetro 'ret' para "
+            "detectar qué postes tienen retenida real."
+        )
+
+    postes_con_retenida = set(
+        postes_orden.values[pd.notna(ret[col_referencia].values)]
+    )
+
+    mapa_calibre = _resolver_mapa_calibre_por_lista(
+        postes_orden=postes_orden.values,
+        postes_con_retenida=postes_con_retenida,
+        postes_calibre_1_2=postes_calibre_1_2,
+    )
+
+    for i, poste in enumerate(postes_orden.values):
+        tiene_retenida = pd.notna(ret[col_referencia].iloc[i])
         if not tiene_retenida:
             continue
         valores = obtener_valores(mapa_calibre.get(poste))
