@@ -5659,6 +5659,93 @@ def agregar_configuracion_retenida(
     return ret
 
 
+def agregar_configuracion_retenida_v2(
+    ret,
+    postes_orden,
+    postes_export,
+    est_v_max,
+    grupo_columna="Estructura",
+    prefijo="RT0",
+    sufijo_1_2="_12",
+    col_referencia="Fuerza Residual Fres (daN)",
+    nombre_columna="CONFIGURACION DE LAS RETENIDAS"
+):
+    """
+    Versión 2 de agregar_configuracion_retenida.
+
+    En vez de recibir 6 columnas fijas (rt001..rt006), detecta
+    dinámicamente TODAS las columnas del grupo 'Estructura' (o el que se
+    indique) cuyo nombre empiece con 'prefijo' (por defecto "RT0"),
+    incluyendo variantes como "RT002_12", "RT003-RS", "RT003_X", etc.
+
+    Para cada poste, se listan TODOS los nombres de columna con valor > 0
+    (en cualquiera de sus filas en est_v_max), separados por ", ". Si el
+    nombre de la columna termina en el sufijo indicado (por defecto "_12"),
+    ese sufijo se suprime al mostrarlo (ej. "RT003_12" se muestra como
+    "RT003"). El orden mostrado es el de aparición de las columnas en
+    est_v_max.
+
+    Solo se llena para postes con retenida real (valor no nulo en
+    col_referencia). Los demás quedan vacíos, igual que en la v1.
+
+    Parámetros:
+        ret:            DataFrame de retenidas.
+        postes_orden:   Serie con nombres de poste únicos y ordenados.
+        postes_export:  Serie con nombres de poste del archivo de entrada,
+                         alineada fila a fila con est_v_max.
+        est_v_max:      DataFrame con columnas MultiIndex (nivel 0 = grupo,
+                         nivel 1 = nombre), mismo que usa
+                         sumar_columnas_retenidas / detectar_postes_calibre_1_2.
+        grupo_columna:  Nombre del grupo (nivel 0) donde buscar columnas.
+        prefijo:        Prefijo que deben tener las columnas a considerar.
+        sufijo_1_2:     Sufijo que, si está presente, se suprime del nombre
+                         mostrado (ej. "_12" en "RT002_12" → "RT002").
+        col_referencia: Columna usada para detectar postes con retenida.
+        nombre_columna: Nombre de la columna que se añadirá a ret.
+
+    Retorna:
+        DataFrame ret con la columna de configuración añadida.
+    """
+
+    cols_retenidas = [
+        col for col in est_v_max.columns
+        if col[0] == grupo_columna and str(col[1]).startswith(prefijo)
+    ]
+
+    if not cols_retenidas:
+        raise ValueError(
+            f"No se encontraron columnas en el grupo '{grupo_columna}' "
+            f"que empiecen con el prefijo '{prefijo}'."
+        )
+
+    postes_exp = postes_export.reset_index(drop=True).values
+    est_v_max_reset = est_v_max.reset_index(drop=True)
+
+    def nombre_mostrado(nombre_col):
+        if sufijo_1_2 and nombre_col.endswith(sufijo_1_2):
+            return nombre_col[: -len(sufijo_1_2)]
+        return nombre_col
+
+    # Mapa poste → lista de nombres de columnas activas (valor > 0),
+    # acumulando entre todas las filas donde aparece ese poste.
+    mapa = {}
+    for i, poste in enumerate(postes_exp):
+        activos = mapa.setdefault(poste, [])
+        for col in cols_retenidas:
+            nombre_col = str(col[1])
+            val = est_v_max_reset[col].iloc[i]
+            if pd.notna(val) and val > 0:
+                nombre_final = nombre_mostrado(nombre_col)
+                if nombre_final not in activos:
+                    activos.append(nombre_final)
+
+    ret[nombre_columna] = [
+        ", ".join(mapa.get(p, [])) if pd.notna(ret[col_referencia].iloc[i]) and mapa.get(p) else None
+        for i, p in enumerate(postes_orden.values)
+    ]
+
+    return ret
+
 
 def agregar_fuerza_maxima_ancla(
     ret,
