@@ -2270,6 +2270,59 @@ def _resolver_mapa_calibre_por_lista(
     return mapa_calibre
 
 
+def detectar_postes_calibre_1_2(
+    est_v_max,
+    postes_export,
+    grupo_columna="Estructura",
+    prefijo="RT0",
+    sufijo="_12",
+):
+    """
+    Detecta automáticamente qué postes tienen retenida de calibre 1/2" a
+    partir de est_v_max, buscando columnas del grupo indicado (por defecto
+    "Estructura") cuyo nombre empiece con 'prefijo' (por defecto "RT0") y
+    termine con 'sufijo' (por defecto "_12"), p. ej. "RT002_12".
+
+    Un poste se considera de calibre 1/2" si tiene un valor > 0 en AL MENOS
+    UNA de esas columnas, en cualquiera de sus filas en est_v_max.
+
+    Si no existe ninguna columna que cumpla el patrón (prefijo + "_12"),
+    se asume que el proyecto no tiene retenidas 1/2" y se retorna un set
+    vacío (equivalente a postes_calibre_1_2=[] / None).
+
+    Parámetros:
+        est_v_max:      DataFrame con columnas MultiIndex (nivel 0 = grupo,
+                         nivel 1 = nombre), típicamente el mismo que recibe
+                         sumar_columnas_retenidas.
+        postes_export:  Serie con nombres de poste del archivo de entrada,
+                         alineada fila a fila con est_v_max.
+        grupo_columna:  Nombre del grupo (nivel 0 del MultiIndex) donde
+                         buscar las columnas. Por defecto "Estructura".
+        prefijo:        Prefijo que deben tener las columnas. Por defecto "RT0".
+        sufijo:         Sufijo que deben tener las columnas. Por defecto "_12".
+
+    Retorna:
+        set con los nombres de los postes detectados con calibre 1/2".
+    """
+
+    cols_12 = [
+        col for col in est_v_max.columns
+        if col[0] == grupo_columna
+        and str(col[1]).startswith(prefijo)
+        and str(col[1]).endswith(sufijo)
+    ]
+
+    if not cols_12:
+        return set()
+
+    filas_con_1_2 = est_v_max[cols_12].gt(0).any(axis=1)
+
+    postes_export_reset = postes_export.reset_index(drop=True)
+    filas_con_1_2 = filas_con_1_2.reset_index(drop=True)
+
+    return set(postes_export_reset[filas_con_1_2].dropna())
+
+
 def calcular_fuerza_residual_retenidas(
     carac_postes,
     postes_orden,
@@ -2440,6 +2493,7 @@ def calcular_fuerza_residual_retenidas_v2(
     tipo_retenida,
     tipo_poste,
     tabla_cables_acero,
+    est_v_max=None,
     postes_calibre_1_2=None,
     altura_retenidas=None,
     col_fres="Fuerza Residual Fres (daN)",
@@ -2451,18 +2505,25 @@ def calcular_fuerza_residual_retenidas_v2(
     """
     Versión 2 de calcular_fuerza_residual_retenidas.
 
-    En vez de recibir 'calibre_retenida' (string único o pd.Series alineada
-    posicionalmente con postes_orden), recibe 'postes_calibre_1_2': una
-    lista/iterable con los NOMBRES de los postes que tienen calibre de
-    retenida 1/2". Todo poste con retenida real que no esté en esa lista
-    se asume de calibre 3/8". La lista puede:
-        - venir en cualquier orden,
-        - omitir postes (esos se asumen 3/8"),
-        - estar vacía o ser None (todas las retenidas existentes son 3/8").
+    El calibre de retenida (1/2" o 3/8") por poste se determina así:
+        - Si se pasa 'postes_calibre_1_2' explícitamente, tiene prioridad:
+          es una lista/iterable con los NOMBRES de los postes de calibre
+          1/2". Todo poste con retenida real que no esté en la lista se
+          asume 3/8". La lista puede venir en cualquier orden, omitir
+          postes (se asumen 3/8"), o estar vacía/None.
+        - Si 'postes_calibre_1_2' es None, se detecta automáticamente a
+          partir de 'est_v_max': se buscan columnas del grupo "Estructura"
+          que empiecen con "RT0" y terminen en "_12" (ej. "RT002_12"). Un
+          poste se considera 1/2" si tiene valor > 0 en al menos una de
+          esas columnas en cualquiera de sus filas. Si no existe ninguna
+          columna con ese patrón, se asume que no hay retenidas 1/2" (todas
+          las retenidas existentes son 3/8"). En este caso 'est_v_max' es
+          obligatorio.
 
-    Si algún nombre en postes_calibre_1_2 no corresponde a un poste con
-    retenida real detectada (valor > 0 en 'retenidas' para ese poste), se
-    lanza un ValueError indicando cuáles postes causan el problema.
+    Si algún nombre en postes_calibre_1_2 (pasado explícitamente) no
+    corresponde a un poste con retenida real detectada (valor > 0 en
+    'retenidas' para ese poste), se lanza un ValueError indicando cuáles
+    postes causan el problema.
 
     El resto del comportamiento (fórmulas, selección de tablas, etc.) es
     idéntico a calcular_fuerza_residual_retenidas.
@@ -2487,6 +2548,15 @@ def calcular_fuerza_residual_retenidas_v2(
         ret_vals = retenidas.loc[mask]
         if (ret_vals > 0).any():
             postes_con_retenida.add(poste)
+
+    if postes_calibre_1_2 is None:
+        if est_v_max is None:
+            raise ValueError(
+                "Se requiere 'est_v_max' para detectar automáticamente los "
+                "postes con calibre de retenida 1/2\" (o bien pasar "
+                "'postes_calibre_1_2' explícitamente)."
+            )
+        postes_calibre_1_2 = detectar_postes_calibre_1_2(est_v_max, postes_export)
 
     mapa_calibre = _resolver_mapa_calibre_por_lista(
         postes_orden=postes_orden,
@@ -5445,6 +5515,8 @@ def agregar_calibre_retenida(ret, calibre="3/8", col_referencia="Fuerza Residual
 
 def agregar_calibre_retenida_v2(
     ret,
+    postes_export=None,
+    est_v_max=None,
     postes_calibre_1_2=None,
     col_poste="Numero de apoyo",
     col_referencia="Fuerza Residual Fres (daN)",
@@ -5453,22 +5525,35 @@ def agregar_calibre_retenida_v2(
     """
     Versión 2 de agregar_calibre_retenida.
 
-    En vez de recibir 'calibre' (string único aplicado a todos los postes),
-    recibe 'postes_calibre_1_2': una lista/iterable con los NOMBRES de los
-    postes (según col_poste, típicamente 'Numero de apoyo') que tienen
-    calibre de retenida 1/2". Todo poste con retenida real (detectado por
-    tener valor no nulo en col_referencia) que no esté en esa lista se
-    asume de calibre 3/8". La lista puede:
-        - venir en cualquier orden,
-        - omitir postes (esos se asumen 3/8"),
-        - estar vacía o ser None (todas las retenidas existentes son 3/8").
+    El calibre de retenida (1/2" o 3/8") por poste se determina así:
+        - Si se pasa 'postes_calibre_1_2' explícitamente, tiene prioridad:
+          es una lista/iterable con los NOMBRES de los postes (según
+          col_poste) de calibre 1/2". Todo poste con retenida real
+          (detectado por tener valor no nulo en col_referencia) que no
+          esté en la lista se asume 3/8". La lista puede venir en
+          cualquier orden, omitir postes (se asumen 3/8"), o estar
+          vacía/None.
+        - Si 'postes_calibre_1_2' es None, se detecta automáticamente a
+          partir de 'est_v_max' y 'postes_export': se buscan columnas del
+          grupo "Estructura" que empiecen con "RT0" y terminen en "_12"
+          (ej. "RT002_12"). Un poste se considera 1/2" si tiene valor > 0
+          en al menos una de esas columnas en cualquiera de sus filas. Si
+          no existe ninguna columna con ese patrón, se asume que no hay
+          retenidas 1/2" (todas las retenidas existentes son 3/8"). En
+          este caso 'est_v_max' y 'postes_export' son obligatorios.
 
-    Si algún nombre en postes_calibre_1_2 no corresponde a un poste con
-    retenida real (según col_referencia), se lanza un ValueError indicando
-    cuáles postes causan el problema.
+    Si algún nombre en postes_calibre_1_2 (pasado explícitamente) no
+    corresponde a un poste con retenida real (según col_referencia), se
+    lanza un ValueError indicando cuáles postes causan el problema.
 
     Parámetros:
         ret:                DataFrame de retenidas.
+        postes_export:      Serie con nombres de poste del archivo de
+                             entrada, alineada fila a fila con est_v_max.
+                             Requerido solo para detección automática.
+        est_v_max:          DataFrame con columnas MultiIndex, usado para
+                             detección automática (ver arriba). Requerido
+                             solo para detección automática.
         postes_calibre_1_2: Lista/iterable con nombres de poste de calibre 1/2".
         col_poste:          Columna de ret con el nombre del poste.
         col_referencia:     Columna usada para detectar postes con retenida.
@@ -5478,6 +5563,15 @@ def agregar_calibre_retenida_v2(
         DataFrame ret con la columna de calibre añadida.
     """
     postes_con_retenida = set(ret.loc[ret[col_referencia].notna(), col_poste])
+
+    if postes_calibre_1_2 is None:
+        if est_v_max is None or postes_export is None:
+            raise ValueError(
+                "Se requieren 'est_v_max' y 'postes_export' para detectar "
+                "automáticamente los postes con calibre de retenida 1/2\" "
+                "(o bien pasar 'postes_calibre_1_2' explícitamente)."
+            )
+        postes_calibre_1_2 = detectar_postes_calibre_1_2(est_v_max, postes_export)
 
     mapa_calibre = _resolver_mapa_calibre_por_lista(
         postes_orden=ret[col_poste],
@@ -5627,36 +5721,47 @@ def agregar_fuerza_maxima_ancla_v2(
     ret,
     postes_orden,
     postes_export,
-    postes_calibre_1_2,
     tipo_suelo,
     tabla_ancla,
+    est_v_max=None,
+    postes_calibre_1_2=None,
     col_referencia="Fuerza Residual Fres (daN)",
     nombre_columna="Fuerza maxima del Ancla (daN)"
 ):
     """
     Versión 2 de agregar_fuerza_maxima_ancla.
 
-    En vez de recibir 'calibre_retenida' (string único o pd.Series alineada
-    posicionalmente con postes_export), recibe 'postes_calibre_1_2': una
-    lista/iterable con los NOMBRES de los postes con calibre de retenida
-    1/2". Todo poste con retenida real (según col_referencia en ret) que no
-    esté en esa lista se asume de calibre 3/8". La lista puede:
-        - venir en cualquier orden,
-        - omitir postes (esos se asumen 3/8"),
-        - estar vacía o ser None (todas las retenidas existentes son 3/8").
+    El calibre de retenida (1/2" o 3/8") por poste se determina así:
+        - Si se pasa 'postes_calibre_1_2' explícitamente, tiene prioridad:
+          es una lista/iterable con los NOMBRES de los postes con calibre
+          de retenida 1/2". Todo poste con retenida real (según
+          col_referencia en ret) que no esté en la lista se asume 3/8".
+          La lista puede venir en cualquier orden, omitir postes (se
+          asumen 3/8"), o estar vacía/None.
+        - Si 'postes_calibre_1_2' es None, se detecta automáticamente a
+          partir de 'est_v_max': se buscan columnas del grupo "Estructura"
+          que empiecen con "RT0" y terminen en "_12" (ej. "RT002_12"). Un
+          poste se considera 1/2" si tiene valor > 0 en al menos una de
+          esas columnas en cualquiera de sus filas. Si no existe ninguna
+          columna con ese patrón, se asume que no hay retenidas 1/2" (todas
+          las retenidas existentes son 3/8"). En este caso 'est_v_max' es
+          obligatorio.
 
-    Si algún nombre en postes_calibre_1_2 no corresponde a un poste con
-    retenida real, se lanza un ValueError indicando cuáles postes causan
-    el problema.
+    Si algún nombre en postes_calibre_1_2 (pasado explícitamente) no
+    corresponde a un poste con retenida real, se lanza un ValueError
+    indicando cuáles postes causan el problema.
 
     Parámetros:
         ret:                 DataFrame de retenidas.
         postes_orden:        Serie con nombres de poste únicos y ordenados.
         postes_export:       Serie con nombres de poste del archivo de entrada.
-        postes_calibre_1_2:  Lista/iterable con nombres de poste de calibre 1/2".
         tipo_suelo:          String: "normal" → Suelo Normal, "flojo" → Suelo Flojo,
                              cualquier otro valor → asume Suelo Normal.
         tabla_ancla:         DataFrame MultiIndex con columnas (Diametro cable, Tipo de suelo).
+        est_v_max:           DataFrame con columnas MultiIndex, usado para
+                             detección automática (ver arriba). Requerido
+                             solo para detección automática.
+        postes_calibre_1_2:  Lista/iterable con nombres de poste de calibre 1/2".
         col_referencia:      Columna usada para detectar postes con retenida.
         nombre_columna:      Nombre de la columna que se añadirá a ret.
 
@@ -5676,6 +5781,15 @@ def agregar_fuerza_maxima_ancla_v2(
     postes_con_retenida = set(
         postes_orden.values[pd.notna(ret[col_referencia].values)]
     )
+
+    if postes_calibre_1_2 is None:
+        if est_v_max is None:
+            raise ValueError(
+                "Se requiere 'est_v_max' para detectar automáticamente los "
+                "postes con calibre de retenida 1/2\" (o bien pasar "
+                "'postes_calibre_1_2' explícitamente)."
+            )
+        postes_calibre_1_2 = detectar_postes_calibre_1_2(est_v_max, postes_export)
 
     mapa_calibre = _resolver_mapa_calibre_por_lista(
         postes_orden=postes_orden.values,
@@ -5760,36 +5874,47 @@ def llenar_dimension_ancla_v2(
     dimension_ancla,
     postes_orden,
     postes_export,
-    postes_calibre_1_2,
     tipo_suelo,
     tabla_ancla,
+    est_v_max=None,
+    postes_calibre_1_2=None,
     col_referencia="Fuerza Residual Fres (daN)",
     ret=None
 ):
     """
     Versión 2 de llenar_dimension_ancla.
 
-    En vez de recibir 'calibre_retenida' (string único o pd.Series alineada
-    posicionalmente con postes_export), recibe 'postes_calibre_1_2': una
-    lista/iterable con los NOMBRES de los postes con calibre de retenida
-    1/2". Todo poste con retenida real (según col_referencia en ret) que no
-    esté en esa lista se asume de calibre 3/8". La lista puede:
-        - venir en cualquier orden,
-        - omitir postes (esos se asumen 3/8"),
-        - estar vacía o ser None (todas las retenidas existentes son 3/8").
+    El calibre de retenida (1/2" o 3/8") por poste se determina así:
+        - Si se pasa 'postes_calibre_1_2' explícitamente, tiene prioridad:
+          es una lista/iterable con los NOMBRES de los postes con calibre
+          de retenida 1/2". Todo poste con retenida real (según
+          col_referencia en ret) que no esté en la lista se asume 3/8".
+          La lista puede venir en cualquier orden, omitir postes (se
+          asumen 3/8"), o estar vacía/None.
+        - Si 'postes_calibre_1_2' es None, se detecta automáticamente a
+          partir de 'est_v_max': se buscan columnas del grupo "Estructura"
+          que empiecen con "RT0" y terminen en "_12" (ej. "RT002_12"). Un
+          poste se considera 1/2" si tiene valor > 0 en al menos una de
+          esas columnas en cualquiera de sus filas. Si no existe ninguna
+          columna con ese patrón, se asume que no hay retenidas 1/2" (todas
+          las retenidas existentes son 3/8"). En este caso 'est_v_max' es
+          obligatorio.
 
-    Si algún nombre en postes_calibre_1_2 no corresponde a un poste con
-    retenida real, se lanza un ValueError indicando cuáles postes causan
-    el problema.
+    Si algún nombre en postes_calibre_1_2 (pasado explícitamente) no
+    corresponde a un poste con retenida real, se lanza un ValueError
+    indicando cuáles postes causan el problema.
 
     Parámetros:
         dimension_ancla:     DataFrame con columnas a, b, c, Y a llenar.
         postes_orden:        Serie con nombres de poste únicos y ordenados.
         postes_export:       Serie con nombres de poste del archivo de entrada.
-        postes_calibre_1_2:  Lista/iterable con nombres de poste de calibre 1/2".
         tipo_suelo:          String: "normal" → Suelo Normal, "flojo" → Suelo Flojo,
                              cualquier otro valor → asume Suelo Normal.
         tabla_ancla:         DataFrame MultiIndex con columnas (Diametro cable, Tipo de suelo).
+        est_v_max:           DataFrame con columnas MultiIndex, usado para
+                             detección automática (ver arriba). Requerido
+                             solo para detección automática.
+        postes_calibre_1_2:  Lista/iterable con nombres de poste de calibre 1/2".
         col_referencia:      Columna de ret usada para detectar postes con retenida.
         ret:                 DataFrame ret (necesario para detectar postes con retenida).
 
@@ -5821,6 +5946,15 @@ def llenar_dimension_ancla_v2(
     postes_con_retenida = set(
         postes_orden.values[pd.notna(ret[col_referencia].values)]
     )
+
+    if postes_calibre_1_2 is None:
+        if est_v_max is None:
+            raise ValueError(
+                "Se requiere 'est_v_max' para detectar automáticamente los "
+                "postes con calibre de retenida 1/2\" (o bien pasar "
+                "'postes_calibre_1_2' explícitamente)."
+            )
+        postes_calibre_1_2 = detectar_postes_calibre_1_2(est_v_max, postes_export)
 
     mapa_calibre = _resolver_mapa_calibre_por_lista(
         postes_orden=postes_orden.values,
