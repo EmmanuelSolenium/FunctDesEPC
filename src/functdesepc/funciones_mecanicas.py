@@ -6945,3 +6945,132 @@ def sumar_columnas_retenidas(
         )
 
     return est_v_max[cols_retenidas].sum(axis=1, skipna=True)
+
+def construir_tipo_armado_unico(
+    carac_postes: pd.DataFrame,
+    postes_orden: pd.Series,
+    postes_export: pd.Series,
+    prim1: pd.Series,
+    prim2: pd.Series,
+    sec1: pd.Series,
+    sec2: pd.Series,
+) -> pd.DataFrame:
+    """
+    Reemplaza las columnas 'Tipo de Armado Primario' y 'Tipo de Armado Secundario'
+    por una única columna 'Tipo de Armado', expandiendo el DataFrame cuando un
+    poste tiene más de un armado válido.
+
+    Lógica
+    ------
+    Para cada poste se recorren los armados en orden de prioridad:
+        prim1 → prim2 → sec1 → sec2
+    Un valor es válido si no es NaN, None, 0, "-" ni cadena vacía.
+
+    - 1 valor válido  -> una sola fila, nombre del poste sin sufijo.
+    - n > 1 valores   -> n filas, sufijos alfabéticos: EPP01a, EPP01b, ...
+      El resto de columnas se duplica en todas las filas.
+
+    Las columnas antiguas 'Tipo de Armado Primario' y 'Tipo de Armado Secundario'
+    se eliminan y 'Tipo de Armado' queda en su posición original.
+
+    Parámetros
+    ----------
+    carac_postes  : DataFrame de características, una fila por poste
+                    (debe incluir 'Tipo de Armado Primario' y
+                    'Tipo de Armado Secundario' si se quiere que se eliminen
+                    de la posición correcta, y 'No. Apoyo' con el nombre
+                    del poste).
+    postes_orden  : Serie con nombres de poste únicos y ordenados,
+                    alineada con carac_postes (mismo índice posicional).
+    postes_export : Serie con nombres de poste en orden de exportación
+                    (puede tener repeticiones), alineada con prim1...sec2.
+    prim1, prim2, sec1, sec2 : Series de armados alineadas con postes_export.
+
+    Retorna
+    -------
+    DataFrame con la misma estructura que carac_postes pero:
+        - Sin 'Tipo de Armado Primario' ni 'Tipo de Armado Secundario'.
+        - Con 'Tipo de Armado' en su lugar.
+        - Con posibles filas extra para postes con múltiples armados.
+    """
+
+    import string
+    from collections import defaultdict
+
+    INVALIDOS = {0, "-", ""}
+
+    def es_valido(v):
+        if v is None:
+            return False
+        try:
+            if pd.isna(v):
+                return False
+        except (TypeError, ValueError):
+            pass
+        return str(v).strip() not in INVALIDOS
+
+    # Alinear todas las series por posición (reset_index)
+    postes_exp = postes_export.reset_index(drop=True)
+    s_prim1    = prim1.reset_index(drop=True)
+    s_prim2    = prim2.reset_index(drop=True)
+    s_sec1     = sec1.reset_index(drop=True)
+    s_sec2     = sec2.reset_index(drop=True)
+
+    # Para cada poste, recolectar los valores válidos en orden de prioridad
+    # usando TODAS las ocurrencias del poste en postes_export
+    candidatos = defaultdict(list)   # poste -> [(prioridad, valor), ...]
+
+    for i, poste in enumerate(postes_exp):
+        for prioridad, serie in enumerate([s_prim1, s_prim2, s_sec1, s_sec2]):
+            v = serie.iloc[i]
+            if es_valido(v):
+                candidatos[poste].append((prioridad, str(v).strip()))
+
+    # Colapsar: por cada poste, un valor por slot de prioridad
+    # (prim1, prim2, sec1, sec2), manteniendo ese orden.
+    armados_por_poste = {}
+    for poste, pares in candidatos.items():
+        vistos = {}
+        for prio, val in sorted(pares, key=lambda x: x[0]):
+            if prio not in vistos:
+                vistos[prio] = val
+        armados_por_poste[poste] = list(vistos.values())
+
+    # Determinar la posición de inserción de 'Tipo de Armado'
+    cols_a_quitar = {"Tipo de Armado Primario", "Tipo de Armado Secundario"}
+    columnas_orig = list(carac_postes.columns)
+    insert_pos = next(
+        (i for i, c in enumerate(columnas_orig) if c in cols_a_quitar),
+        len(columnas_orig)
+    )
+
+    cols_resto = [c for c in columnas_orig if c not in cols_a_quitar]
+    cols_antes_insert = [c for c in columnas_orig[:insert_pos] if c not in cols_a_quitar]
+    pos_nueva = len(cols_antes_insert)
+
+    cols_resultado = cols_resto[:pos_nueva] + ["Tipo de Armado"] + cols_resto[pos_nueva:]
+
+    letras = list(string.ascii_lowercase)  # a, b, c, ...
+
+    filas = []
+    for idx in carac_postes.index:
+        poste = postes_orden.loc[idx]
+        armados = armados_por_poste.get(poste, [])
+
+        base = {c: carac_postes.at[idx, c] for c in cols_resto}
+
+        if len(armados) <= 1:
+            fila = dict(base)
+            fila["Tipo de Armado"] = armados[0] if armados else None
+            filas.append(fila)
+        else:
+            nombre_base = base.get("No. Apoyo", poste)
+            for k, armado in enumerate(armados):
+                fila = dict(base)
+                sufijo = letras[k] if k < len(letras) else str(k)
+                fila["No. Apoyo"] = f"{nombre_base}{sufijo}"
+                fila["Tipo de Armado"] = armado
+                filas.append(fila)
+
+    resultado = pd.DataFrame(filas, columns=cols_resultado).reset_index(drop=True)
+    return resultado
