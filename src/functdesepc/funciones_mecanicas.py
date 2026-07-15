@@ -2867,6 +2867,88 @@ def calcular_cs(
     return Ret
 
 
+def calcular_cs_V2(
+    Ret: pd.DataFrame,
+    Mec: pd.DataFrame,
+    o_postes,
+    l_postes,
+    angulo_b,
+    f_viento_at,
+    f_viento_ad,
+    tiro_at,
+    tiro_ad,
+    col_salida: str = 'Fuerza Total Horiz. Resultante (daN)'
+):
+    """
+    Versión 2 de calcular_cs.
+
+    Diferencias respecto a calcular_cs:
+    - Se recalcula FTVC/FLMC (llamando a calcular_ftvc_flmc) asumiendo
+      todos los tiros iguales a 0. Los resultados de esa recomputación
+      se renombran como FTVCv (proveniente de la columna FTVC) y FTVCl
+      (proveniente de la columna FLMC).
+    - Se elimina el condicional que comparaba FLMC vs FTVC: ahora se
+      usa siempre la misma expresión fija, sin distinguir casos.
+
+    Los parámetros o_postes, l_postes, angulo_b, f_viento_at, f_viento_ad,
+    tiro_at y tiro_ad son los mismos que recibe calcular_ftvc_flmc; los
+    tiros que se pasen aquí se ignoran y se fuerzan a 0 internamente,
+    ya que la recomputación de FTVC/FLMC debe hacerse sin tiros.
+    """
+
+    # ------------------------------------------------------------
+    # Recalcular FTVC/FLMC asumiendo todos los tiros iguales a 0
+    # ------------------------------------------------------------
+    tiro_at_cero = [
+        pd.Series(0, index=serie.index) for serie in tiro_at
+    ]
+    tiro_ad_cero = [
+        pd.Series(0, index=serie.index) for serie in tiro_ad
+    ]
+
+    Mec_aux = Mec.copy()
+    Mec_aux = calcular_ftvc_flmc(
+        Mec_aux,
+        o_postes,
+        l_postes,
+        angulo_b,
+        f_viento_at,
+        f_viento_ad,
+        tiro_at_cero,
+        tiro_ad_cero,
+        col_ftvc="FTVC",
+        col_flmc="FLMC"
+    )
+
+    FTVCv = Mec_aux["FTVC"]
+    FTVCl = Mec_aux["FLMC"]
+
+    # ------------------------------------------------------------
+    # Inicializar columna con valor por defecto
+    # ------------------------------------------------------------
+    Ret[col_salida] = np.nan
+
+    # ------------------------------------------------------------
+    # Expresión fija (ya no depende del máximo entre FLMC y FTVC)
+    # ------------------------------------------------------------
+    Ret[col_salida] = np.sqrt(
+        (
+            FTVCv
+            + Mec["FTVP"]
+            + Mec["FTVE"]
+            + Mec["FTEC"]
+        ) ** 2
+        +
+        (
+            Mec["FLEE"]
+            + FTVCl
+            + Ret["Fuerza Residual Fres (daN)"]
+        ) ** 2
+    )
+
+    return Ret
+
+
 
 def clasificar_cantones(
     postes_exportacion,     # Series con identificador del poste (solo referencia)
