@@ -4083,15 +4083,20 @@ def clasificar_cantones_secundarios_v2(tipo_postes: pd.Series,
     clasificacion = _canton_clasificar_postes_secundarios(tipo_postes, numero_en_ruta)
 
     # --- Avisar (sin interrumpir) los postes ahogados en secundario ---
+    ROJO = "\033[91m"
+    NEGRITA = "\033[1m"
+    RESET = "\033[0m"
     for idx in range(n):
         if clasificacion[idx] == 'ahogado':
             print(
-                f"[AVISO] Posible armado secundario faltante: el poste en la "
-                f"posición {idx} (numero_en_ruta={numero_en_ruta.iloc[idx]}, tipo "
-                f"secundario '{tipo_postes.iloc[idx]}') está aislado dentro de su "
-                f"ruta (sin poste vecino con armado secundario válido antes ni "
+                f"{ROJO}{NEGRITA}[AVISO]{RESET}{ROJO} Posible armado secundario "
+                f"faltante: el poste en la posición {idx} "
+                f"(numero_en_ruta={numero_en_ruta.iloc[idx]}, tipo secundario "
+                f"'{tipo_postes.iloc[idx]}') está aislado dentro de su ruta "
+                f"(sin poste vecino con armado secundario válido antes ni "
                 f"después). No se le asignó cantón secundario. Revisar si falta "
-                f"un armado secundario en los postes adyacentes de esta ruta."
+                f"un armado secundario en los postes adyacentes de esta "
+                f"ruta.{RESET}"
             )
 
     # --- Construir el series de cantones, con el sufijo "S" ---
