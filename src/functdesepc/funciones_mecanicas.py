@@ -4049,65 +4049,82 @@ def clasificar_cantones_secundarios(tipo_postes: pd.Series) -> pd.Series:
 
 def clasificar_cantones_secundarios_v2(tipo_postes: pd.Series,
                                        numero_en_ruta: pd.Series) -> pd.Series:
-    salida = [np.nan] * len(tipo_postes)
-    canton = 1
-    canton_abierto = False   # <-- NUEVO
+    """
+    Clasifica cada poste en su(s) cantón(es) secundario(s) según reglas
+    definidas, usando EXCLUSIVAMENTE el tipo de armado secundario (nunca
+    el primario, ni siquiera como respaldo).
 
-    def es_1a(v):
-        return isinstance(v, str) and ("ANC" in v or "FL" in v)
-    def es_1b(v):
-        return isinstance(v, str) and not es_1a(v)
-    def es_1c(v):
-        return not isinstance(v, str)
+    Comparte el mismo árbol de decisión que la clasificación de cantones
+    primarios (vía _canton_clasificar_postes_simple), lo que incluye:
+      - "0 virtual" / "-1 virtual": si el borde de una ruta no tiene
+        armado secundario, el primer/último poste con armado secundario
+        válido tras esos NaN se marca automáticamente inicial/final.
+      - Islas: un bloque de postes sin armado secundario en medio de una
+        ruta, rodeado de postes con armado secundario válido por ambos
+        lados, cierra el cantón antes de la isla y abre uno nuevo después.
+      - Postes "ahogados" (con armado secundario válido pero SIN ningún
+        vecino con armado secundario válido en su ruta, incluyendo
+        inicio/fin de línea): no pueden formar cantón porque un cantón
+        requiere mínimo 2 postes distintos. Se excluyen (quedan como NaN,
+        igual que un poste sin armado) sin interrumpir la ejecución, y se
+        emite un aviso por consola para que el ingeniero revise
+        manualmente si falta un armado secundario en la ruta.
 
+    Retorna:
+        pd.Series con:
+        - np.nan          → poste sin cantón secundario
+        - str "nS"        → pertenece a un solo cantón secundario
+        - list["nS","mS"] → es fin de un cantón secundario e inicio de otro
+    """
     tipo_postes = tipo_postes.reset_index(drop=True)
     numero_en_ruta = numero_en_ruta.reset_index(drop=True)
-    rutas = _canton_get_rutas(numero_en_ruta)
+    n = len(tipo_postes)
 
-    for ruta_inicio, ruta_fin in rutas:
+    clasificacion = _canton_clasificar_postes_secundarios(tipo_postes, numero_en_ruta)
 
-        # Un cambio de ruta/derivación siempre cierra el cantón que haya
-        # quedado abierto, sin importar el tipo de poste con el que
-        # terminó la ruta anterior.
-        if canton_abierto:
-            canton += 1
-            canton_abierto = False
+    # --- Avisar (sin interrumpir) los postes ahogados en secundario ---
+    for idx in range(n):
+        if clasificacion[idx] == 'ahogado':
+            print(
+                f"[AVISO] Posible armado secundario faltante: el poste en la "
+                f"posición {idx} (numero_en_ruta={numero_en_ruta.iloc[idx]}, tipo "
+                f"secundario '{tipo_postes.iloc[idx]}') está aislado dentro de su "
+                f"ruta (sin poste vecino con armado secundario válido antes ni "
+                f"después). No se le asignó cantón secundario. Revisar si falta "
+                f"un armado secundario en los postes adyacentes de esta ruta."
+            )
 
-        idx_primer_valido = next(
-            (i for i in range(ruta_inicio, ruta_fin + 1) if not es_1c(tipo_postes[i])),
-            None
-        )
+    # --- Construir el series de cantones, con el sufijo "S" ---
+    salida = [np.nan] * n
+    canton_actual = 0
+    dentro_de_canton = False
 
-        for i in range(ruta_inicio, ruta_fin + 1):
-            v = tipo_postes[i]
-            if es_1c(v):
-                salida[i] = np.nan
-                continue
+    for idx in range(n):
+        cls = clasificacion[idx]
 
-            prev_v = tipo_postes[i - 1] if i > ruta_inicio else None
-            next_v = tipo_postes[i + 1] if i < ruta_fin else None
-            prev_es_1c = (i == ruta_inicio) or es_1c(prev_v)
-            next_es_1c = (i == ruta_fin) or es_1c(next_v)
+        if cls in ('none_nan', 'ahogado'):
+            salida[idx] = np.nan
+            continue
 
-            if es_1a(v):
-                if not prev_es_1c and not next_es_1c:
-                    salida[i] = [f"{canton}S", f"{canton + 1}S"]
-                    canton += 1
-                    canton_abierto = True     # <-- el nuevo cantón queda abierto
-                    continue
-                if i == idx_primer_valido or prev_es_1c:
-                    salida[i] = f"{canton}S"
-                    canton_abierto = True     # <-- NUEVO
-                    continue
-                salida[i] = f"{canton}S"
-                canton += 1
-                canton_abierto = False        # <-- se cerró correctamente
-                continue
+        if cls == 'inicial':
+            canton_actual += 1
+            salida[idx] = f"{canton_actual}S"
+            dentro_de_canton = True
 
-            if es_1b(v):
-                salida[i] = f"{canton}S"
-                canton_abierto = True         # <-- NUEVO
-                continue
+        elif cls == 'final':
+            if dentro_de_canton:
+                salida[idx] = f"{canton_actual}S"
+            dentro_de_canton = False
+
+        elif cls == 'fin_ini':
+            canton_siguiente = canton_actual + 1
+            salida[idx] = [f"{canton_actual}S", f"{canton_siguiente}S"]
+            canton_actual = canton_siguiente
+            dentro_de_canton = True
+
+        elif cls == 'intermedio':
+            if dentro_de_canton:
+                salida[idx] = f"{canton_actual}S"
 
     return pd.Series(salida, index=tipo_postes.index)
 
@@ -6751,6 +6768,298 @@ def _canton_clasificar_postes(tipo: pd.Series, numero_en_ruta: pd.Series,
     return clasificacion
  
  
+def _canton_clasificar_postes_simple(tipo: pd.Series, numero_en_ruta: pd.Series):
+    """
+    Versión de _canton_clasificar_postes que NO usa ningún tipo de armado
+    de respaldo (ni primario ni secundario): solo trabaja con la serie
+    `tipo` recibida. Un poste "ahogado" (sin vecino válido ni antes ni
+    después dentro de su ruta, incluyendo inicio/fin de línea) queda
+    clasificado como 'ahogado' y no se resuelve de ninguna otra forma —
+    quien llame a esta función decide qué hacer con esos casos (excluir
+    del cantón + avisar, por ejemplo).
+
+    Comparte exactamente la misma lógica de:
+      - "0 virtual" / "-1 virtual": si el borde de la ruta es NaN, el
+        primer/último poste válido tras esos NaN se marca inicial/final.
+      - Detección de "islas" de postes inválidos (NaN o ahogados) en medio
+        de una ruta, rodeadas de postes válidos por ambos lados: cierran
+        el cantón antes de la isla y abren uno nuevo después.
+      - Reglas de tipo de poste (FL/ANC → fin_ini; ANG/AL → intermedio;
+        fallback por posición dentro de la ruta).
+
+    Para cada índice retorna una clasificación:
+      'none_nan'   -> tipo no es str (nan)
+      'ahogado'    -> poste str ahogado (sin vecino válido en su ruta)
+      'inicial'    -> poste str inicio de cantón
+      'final'      -> poste str fin de cantón
+      'intermedio' -> poste str intermedio
+      'fin_ini'    -> poste str que es fin e inicio simultáneo
+    """
+    n = len(tipo)
+    rutas = _canton_get_rutas(numero_en_ruta)
+    clasificacion = [None] * n
+
+    for ruta_inicio, ruta_fin in rutas:
+        # --- 1. Marcar nan y ahogados primero ---
+        for idx in range(ruta_inicio, ruta_fin + 1):
+            if not _canton_es_str(tipo.iloc[idx]):
+                clasificacion[idx] = 'none_nan'
+            elif _canton_es_ahogado(idx, ruta_inicio, ruta_fin, tipo, n):
+                clasificacion[idx] = 'ahogado'
+
+        # --- 2. Encontrar postes str válidos (no nan, no ahogado) ---
+        validos = [idx for idx in range(ruta_inicio, ruta_fin + 1)
+                   if clasificacion[idx] is None]
+
+        if not validos:
+            continue
+
+        # --- 3. Determinar 0 virtual y -1 virtual ---
+        primer_valido = validos[0]
+        inicio_es_nan = not _canton_es_str(tipo.iloc[ruta_inicio])
+
+        ultimo_valido = validos[-1]
+        fin_es_nan = not _canton_es_str(tipo.iloc[ruta_fin])
+
+        # --- 4. Detectar islas de none/ahogado ---
+        islas = []
+        i = ruta_inicio
+        while i <= ruta_fin:
+            if clasificacion[i] in ('none_nan', 'ahogado'):
+                hay_str_antes = any(
+                    clasificacion[j] is None
+                    for j in range(ruta_inicio, i)
+                )
+                j = i
+                while j <= ruta_fin and clasificacion[j] in ('none_nan', 'ahogado'):
+                    j += 1
+                hay_str_despues = any(
+                    clasificacion[k] is None
+                    for k in range(j, ruta_fin + 1)
+                )
+                if hay_str_antes and hay_str_despues:
+                    islas.append((i, j - 1))
+                i = j
+            else:
+                i += 1
+
+        # --- 5. Construir sets de iniciales y finales ---
+        set_inicial = set()
+        set_final = set()
+
+        if clasificacion[ruta_inicio] is None:
+            set_inicial.add(ruta_inicio)
+        elif inicio_es_nan and primer_valido <= ruta_fin:
+            set_inicial.add(primer_valido)
+
+        if clasificacion[ruta_fin] is None:
+            set_final.add(ruta_fin)
+        elif fin_es_nan and ultimo_valido >= ruta_inicio:
+            set_final.add(ultimo_valido)
+
+        for isla_ini, isla_fin in islas:
+            p_idx = isla_ini
+            m_idx = isla_fin
+
+            final_idx = p_idx - 1
+            inicial_idx = m_idx + 1
+
+            if ruta_inicio <= final_idx <= ruta_fin and clasificacion[final_idx] is None:
+                set_final.add(final_idx)
+            if ruta_inicio <= inicial_idx <= ruta_fin and clasificacion[inicial_idx] is None:
+                set_inicial.add(inicial_idx)
+
+        # --- 6. Clasificar cada poste válido ---
+        for idx in validos:
+            t = tipo.iloc[idx]
+            izq_idx = idx - 1
+            der_idx = idx + 1
+            vecino_izq_str = (
+                izq_idx >= ruta_inicio and
+                _canton_es_str(tipo.iloc[izq_idx]) and
+                clasificacion[izq_idx] != 'ahogado'
+            )
+            vecino_der_str = (
+                der_idx <= ruta_fin and
+                _canton_es_str(tipo.iloc[der_idx]) and
+                clasificacion[der_idx] != 'ahogado'
+            )
+            es_fl_anc = t in ('FL', 'ANC')
+            es_ang_al = t in ('ANG', 'AL')
+
+            es_ini = idx in set_inicial
+            es_fin = idx in set_final
+
+            if es_fl_anc and vecino_izq_str and vecino_der_str:
+                clasificacion[idx] = 'fin_ini'
+            elif es_ang_al and vecino_izq_str and vecino_der_str:
+                clasificacion[idx] = 'intermedio'
+            elif es_ini and es_fin:
+                clasificacion[idx] = 'fin_ini'
+            elif es_fin:
+                clasificacion[idx] = 'final'
+            elif es_ini:
+                clasificacion[idx] = 'inicial'
+            else:
+                if idx == ruta_inicio:
+                    clasificacion[idx] = 'inicial'
+                elif idx == ruta_fin:
+                    clasificacion[idx] = 'final'
+                else:
+                    clasificacion[idx] = 'intermedio'
+
+    return clasificacion
+
+
+def _canton_clasificar_postes_secundarios(tipo: pd.Series, numero_en_ruta: pd.Series):
+    """
+    Variante de _canton_clasificar_postes_simple usada EXCLUSIVAMENTE por
+    clasificar_cantones_secundarios_v2. No se comparte con la lógica de
+    primarios para no alterar su comportamiento histórico.
+
+    Corrige un caso que en _canton_clasificar_postes_simple (y en su
+    antecesor _canton_clasificar_postes, heredado de calcular_cantones_v2)
+    queda sin resolver: el "0 virtual" / "-1 virtual" solo se activa si el
+    borde de la ruta es NaN puro, pero NO si el borde es un poste ahogado
+    (string válido pero sin ningún vecino válido). En primarios ese hueco
+    quedaba oculto porque _canton_validar_errores detenía la ejecución con
+    un ValueError antes de que se notara. En secundarios no se lanza
+    excepción (los ahogados solo generan un aviso y se excluyen), así que
+    el hueco queda expuesto: un poste válido justo después de un poste
+    ahogado en el borde de la ruta debe heredar el rol de inicio/fin de
+    cantón que el ahogado no pudo cumplir.
+
+    Para cada índice retorna una clasificación:
+      'none_nan'   -> tipo no es str (nan)
+      'ahogado'    -> poste str ahogado (sin vecino válido en su ruta)
+      'inicial'    -> poste str inicio de cantón
+      'final'      -> poste str fin de cantón
+      'intermedio' -> poste str intermedio
+      'fin_ini'    -> poste str que es fin e inicio simultáneo
+    """
+    n = len(tipo)
+    rutas = _canton_get_rutas(numero_en_ruta)
+    clasificacion = [None] * n
+
+    for ruta_inicio, ruta_fin in rutas:
+        # --- 1. Marcar nan y ahogados primero ---
+        for idx in range(ruta_inicio, ruta_fin + 1):
+            if not _canton_es_str(tipo.iloc[idx]):
+                clasificacion[idx] = 'none_nan'
+            elif _canton_es_ahogado(idx, ruta_inicio, ruta_fin, tipo, n):
+                clasificacion[idx] = 'ahogado'
+
+        # --- 2. Encontrar postes str válidos (no nan, no ahogado) ---
+        validos = [idx for idx in range(ruta_inicio, ruta_fin + 1)
+                   if clasificacion[idx] is None]
+
+        if not validos:
+            continue
+
+        # --- 3. Determinar 0 virtual y -1 virtual ---
+        # A diferencia de la versión genérica, aquí el borde de ruta
+        # cuenta como "no resuelto" (activa el virtual) tanto si es NaN
+        # puro como si quedó marcado 'ahogado'.
+        primer_valido = validos[0]
+        inicio_no_resuelto = clasificacion[ruta_inicio] in ('none_nan', 'ahogado')
+
+        ultimo_valido = validos[-1]
+        fin_no_resuelto = clasificacion[ruta_fin] in ('none_nan', 'ahogado')
+
+        # --- 4. Detectar islas de none/ahogado ---
+        islas = []
+        i = ruta_inicio
+        while i <= ruta_fin:
+            if clasificacion[i] in ('none_nan', 'ahogado'):
+                hay_str_antes = any(
+                    clasificacion[j] is None
+                    for j in range(ruta_inicio, i)
+                )
+                j = i
+                while j <= ruta_fin and clasificacion[j] in ('none_nan', 'ahogado'):
+                    j += 1
+                hay_str_despues = any(
+                    clasificacion[k] is None
+                    for k in range(j, ruta_fin + 1)
+                )
+                if hay_str_antes and hay_str_despues:
+                    islas.append((i, j - 1))
+                i = j
+            else:
+                i += 1
+
+        # --- 5. Construir sets de iniciales y finales ---
+        set_inicial = set()
+        set_final = set()
+
+        if clasificacion[ruta_inicio] is None:
+            set_inicial.add(ruta_inicio)
+        elif inicio_no_resuelto and primer_valido <= ruta_fin:
+            # 0 virtual: el primer str válido tras un borde no resuelto
+            # (NaN o ahogado) hereda el rol de inicio de cantón.
+            set_inicial.add(primer_valido)
+
+        if clasificacion[ruta_fin] is None:
+            set_final.add(ruta_fin)
+        elif fin_no_resuelto and ultimo_valido >= ruta_inicio:
+            # -1 virtual: el último str válido antes de un borde no
+            # resuelto (NaN o ahogado) hereda el rol de fin de cantón.
+            set_final.add(ultimo_valido)
+
+        for isla_ini, isla_fin in islas:
+            p_idx = isla_ini
+            m_idx = isla_fin
+
+            final_idx = p_idx - 1
+            inicial_idx = m_idx + 1
+
+            if ruta_inicio <= final_idx <= ruta_fin and clasificacion[final_idx] is None:
+                set_final.add(final_idx)
+            if ruta_inicio <= inicial_idx <= ruta_fin and clasificacion[inicial_idx] is None:
+                set_inicial.add(inicial_idx)
+
+        # --- 6. Clasificar cada poste válido ---
+        for idx in validos:
+            t = tipo.iloc[idx]
+            izq_idx = idx - 1
+            der_idx = idx + 1
+            vecino_izq_str = (
+                izq_idx >= ruta_inicio and
+                _canton_es_str(tipo.iloc[izq_idx]) and
+                clasificacion[izq_idx] != 'ahogado'
+            )
+            vecino_der_str = (
+                der_idx <= ruta_fin and
+                _canton_es_str(tipo.iloc[der_idx]) and
+                clasificacion[der_idx] != 'ahogado'
+            )
+            es_fl_anc = t in ('FL', 'ANC')
+            es_ang_al = t in ('ANG', 'AL')
+
+            es_ini = idx in set_inicial
+            es_fin = idx in set_final
+
+            if es_fl_anc and vecino_izq_str and vecino_der_str:
+                clasificacion[idx] = 'fin_ini'
+            elif es_ang_al and vecino_izq_str and vecino_der_str:
+                clasificacion[idx] = 'intermedio'
+            elif es_ini and es_fin:
+                clasificacion[idx] = 'fin_ini'
+            elif es_fin:
+                clasificacion[idx] = 'final'
+            elif es_ini:
+                clasificacion[idx] = 'inicial'
+            else:
+                if idx == ruta_inicio:
+                    clasificacion[idx] = 'inicial'
+                elif idx == ruta_fin:
+                    clasificacion[idx] = 'final'
+                else:
+                    clasificacion[idx] = 'intermedio'
+
+    return clasificacion
+
+
 def _canton_validar_errores(clasificacion: list, tipo_secundario: pd.Series,
                     numero_en_ruta: pd.Series, tipo: pd.Series):
     """
