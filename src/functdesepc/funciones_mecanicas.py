@@ -7471,24 +7471,128 @@ def construir_tipo_armado_unico(
     resultado = pd.DataFrame(filas, columns=cols_resultado).reset_index(drop=True)
     return resultado
 
+
+def calcular_ftvc_flmc_individual(
+    o_postes_rep,      # Serie CON repetición (post_exp): un identificador por cada aparición/derivación
+    angulo_b,          # ángulo de DEFLEXIÓN δ (grados), indexado igual que o_postes_rep
+    f_viento_at,
+    f_viento_ad,
+    tiro_at,
+    tiro_ad,
+):
+    """
+    Calcula FTVC y FLMC de forma INDIVIDUAL para cada aparición de poste en
+    `o_postes_rep` (es decir, para cada derivación por separado), en lugar de
+    combinar vectorialmente todas las derivaciones de un mismo poste en un
+    único resultado (que es lo que hace `calcular_ftvc_flmc`).
+
+    Motivo: FTVC y FLMC solo tienen una fórmula "cerrada" cuando el poste NO
+    tiene derivaciones (el "Caso 1" de `calcular_ftvc_flmc`, basado en la
+    bisectriz del ángulo de deflexión). Cuando hay derivaciones, el cálculo
+    conjunto (Caso 2) proyecta y combina todas las ramas en un solo vector
+    resultante — no existe un "FTVC/FLMC de la rama X" dentro de ese cálculo
+    conjunto.
+
+    Para obtener un valor por derivación que sea físicamente interpretable,
+    esta función trata cada aparición en `o_postes_rep` como si fuera un
+    poste SIN derivación (aplicando siempre la fórmula del Caso 1), usando
+    únicamente los datos de viento/tensión de esa fila. Esto es lo que se
+    necesita para presentar los esfuerzos de cada poste repetido de forma
+    individual (ver `expandir_mec_postes_repetidos`).
+
+    Parámetros
+    ----------
+    o_postes_rep : pd.Series
+        Serie CON repetición (normalmente `post_exp`). Solo se usa para
+        conservar el índice/alineación; el valor en sí no se usa para
+        agrupar (a diferencia de `calcular_ftvc_flmc`), ya que aquí cada
+        fila se trata de forma independiente.
+    angulo_b : pd.Series
+        Ángulo de deflexión δ (grados) de cada fila, alineado con
+        `o_postes_rep` (normalmente `am_postes`).
+    f_viento_at, f_viento_ad : list[pd.Series]
+        Listas de series con la fuerza de viento sobre conductores, atrás y
+        adelante, alineadas con `o_postes_rep` (mismas que recibe
+        `calcular_ftvc_flmc`).
+    tiro_at, tiro_ad : list[pd.Series]
+        Listas de series con el tiro de tensión, atrás y adelante, alineadas
+        con `o_postes_rep` (mismas que recibe `calcular_ftvc_flmc`).
+
+    Retorna
+    -------
+    (pd.Series, pd.Series)
+        FTVC individual y FLMC individual, indexadas igual que
+        `o_postes_rep` (mismo índice que `angulo_b`, `f_viento_at`, etc.).
+    """
+
+    fv_at = sumar_lista_series(f_viento_at)
+    fv_ad = sumar_lista_series(f_viento_ad)
+    ta = sumar_lista_series(tiro_at)
+    td = sumar_lista_series(tiro_ad)
+
+    idx = o_postes_rep.index
+    delta_full = np.deg2rad(angulo_b.astype(float))
+
+    ftvc_out = pd.Series(np.nan, index=idx)
+    flmc_out = pd.Series(np.nan, index=idx)
+
+    for i in idx:
+        d = delta_full.loc[i]
+        sen_d2 = np.sin(d / 2)
+        cos_d2 = np.cos(d / 2)
+
+        fv_at_i = fv_at.loc[i] if fv_at is not None else 0.0
+        fv_ad_i = fv_ad.loc[i] if fv_ad is not None else 0.0
+        ta_i = ta.loc[i] if ta is not None else 0.0
+        td_i = td.loc[i] if td is not None else 0.0
+
+        # ---------------- FTVC (idéntico al Caso 1 de calcular_ftvc_flmc) ----------------
+        ftvc = (
+            fv_at_i
+            + fv_ad_i
+            + (ta_i + td_i) * sen_d2
+        )
+
+        # ---------------- FLMC (idéntico al Caso 1 de calcular_ftvc_flmc) ----------------
+        if fv_at_i > 0 and fv_ad_i > 0:
+            fv_at_c = fv_at_i / cos_d2
+            fv_ad_c = fv_ad_i / cos_d2
+        else:
+            fv_at_c = fv_at_i
+            fv_ad_c = fv_ad_i
+
+        flmc = (
+            (td_i - ta_i) * cos_d2
+            + (fv_at_c - fv_ad_c) * sen_d2
+        )
+
+        ftvc_out.loc[i] = ftvc
+        flmc_out.loc[i] = flmc
+
+    return ftvc_out, flmc_out
+
+
 def expandir_mec_postes_repetidos(
     mec,
     postes_df,        # Serie SIN repetición (ej. mec["Numero de apoyo"])
-    postes_rep,        # Serie CON repetición (ej. post_exp), misma fuente que fvc_total
-    valores_individuales,  # Serie de valores SIN sumar, indexada igual que postes_rep (ej. fvc_total)
-    col_valor="Fvc",
+    postes_rep,        # Serie CON repetición (ej. post_exp), misma fuente que los valores individuales
+    valores_individuales,  # dict {nombre_columna: pd.Series} de valores SIN sumar/combinar,
+                            # cada Series indexada igual que postes_rep
+                            # (ej. {"Fvc": fvc_total, "FTVC": ftvc_ind, "FLMC": flmc_ind})
     col_identificador="Numero de apoyo",
 ):
     """
     Construye una versión "desagregada" de la tabla MEC en la que cada poste
     repetido (por ejemplo, un poste con derivaciones) aparece en una fila
-    independiente, en lugar de una sola fila con el valor sumado.
+    independiente, en lugar de una sola fila con los valores sumados o
+    combinados vectorialmente.
 
-    Esta función es la contraparte de `agregar_columna_suma`: mientras esa
-    función colapsa los valores de postes repetidos en una única fila
-    (sumándolos), esta función expande la tabla `mec` para mostrar cada
-    aparición individual del poste, conservando el valor puntual de
-    `valores_individuales` que le corresponde (sin sumar).
+    Esta función es la contraparte de `agregar_columna_suma` (para Fvc) y de
+    `calcular_ftvc_flmc` (para FTVC/FLMC): en vez de mostrar el valor
+    colapsado en una única fila por poste, expande `mec` para mostrar cada
+    aparición individual (cada derivación) con su propio valor puntual, tal
+    como fue calculado tratando esa derivación de forma aislada
+    (ver `calcular_ftvc_flmc_individual` para FTVC/FLMC).
 
     Parámetros
     ----------
@@ -7502,13 +7606,13 @@ def expandir_mec_postes_repetidos(
     postes_rep : pd.Series
         Serie de nombres de poste CON repetición (una entrada por cada
         aparición del poste, incluyendo derivaciones), normalmente `post_exp`.
-    valores_individuales : pd.Series
-        Serie de valores puntuales (sin sumar) alineada por índice con
-        `postes_rep` (por ejemplo, `fvc_total`, la fuerza vertical de
-        conductores de cada aparición del poste antes de sumarla).
-    col_valor : str, default "Fvc"
-        Nombre de la columna en `mec` cuyo valor sumado se reemplaza por el
-        valor individual en la tabla expandida.
+    valores_individuales : dict[str, pd.Series]
+        Diccionario {nombre_columna: serie_de_valores_individuales}. Cada
+        serie debe estar indexada igual que `postes_rep` (por ejemplo,
+        `fvc_total` para "Fvc", o el resultado de
+        `calcular_ftvc_flmc_individual` para "FTVC"/"FLMC"). Cada columna
+        listada aquí se reemplaza, fila por fila expandida, por su valor
+        individual correspondiente a esa aparición del poste.
     col_identificador : str, default "Numero de apoyo"
         Nombre de la columna identificadora de poste en `mec`.
 
@@ -7516,17 +7620,22 @@ def expandir_mec_postes_repetidos(
     -------
     pd.DataFrame
         Copia de `mec` expandida: por cada poste con n apariciones en
-        `postes_rep` se generan n filas idénticas, cada una con su propio
-        valor individual en `col_valor` (el resto de columnas se repite tal
-        cual, ya que corresponden a esfuerzos ya calculados sobre el poste
-        como conjunto). Se añade una columna auxiliar "Repetición" con el
+        `postes_rep` se generan n filas, cada una con sus propios valores
+        individuales en las columnas listadas en `valores_individuales` (el
+        resto de columnas —FHR, C.S., etc.— se repite tal cual, ya que esos
+        esfuerzos dependen del poste como conjunto y no se recalculan por
+        derivación). Se añade una columna auxiliar "Repetición" con el
         número de orden (1, 2, 3, ...) de cada aparición, útil para
         identificar visualmente las derivaciones. El índice se reinicia.
     """
 
     postes_df = postes_df.reset_index(drop=True)
-    valores_individuales = pd.Series(valores_individuales).reset_index(drop=True)
     postes_rep = pd.Series(postes_rep).reset_index(drop=True)
+
+    valores_individuales = {
+        col: pd.Series(serie).reset_index(drop=True)
+        for col, serie in valores_individuales.items()
+    }
 
     filas_expandidas = []
 
@@ -7538,8 +7647,8 @@ def expandir_mec_postes_repetidos(
 
         if len(idxs_rep) == 0:
             # No se encontró el poste en la serie con repetición: se conserva
-            # la fila original sin desagregar, con su valor de col_valor tal
-            # cual estaba en mec.
+            # la fila original sin desagregar, con sus valores tal cual
+            # estaban en mec.
             fila = fila_base.copy()
             fila["Repetición"] = 1
             filas_expandidas.append(fila)
@@ -7547,7 +7656,8 @@ def expandir_mec_postes_repetidos(
 
         for n_rep, idx in enumerate(idxs_rep, start=1):
             fila = fila_base.copy()
-            fila[col_valor] = valores_individuales.loc[idx]
+            for col_valor, serie_valores in valores_individuales.items():
+                fila[col_valor] = serie_valores.loc[idx]
             fila["Repetición"] = n_rep
             filas_expandidas.append(fila)
 
