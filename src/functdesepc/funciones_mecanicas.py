@@ -7470,3 +7470,86 @@ def construir_tipo_armado_unico(
 
     resultado = pd.DataFrame(filas, columns=cols_resultado).reset_index(drop=True)
     return resultado
+
+def expandir_mec_postes_repetidos(
+    mec,
+    postes_df,        # Serie SIN repetición (ej. mec["Numero de apoyo"])
+    postes_rep,        # Serie CON repetición (ej. post_exp), misma fuente que fvc_total
+    valores_individuales,  # Serie de valores SIN sumar, indexada igual que postes_rep (ej. fvc_total)
+    col_valor="Fvc",
+    col_identificador="Numero de apoyo",
+):
+    """
+    Construye una versión "desagregada" de la tabla MEC en la que cada poste
+    repetido (por ejemplo, un poste con derivaciones) aparece en una fila
+    independiente, en lugar de una sola fila con el valor sumado.
+
+    Esta función es la contraparte de `agregar_columna_suma`: mientras esa
+    función colapsa los valores de postes repetidos en una única fila
+    (sumándolos), esta función expande la tabla `mec` para mostrar cada
+    aparición individual del poste, conservando el valor puntual de
+    `valores_individuales` que le corresponde (sin sumar).
+
+    Parámetros
+    ----------
+    mec : pd.DataFrame
+        Tabla MEC ya calculada, con una fila por poste único. Debe contener
+        la columna `col_identificador` con los nombres de poste (mismo
+        contenido que `postes_df`, en el mismo orden que las filas de `mec`).
+    postes_df : pd.Series
+        Serie de nombres de poste SIN repetición, alineada por posición con
+        las filas de `mec` (normalmente `mec["Numero de apoyo"]`).
+    postes_rep : pd.Series
+        Serie de nombres de poste CON repetición (una entrada por cada
+        aparición del poste, incluyendo derivaciones), normalmente `post_exp`.
+    valores_individuales : pd.Series
+        Serie de valores puntuales (sin sumar) alineada por índice con
+        `postes_rep` (por ejemplo, `fvc_total`, la fuerza vertical de
+        conductores de cada aparición del poste antes de sumarla).
+    col_valor : str, default "Fvc"
+        Nombre de la columna en `mec` cuyo valor sumado se reemplaza por el
+        valor individual en la tabla expandida.
+    col_identificador : str, default "Numero de apoyo"
+        Nombre de la columna identificadora de poste en `mec`.
+
+    Retorna
+    -------
+    pd.DataFrame
+        Copia de `mec` expandida: por cada poste con n apariciones en
+        `postes_rep` se generan n filas idénticas, cada una con su propio
+        valor individual en `col_valor` (el resto de columnas se repite tal
+        cual, ya que corresponden a esfuerzos ya calculados sobre el poste
+        como conjunto). Se añade una columna auxiliar "Repetición" con el
+        número de orden (1, 2, 3, ...) de cada aparición, útil para
+        identificar visualmente las derivaciones. El índice se reinicia.
+    """
+
+    postes_df = postes_df.reset_index(drop=True)
+    valores_individuales = pd.Series(valores_individuales).reset_index(drop=True)
+    postes_rep = pd.Series(postes_rep).reset_index(drop=True)
+
+    filas_expandidas = []
+
+    for pos, poste in enumerate(postes_df):
+        fila_base = mec.iloc[pos]
+
+        mask = postes_rep == poste
+        idxs_rep = postes_rep[mask].index
+
+        if len(idxs_rep) == 0:
+            # No se encontró el poste en la serie con repetición: se conserva
+            # la fila original sin desagregar, con su valor de col_valor tal
+            # cual estaba en mec.
+            fila = fila_base.copy()
+            fila["Repetición"] = 1
+            filas_expandidas.append(fila)
+            continue
+
+        for n_rep, idx in enumerate(idxs_rep, start=1):
+            fila = fila_base.copy()
+            fila[col_valor] = valores_individuales.loc[idx]
+            fila["Repetición"] = n_rep
+            filas_expandidas.append(fila)
+
+    mec_expandido = pd.DataFrame(filas_expandidas).reset_index(drop=True)
+    return mec_expandido

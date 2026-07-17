@@ -1430,3 +1430,259 @@ def exportar_nuevo_formato_v2(
 
 # ── Ejemplo de uso v2 ──────────────────────────────────────────────────────────
 # exportar_nuevo_formato_v2(ruta_template=DATA+"calculos_mecanicos_afinia.xlsx", ruta_salida=DATA+"calculos_mecanicos_nuevo.xlsx", eovanos=eovanos, eovanos_s=eovanos_s, van_reg=van_reg, tab_fle=tab_fle, tablas_p=tablas_p, tab_fle_s=tab_fle_s, tablas_s=tablas_s, datos_iniciales_red_mt=datos_iniciales_red_mt, informacion_del_apoyo=informacion_del_apoyo, calculo_esfuerzos_apoyo=calculo_esfuerzos_apoyo, analisis_hipotesis_normales=analisis_hipotesis_normales, analisis_hipotesis_anormales=analisis_hipotesis_anormales, calculo_poste_retenidas=calculo_poste_retenidas, validacion_poste_retenidas=validacion_poste_retenidas, tipo_retenidas_ancla=tipo_retenidas_ancla, dimension_ancla=dimension_ancla, cimentaciones_postes_mt=cimentaciones_postes_mt, calculos_de_cimentaciones=calculos_de_cimentaciones)
+
+
+def exportar_calculos_mecanicos_separados(
+    ruta_template,
+    ruta_salida,
+    mec_expandido, ret, eovanos, carac_postes, van_reg,
+    tab_fle, tablas_p, tab_fle_s, tablas_s
+):
+    """
+    Variante de `exportar_todo` pensada para presentar, en la hoja MEC, los
+    esfuerzos de cada poste repetido (derivaciones) de forma INDIVIDUAL en
+    lugar de sumados en una sola fila.
+
+    Se usa exactamente igual que `exportar_todo`, con la única diferencia de
+    que el parámetro `mec_expandido` debe ser el resultado de
+    `expandir_mec_postes_repetidos` (funciones_mecanicas.py) en lugar de la
+    tabla `mec` "normal" (donde cada poste repetido ya viene colapsado en una
+    única fila con el esfuerzo Fvc sumado).
+
+    El resto de hojas (RET, EOLOVANOS, Caracteristicas de los postes,
+    VANOS IDEALES DE REGULACIÓN, y las hojas de flechado por cantón) se
+    escriben igual que en `exportar_todo`, ya que esos cálculos no se ven
+    afectados por la desagregación de postes repetidos.
+
+    Parámetros
+    ----------
+    ruta_template : str             - Archivo base con encabezados de MEC, RET, etc.
+    ruta_salida   : str             - Ruta del archivo Excel resultante
+                                       (por ejemplo, ".../cálculos_mecanicos_separados.xlsx")
+    mec_expandido : pd.DataFrame    - Tabla MEC con una fila por cada poste
+                                       repetido, generada con
+                                       expandir_mec_postes_repetidos(...)
+    ret, eovanos, carac_postes, van_reg : pd.DataFrame
+    tab_fle, tablas_p               : listas de DataFrames cantones normales
+    tab_fle_s, tablas_s             : listas de DataFrames cantones secundarios
+
+    Uso típico
+    ----------
+        mec_expandido = expandir_mec_postes_repetidos(
+            mec, mec["Numero de apoyo"], post_exp, fvc_total, col_valor="Fvc"
+        )
+
+        exportar_calculos_mecanicos_separados(
+            ruta_template = ruta_base + "plantilla_calculos.xlsx",
+            ruta_salida   = DATA + "cálculos_mecanicos_separados.xlsx",
+            mec_expandido = mec_expandido,
+            ret=ret, eovanos=eovanos, carac_postes=carac_postes, van_reg=van_reg,
+            tab_fle=tab_fle, tablas_p=tablas_p, tab_fle_s=tab_fle_s, tablas_s=tablas_s,
+        )
+    """
+    import pandas as pd
+    from openpyxl import load_workbook
+    from openpyxl.styles import Border, Side, Alignment, Font, PatternFill
+    from openpyxl.utils import get_column_letter
+
+    # ── Estilos ──────────────────────────────────────────────────────────────
+    def _thin():
+        return Side(style="thin", color="FF000000")
+
+    def _medium_side():
+        return Side(style="medium", color="FF000000")
+
+    def _border_thin_all():
+        t = _thin()
+        return Border(left=t, right=t, top=t, bottom=t)
+
+    def _border_medium_all():
+        m = _medium_side()
+        return Border(left=m, right=m, top=m, bottom=m)
+
+    FILL_HEADER  = PatternFill("solid", fgColor="D9E1F2")
+    FILL_DATA    = PatternFill("solid", fgColor="FFFFFF")
+    FONT_BOLD    = Font(bold=True, size=9)
+    FONT_NORMAL  = Font(bold=False, size=9)
+    ALIGN_CENTER = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    ALIGN_LEFT   = Alignment(horizontal="left",   vertical="center", wrap_text=True)
+    NUM_FMT_2DEC = '0.00'
+    NUM_FMT_4DEC = '0.0000'
+
+    medium   = Side(style='medium')
+    border   = Border(left=medium, right=medium, top=medium, bottom=medium)
+    wrap     = Alignment(wrap_text=True)
+
+    # Colores de encabezado por hoja (del template original)
+    header_fills = {
+        "MEC":                           PatternFill("solid", fgColor="12501A"),
+        "RET":                           PatternFill("solid", fgColor="12501A"),
+        "EOLOVANOS":                     PatternFill("solid", fgColor="FE6A0C"),
+        "Caracteristicas de los postes": PatternFill("solid", fgColor="C2D59A"),
+        "VANOS IDEALES DE REGULACIÓN":   PatternFill("solid", fgColor="D6E3BB"),
+    }
+    white_font_sheets = {"MEC", "RET", "EOLOVANOS"}
+
+    # ── Helpers flechado (idénticos a exportar_todo) ─────────────────────────
+    def _write_cell(ws, row, col, value, font=None, alignment=None,
+                    border=None, fill=None, number_format=None):
+        cell = ws.cell(row=row, column=col, value=_round4(value))
+        if font:          cell.font = font
+        if alignment:     cell.alignment = alignment
+        if border:        cell.border = border
+        if fill:          cell.fill = fill
+        if number_format: cell.number_format = number_format
+        return cell
+
+    def _merge_and_write(ws, row, col_start, col_end, value,
+                         font=None, alignment=None, border=None, fill=None):
+        if col_start < col_end:
+            ws.merge_cells(start_row=row, start_column=col_start,
+                           end_row=row,   end_column=col_end)
+        _write_cell(ws, row, col_start, value, font=font,
+                    alignment=alignment, border=border, fill=fill)
+
+    def _auto_col_width(ws, min_width=8, max_width=30):
+        for col in ws.columns:
+            max_len = 0
+            col_letter = get_column_letter(col[0].column)
+            for cell in col:
+                try:
+                    if cell.value is not None:
+                        max_len = max(max_len, len(str(cell.value)))
+                except Exception:
+                    pass
+            ws.column_dimensions[col_letter].width = max(min_width, min(max_len + 2, max_width))
+
+    def _escribir_header_tabla(ws, tab_fle_df, start_row=1, start_col=1):
+        b_med  = _border_medium_all()
+        b_thin = _border_thin_all()
+        n_rows, _ = tab_fle_df.shape
+        label_col = start_col
+        data_col_start = start_col + 1
+        for rel_row, (_, row_data) in enumerate(tab_fle_df.iterrows()):
+            abs_row  = start_row + rel_row
+            row_vals = row_data.tolist()
+            label    = row_vals[0] if row_vals else ""
+            data_vals = row_vals[1:]
+            is_vano_row = str(label).strip().lower() in {
+                "vano", "longitud (m)", "poste inicial", "poste final", "desnivel"
+            }
+            b = b_med if is_vano_row else b_thin
+            if pd.notna(label) and str(label).strip():
+                _merge_and_write(ws, abs_row, label_col, label_col + 1,
+                                 value=label, font=FONT_BOLD, alignment=ALIGN_LEFT,
+                                 border=b, fill=FILL_HEADER)
+            for rel_col, val in enumerate(data_vals):
+                c = data_col_start + 1 + rel_col
+                try:
+                    es_nan = pd.isna(val)
+                except (TypeError, ValueError):
+                    es_nan = False
+                if es_nan:
+                    continue
+                num_fmt = None
+                if isinstance(val, float):
+                    num_fmt = NUM_FMT_4DEC if abs(val) < 10 else NUM_FMT_2DEC
+                _write_cell(ws, abs_row, c, val, font=FONT_NORMAL,
+                            alignment=ALIGN_CENTER, border=b,
+                            fill=FILL_DATA, number_format=num_fmt)
+        return start_row + n_rows
+
+    def _escribir_datos_tabla(ws, tablas_df, start_row=1, start_col=1):
+        b_med  = _border_medium_all()
+        b_thin = _border_thin_all()
+        for rel_col, col_name in enumerate(tablas_df.columns):
+            _write_cell(ws, start_row, start_col + rel_col, col_name,
+                        font=FONT_BOLD, alignment=ALIGN_CENTER,
+                        border=b_med, fill=FILL_HEADER)
+        data_start_row = start_row + 1
+        for rel_row, (_, row_data) in enumerate(tablas_df.iterrows()):
+            abs_row = data_start_row + rel_row
+            for rel_col, val in enumerate(row_data):
+                c = start_col + rel_col
+                try:
+                    es_nan = pd.isna(val)
+                except (TypeError, ValueError):
+                    es_nan = False
+                if es_nan:
+                    continue
+                num_fmt = NUM_FMT_4DEC if isinstance(val, float) else None
+                _write_cell(ws, abs_row, c, val, font=FONT_NORMAL,
+                            alignment=ALIGN_CENTER, border=b_thin,
+                            fill=FILL_DATA, number_format=num_fmt)
+        return data_start_row + len(tablas_df)
+
+    def _clean(value):
+        try:
+            if pd.isna(value):
+                return None
+        except (TypeError, ValueError):
+            pass
+        return value
+
+    # ── 1. Cargar template (contiene hojas MEC, RET, etc. con encabezados) ───
+    wb = load_workbook(ruta_template)
+
+    # ── 2. Escribir dataframes de cálculos mecánicos ────────────────────────
+    # NOTA: se usa mec_expandido (una fila por poste repetido) en lugar de mec.
+    config = [
+        ("MEC",                           mec_expandido, 8),
+        ("RET",                           ret,           5),
+        ("EOLOVANOS",                     eovanos,       3),
+        ("Caracteristicas de los postes", carac_postes,  3),
+        ("VANOS IDEALES DE REGULACIÓN",   van_reg,       7),
+    ]
+
+    for sheet_name, df, start_row in config:
+        ws = wb[sheet_name]
+        ws.delete_rows(start_row, ws.max_row - start_row + 1)
+
+        fill = header_fills.get(sheet_name)
+
+        # Encabezado: negrita + color de la hoja
+        for col_idx, col_name in enumerate(df.columns, start=1):
+            cell = ws.cell(row=start_row, column=col_idx, value=col_name)
+            cell.border = border
+            cell.alignment = wrap
+            font_color = "FFFFFF" if sheet_name in white_font_sheets else "000000"
+            cell.font = Font(bold=True, color=font_color)
+            if fill:
+                cell.fill = fill
+
+        # Datos
+        for row_idx, row in enumerate(df.itertuples(index=False), start=start_row + 1):
+            for col_idx, value in enumerate(row, start=1):
+                cell = ws.cell(row=row_idx, column=col_idx, value=_round4(_clean(value)))
+                cell.border = border
+                cell.alignment = wrap
+
+    # ── 3. Agregar hojas de flechado ─────────────────────────────────────────
+    for i, (header_df, datos_df) in enumerate(zip(tab_fle, tablas_p)):
+        ws = wb.create_sheet(title=f"Canton_{i + 1}")
+        next_row = _escribir_header_tabla(ws, header_df)
+        _escribir_datos_tabla(ws, datos_df, start_row=next_row)
+        _auto_col_width(ws)
+
+    for i, (header_df, datos_df) in enumerate(zip(tab_fle_s, tablas_s)):
+        ws = wb.create_sheet(title=f"Canton_{i + 1}S")
+        next_row = _escribir_header_tabla(ws, header_df)
+        _escribir_datos_tabla(ws, datos_df, start_row=next_row)
+        _auto_col_width(ws)
+
+    wb.save(ruta_salida)
+    print(f"✅ Archivo guardado: {ruta_salida}")
+    print(f"   • Hoja MEC: {len(mec_expandido)} filas (postes repetidos desagregados)")
+
+
+# ── Ejemplo de uso ────────────────────────────────────────────────────────────
+# mec_expandido = expandir_mec_postes_repetidos(
+#     mec, mec["Numero de apoyo"], post_exp, fvc_total, col_valor="Fvc"
+# )
+# exportar_calculos_mecanicos_separados(
+#     ruta_template = ruta_base + "plantilla_calculos.xlsx",
+#     ruta_salida   = DATA + "cálculos_mecanicos_separados.xlsx",
+#     mec_expandido = mec_expandido,
+#     ret=ret, eovanos=eovanos, carac_postes=carac_postes, van_reg=van_reg,
+#     tab_fle=tab_fle, tablas_p=tablas_p, tab_fle_s=tab_fle_s, tablas_s=tablas_s,
+# )
