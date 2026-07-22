@@ -315,6 +315,7 @@ COLUMNAS_ARMADO_DEFAULT = [
 COL_NOMBRE_DEFAULT = ("Identificación", "Nombre Est.")
 COL_NRUTA_DEFAULT = ("Identificación", "N° Est.")
 COL_DERIVACION_DEFAULT = ("Identificación", "Derivación")
+COL_TIPO_SOPORTE_DEFAULT = ("Estructura", "Tipo Soporte")
 
 
 def cargar_planilla(ruta: str) -> pd.DataFrame:
@@ -369,6 +370,107 @@ def extraer_armados_planilla(
                       columns=["nombre_poste", "derivacion", "n_est",
                                "tipo_armado", "armado"])
     df["armado_norm"] = df["armado"].apply(normalizar_codigo_armado)
+    return df
+
+
+# =====================================================================
+#  3-bis. CONTEO DE POSTES POR TIPO DE SOPORTE
+# =====================================================================
+
+# Valores que se consideran "vacíos" en 'Tipo Soporte' y por lo tanto no
+# cuentan como un tipo de poste válido.
+_VALORES_VACIOS_TIPO_SOPORTE = {"", "nan", "none", "0", "-", "n/a", "na"}
+
+
+def _es_tipo_soporte_valido(valor) -> bool:
+    """
+    Indica si un valor de 'Tipo Soporte' debe considerarse válido, es decir
+    que no es None, NaN, 0, ni equivalentes textuales vacíos como "-" o "".
+    """
+    if valor is None:
+        return False
+    if isinstance(valor, float) and np.isnan(valor):
+        return False
+    if isinstance(valor, (int, float)) and valor == 0:
+        return False
+    s = str(valor).strip().lower()
+    return s not in _VALORES_VACIOS_TIPO_SOPORTE
+
+
+def contar_tipos_soporte(
+    est_df: pd.DataFrame,
+    col_tipo_soporte: Tuple[str, str] = COL_TIPO_SOPORTE_DEFAULT,
+    col_nombre: Tuple[str, str] = COL_NOMBRE_DEFAULT,
+    verbose: bool = True,
+) -> pd.DataFrame:
+    """
+    Cuenta la cantidad total de postes de cada 'Tipo Soporte' distinto.
+
+    Un mismo poste ('Nombre Est.') puede aparecer repetido en varias filas de
+    la planilla (p. ej. una fila de llegada y otra de salida). Para no
+    duplicar el conteo, por cada nombre de poste se toma únicamente la
+    PRIMERA fila (en el orden en que aparece en la planilla) cuyo
+    'Tipo Soporte' sea válido:
+
+      * Si la primera aparición del poste ya trae un 'Tipo Soporte' válido,
+        esa es la que se cuenta.
+      * Si la primera aparición trae un valor vacío/None/NaN/0/"-", el poste
+        se descarta por completo para el conteo (no se buscan apariciones
+        posteriores), siguiendo el criterio acordado con el usuario.
+
+    Parámetros
+    ----------
+    est_df : pd.DataFrame
+        DataFrame de la planilla de estructuras ya cargado (p.ej. est_df).
+    col_tipo_soporte : tupla
+        Columna (multi-índice) donde está el tipo de soporte/poste.
+    col_nombre : tupla
+        Columna (multi-índice) donde está el nombre de la estructura/poste.
+    verbose : bool
+        Imprime un resumen del conteo.
+
+    Devuelve
+    --------
+    pd.DataFrame con columnas:
+        tipo_soporte | cantidad
+    ordenado alfabéticamente por 'tipo_soporte'.
+    """
+    if col_tipo_soporte not in est_df.columns:
+        raise KeyError(f"No se encontró la columna {col_tipo_soporte!r} en la planilla.")
+    if col_nombre not in est_df.columns:
+        raise KeyError(f"No se encontró la columna {col_nombre!r} en la planilla.")
+
+    vistos: set = set()          # nombres de poste ya resueltos (contados o descartados)
+    conteo: Dict[str, int] = {}
+
+    for _, fila in est_df.iterrows():
+        nombre = fila.get(col_nombre)
+        nombre = str(nombre).strip() if pd.notna(nombre) else ""
+
+        if nombre in vistos:
+            # Ya se resolvió este poste con su primera aparición: se ignora.
+            continue
+        vistos.add(nombre)
+
+        valor_tipo = fila.get(col_tipo_soporte)
+        if not _es_tipo_soporte_valido(valor_tipo):
+            # Primera aparición sin tipo de soporte válido -> se descarta el poste.
+            continue
+
+        tipo = str(valor_tipo).strip()
+        conteo[tipo] = conteo.get(tipo, 0) + 1
+
+    df = (pd.DataFrame(
+                [{"tipo_soporte": k, "cantidad": v} for k, v in conteo.items()],
+                columns=["tipo_soporte", "cantidad"])
+          .sort_values("tipo_soporte", key=lambda s: s.str.lower())
+          .reset_index(drop=True))
+
+    if verbose:
+        total_postes = len(df) and df["cantidad"].sum()
+        print(f"[postes] Tipos de soporte distintos: {len(df)}  "
+              f"(postes contados: {total_postes})")
+
     return df
 
 
@@ -491,9 +593,10 @@ def exportar_cantidades_excel(resultado: Dict[str, pd.DataFrame],
     """
     Escribe el resultado en un .xlsx con formato profesional:
 
-      Hoja 'Cantidades'        -> material y cantidad total (entregable principal)
-      Hoja 'Armados no hallados'-> trazabilidad de lo que no se pudo mapear
-      Hoja 'Detalle' (opcional)-> aporte poste×armado×material
+      Hoja 'Cantidades'          -> material y cantidad total (entregable principal)
+      Hoja 'Tipos de Soporte'    -> cantidad total de postes por tipo de soporte
+      Hoja 'Armados no hallados' -> trazabilidad de lo que no se pudo mapear
+      Hoja 'Detalle' (opcional)  -> aporte poste×armado×material
 
     Devuelve la ruta del archivo escrito.
     """
@@ -507,9 +610,15 @@ def exportar_cantidades_excel(resultado: Dict[str, pd.DataFrame],
     df_falt = resultado["no_encontrados"].copy()
     if len(df_falt):
         df_falt.columns = ["Armado (planilla)", "Núcleo buscado", "Veces"]
+    df_tipos = resultado.get("tipos_soporte")
+    if df_tipos is not None and len(df_tipos):
+        df_tipos = df_tipos.copy()
+        df_tipos.columns = ["Tipo Soporte", "Cantidad"]
 
     with pd.ExcelWriter(ruta_salida, engine="openpyxl") as writer:
         df_tot.to_excel(writer, sheet_name="Cantidades", index=False)
+        if df_tipos is not None and len(df_tipos):
+            df_tipos.to_excel(writer, sheet_name="Tipos de Soporte", index=False)
         if len(df_falt):
             df_falt.to_excel(writer, sheet_name="Armados no hallados", index=False)
         else:
@@ -559,6 +668,7 @@ def generar_cantidades_materiales(
     ruta_catalogo: str,
     hojas_catalogo: Optional[Sequence[str]] = None,
     columnas_armado: Sequence[Tuple[str, str]] = COLUMNAS_ARMADO_DEFAULT,
+    col_tipo_soporte: Tuple[str, str] = COL_TIPO_SOPORTE_DEFAULT,
     ruta_salida: str = "Cantidades_totales_proyecto.xlsx",
     incluir_detalle: bool = True,
     verbose: bool = True,
@@ -574,9 +684,13 @@ def generar_cantidades_materiales(
         Se usa directamente sin volver a leer el archivo desde disco.
     ruta_catalogo : str
         Ruta al archivo Cantidades_de_postes.xlsx en Drive montado.
+    col_tipo_soporte : tupla
+        Columna (multi-índice) con el tipo de soporte/poste, usada para el
+        conteo de postes por tipo (hoja 'Tipos de Soporte' en la salida).
 
     Devuelve un dict con las claves:
-        'catalogo', 'armados', 'totales', 'no_encontrados', 'detalle', 'ruta_salida'
+        'catalogo', 'armados', 'totales', 'no_encontrados', 'detalle',
+        'tipos_soporte', 'ruta_salida'
     """
     etapa = "inicio"
     try:
@@ -595,6 +709,11 @@ def generar_cantidades_materiales(
         etapa = "cálculo de cantidades"
         resultado = calcular_cantidades(armados, catalogo, verbose=verbose)
 
+        # --- Etapa 3-bis: contar postes por tipo de soporte ---
+        etapa = "conteo de tipos de soporte"
+        resultado["tipos_soporte"] = contar_tipos_soporte(
+            est_df, col_tipo_soporte=col_tipo_soporte, verbose=verbose)
+
         # --- Etapa 4: exportar ---
         etapa = "exportación a Excel"
         exportar_cantidades_excel(resultado, ruta_salida,
@@ -610,5 +729,6 @@ def generar_cantidades_materiales(
         "totales": resultado["totales"],
         "no_encontrados": resultado["no_encontrados"],
         "detalle": resultado["detalle"],
+        "tipos_soporte": resultado["tipos_soporte"],
         "ruta_salida": ruta_salida,
     }
