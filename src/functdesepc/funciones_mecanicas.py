@@ -2096,6 +2096,18 @@ def identificar_retenida(
     - Se extrae el ÚLTIMO dígito numérico de ese bloque
     - Si ese dígito es 5 → Conjunto a 90°
     - En cualquier otro caso → Bisectora
+
+    Caso especial (códigos sin '-#'):
+    - Algunos armados (ej. "MTF131G", "MTF335G") no incluyen el sufijo
+      '-#' y por tanto no tienen el bloque de referencia anterior.
+    - En ese caso se extrae el tercer dígito del bloque numérico de 3
+      cifras que sigue a "MT" (y a la "F" opcional de conductor
+      forrado), es decir el mismo dígito "d3" que usa
+      `identificar_poste` para determinar el tipo de poste
+      (FL/AL/ANG/ANC): patrón "MT(F?)(\\d)(\\d)(\\d)".
+    - Se aplica la misma regla: si ese dígito es 5 → Conjunto a 90°,
+      cualquier otro dígito → Bisectora.
+    - Si no se encuentra el patrón, se retorna None (no clasificable).
     """
 
     # Inicialización
@@ -2115,7 +2127,14 @@ def identificar_retenida(
         s = str(armado).strip()
 
         if "-" not in s:
-            return None
+            # Caso especial: código sin '-#' (ej. "MTF131G").
+            # Se usa el tercer dígito del bloque MT(F?)### como
+            # referencia, en lugar del dígito previo al '-#'.
+            match = re.search(r'MT\s*F?\s*\d{2}(\d)', s, re.IGNORECASE)
+            if not match:
+                return None
+            d3 = match.group(1)
+            return "90" if d3 == "5" else "B"
 
         # Quitar el último '-#'
         bloque = s.rsplit("-", 1)[0]
