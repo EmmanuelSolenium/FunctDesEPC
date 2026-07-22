@@ -317,6 +317,22 @@ COL_NRUTA_DEFAULT = ("Identificación", "N° Est.")
 COL_DERIVACION_DEFAULT = ("Identificación", "Derivación")
 COL_TIPO_SOPORTE_DEFAULT = ("Estructura", "Tipo Soporte")
 
+# Columnas de retenidas en el grupo "Estructura": el nombre de columna ES el
+# código de armado a buscar en el catálogo (p.ej. "RT003"), y el VALOR de la
+# celda es la cantidad de esa retenida instalada en ese poste (0, 1, 2, ...).
+COLUMNAS_RETENIDA_DEFAULT = [
+    ("Estructura", "RT001"),
+    ("Estructura", "RT002"),
+    ("Estructura", "RT003"),
+    ("Estructura", "RT004"),
+    ("Estructura", "RT005"),
+    ("Estructura", "RT006"),
+    ("Estructura", "RT002-RS"),
+    ("Estructura", "RT003-RS"),
+    ("Estructura", "RT Existente-BT"),
+    ("Estructura", "RT Existente-MT"),
+]
+
 
 def cargar_planilla(ruta: str) -> pd.DataFrame:
     """
@@ -366,6 +382,67 @@ def extraer_armados_planilla(
                 "tipo_armado": col[1] if isinstance(col, tuple) else str(col),
                 "armado": str(valor).strip(),
             })
+    df = pd.DataFrame(registros,
+                      columns=["nombre_poste", "derivacion", "n_est",
+                               "tipo_armado", "armado"])
+    df["armado_norm"] = df["armado"].apply(normalizar_codigo_armado)
+    return df
+
+
+def extraer_retenidas_planilla(
+    est_df: pd.DataFrame,
+    columnas_retenida: Sequence[Tuple[str, str]] = COLUMNAS_RETENIDA_DEFAULT,
+    col_nombre: Tuple[str, str] = COL_NOMBRE_DEFAULT,
+    col_nruta: Optional[Tuple[str, str]] = COL_NRUTA_DEFAULT,
+    col_derivacion: Optional[Tuple[str, str]] = COL_DERIVACION_DEFAULT,
+) -> pd.DataFrame:
+    """
+    Extrae los armados de RETENIDA de cada poste, a partir de las columnas
+    tipo RT001, RT002, RT003, ... donde:
+
+        * el NOMBRE de la columna es el código de armado a buscar en el
+          catálogo (p.ej. "RT003"), y
+        * el VALOR de la celda es la cantidad de esa retenida en ese poste
+          (0 = no tiene, 1 = una, 2 = dos, ...).
+
+    Genera el mismo formato "largo" que `extraer_armados_planilla`
+    (nombre_poste | derivacion | n_est | tipo_armado | armado | armado_norm),
+    repitiendo el armado tantas veces como indique la cantidad, para poder
+    reutilizar `calcular_cantidades` sin modificarla: cada repetición aporta
+    una vez los materiales del armado, así que N retenidas del mismo tipo
+    aportan N veces esos materiales.
+
+    Celdas vacías, NaN, None o con valor 0 se ignoran (no hay retenida).
+    """
+    registros: List[dict] = []
+    for idx, fila in est_df.iterrows():
+        nombre = fila.get(col_nombre, idx)
+        derivacion = fila.get(col_derivacion) if col_derivacion else None
+        n_est = fila.get(col_nruta) if col_nruta else None
+
+        for col in columnas_retenida:
+            if col not in est_df.columns:
+                continue
+            valor = fila.get(col)
+            if pd.isna(valor):
+                continue
+            try:
+                cantidad = int(float(valor))
+            except (TypeError, ValueError):
+                continue
+            if cantidad <= 0:
+                continue
+
+            codigo_armado = col[1] if isinstance(col, tuple) else str(col)
+            for _ in range(cantidad):
+                registros.append({
+                    "nombre_poste": str(nombre).strip() if pd.notna(nombre) else "",
+                    "derivacion": str(derivacion).strip() if pd.notna(derivacion) else "",
+                    "n_est": n_est,
+                    "tipo_armado": codigo_armado,
+                    "armado": codigo_armado,
+                })
+
     df = pd.DataFrame(registros,
                       columns=["nombre_poste", "derivacion", "n_est",
                                "tipo_armado", "armado"])
@@ -668,7 +745,9 @@ def generar_cantidades_materiales(
     ruta_catalogo: str,
     hojas_catalogo: Optional[Sequence[str]] = None,
     columnas_armado: Sequence[Tuple[str, str]] = COLUMNAS_ARMADO_DEFAULT,
+    columnas_retenida: Sequence[Tuple[str, str]] = COLUMNAS_RETENIDA_DEFAULT,
     col_tipo_soporte: Tuple[str, str] = COL_TIPO_SOPORTE_DEFAULT,
+    incluir_retenidas: bool = True,
     ruta_salida: str = "Cantidades_totales_proyecto.xlsx",
     incluir_detalle: bool = True,
     verbose: bool = True,
@@ -687,10 +766,15 @@ def generar_cantidades_materiales(
     col_tipo_soporte : tupla
         Columna (multi-índice) con el tipo de soporte/poste, usada para el
         conteo de postes por tipo (hoja 'Tipos de Soporte' en la salida).
+    columnas_retenida : lista de tuplas
+        Columnas RT00X (retenidas) a incluir en el cálculo de materiales.
+    incluir_retenidas : bool
+        Si es False, omite por completo el aporte de retenidas (equivalente
+        al comportamiento anterior a esta función).
 
     Devuelve un dict con las claves:
-        'catalogo', 'armados', 'totales', 'no_encontrados', 'detalle',
-        'tipos_soporte', 'ruta_salida'
+        'catalogo', 'armados', 'retenidas', 'totales', 'no_encontrados',
+        'detalle', 'tipos_soporte', 'ruta_salida'
     """
     etapa = "inicio"
     try:
@@ -705,11 +789,23 @@ def generar_cantidades_materiales(
             print(f"[planilla] {armados['nombre_poste'].nunique()} postes, "
                   f"{len(armados)} armados instalados en total.")
 
-        # --- Etapa 3: calcular cantidades ---
+        # --- Etapa 2-bis: extraer retenidas (RT00X) y unirlas a los armados ---
+        retenidas = pd.DataFrame(
+            columns=["nombre_poste", "derivacion", "n_est",
+                     "tipo_armado", "armado", "armado_norm"])
+        if incluir_retenidas:
+            etapa = "extracción de retenidas"
+            retenidas = extraer_retenidas_planilla(est_df, columnas_retenida=columnas_retenida)
+            if verbose:
+                print(f"[planilla] {retenidas['nombre_poste'].nunique()} postes con retenida, "
+                      f"{len(retenidas)} retenidas instaladas en total.")
+            armados = pd.concat([armados, retenidas], ignore_index=True)
+
+        # --- Etapa 3: calcular cantidades (armados + retenidas juntos) ---
         etapa = "cálculo de cantidades"
         resultado = calcular_cantidades(armados, catalogo, verbose=verbose)
 
-        # --- Etapa 3-bis: contar postes por tipo de soporte ---
+        # --- Etapa 3-ter: contar postes por tipo de soporte ---
         etapa = "conteo de tipos de soporte"
         resultado["tipos_soporte"] = contar_tipos_soporte(
             est_df, col_tipo_soporte=col_tipo_soporte, verbose=verbose)
@@ -726,6 +822,7 @@ def generar_cantidades_materiales(
     return {
         "catalogo": catalogo,
         "armados": armados,
+        "retenidas": retenidas,
         "totales": resultado["totales"],
         "no_encontrados": resultado["no_encontrados"],
         "detalle": resultado["detalle"],
