@@ -7343,6 +7343,155 @@ def ajustar_tiros(
 
     return est_v_max
 
+
+def _factores_tiro_por_circuito(
+    a1: pd.Series,
+    a2: pd.Series,
+    n_ruta: pd.Series,
+) -> tuple[pd.Series, pd.Series]:
+    """
+    Calcula los factores (1.0 o 2.0) de tiro atrás y tiro adelante para UN
+    circuito (primario o secundario), usando el número en ruta real para
+    ubicar a los vecinos n-1 y n+1 (no la posición física en el DataFrame).
+
+    Reglas
+    ------
+    Condición inicial (fila i):
+        Solo se evalúa si el poste actual tiene al menos un armado (a1 o a2)
+        cuyo primer dígito numérico es '7'. Si no, ambos factores quedan en 1.0.
+
+    Tiro atrás:
+        *= 2  si el poste actual (fila i) tiene armado 7 (a1 o a2).
+        (No depende del vecino anterior).
+
+    Tiro adelante:
+        *= 2  ÚNICAMENTE si el poste con numero_en_ruta == numero_en_ruta[i] + 1
+        también tiene armado 7 (en su a1 o a2). Ese poste n+1 se busca por
+        número en ruta real: normalmente es la fila i+1, pero si el tramo
+        termina en i (el siguiente reinicia la numeración o no existe),
+        no hay poste n+1 y el tiro adelante NO se duplica.
+    """
+    a1 = a1.reset_index(drop=True)
+    a2 = a2.reset_index(drop=True)
+    nr = n_ruta.reset_index(drop=True)
+    n = len(a1)
+
+    factor_at = pd.Series(1.0, index=range(n))
+    factor_ad = pd.Series(1.0, index=range(n))
+
+    for i in range(n):
+        actual_tiene_7 = _tiene_armado_7(a1.iloc[i]) or _tiene_armado_7(a2.iloc[i])
+
+        if not actual_tiene_7:
+            continue
+
+        # ── Tiro atrás: depende solo del poste actual ─────────────────────
+        factor_at.iloc[i] = 2.0
+
+        # ── Tiro adelante: depende del poste con numero_en_ruta[i] + 1 ────
+        hay_vecino_sig = (i < n - 1) and (nr.iloc[i + 1] == nr.iloc[i] + 1)
+
+        if hay_vecino_sig:
+            vecino_sig_tiene_7 = (
+                _tiene_armado_7(a1.iloc[i + 1]) or _tiene_armado_7(a2.iloc[i + 1])
+            )
+            if vecino_sig_tiene_7:
+                factor_ad.iloc[i] = 2.0
+
+    return factor_at, factor_ad
+
+
+def ajustar_tiros_v2(
+    est_v_max: pd.DataFrame,
+    prim1: pd.Series,
+    prim2: pd.Series,
+    sec1: pd.Series,
+    sec2: pd.Series,
+    numero_en_ruta: pd.Series,
+) -> pd.DataFrame:
+    """
+    Versión corregida de ajustar_tiros que:
+      1. Evalúa también los armados secundarios (sec1, sec2), de forma
+         independiente al circuito primario.
+      2. Determina el tiro adelante SIEMPRE en función del armado del poste
+         cuyo número en ruta es n+1 (numero_en_ruta real, no la posición
+         física en el DataFrame) — incluyendo el caso de armado único y el
+         caso de ambos armados con 7, que en la versión anterior duplicaban
+         el tiro adelante sin mirar el poste siguiente.
+
+    Ajusta in-place las columnas de tiro adelante y tiro atrás dentro de
+    est_v_max, tratando por separado:
+      - Circuito primario  → columnas cuyo nivel 0 termina en "1"
+        (Conductor Principal1, Guarda1, Neutro1, Cable1, ...), ajustadas
+        según prim1 / prim2.
+      - Circuito secundario → columnas cuyo nivel 0 termina en "2"
+        (Conductor Principal2, Guarda2, Neutro2, Cable2, ...), ajustadas
+        según sec1 / sec2.
+
+    Parámetros
+    ----------
+    est_v_max      : pd.DataFrame con MultiIndex en columnas.
+    prim1, prim2   : pd.Series — armados primarios del poste (Primario1/2).
+    sec1, sec2     : pd.Series — armados secundarios del poste (Secundario1/2).
+    numero_en_ruta : pd.Series — número del poste en su ruta (0 = inicio de
+                     tramo; se usa para ubicar al verdadero vecino n+1/n-1
+                     en vez de asumir que es la fila física siguiente).
+
+    Retorna
+    -------
+    pd.DataFrame — est_v_max con las columnas de tiro modificadas.
+
+    Reglas (aplicadas igual para primario y secundario, cada uno con sus
+    propias series de armado)
+    ------------------------------------------------------------------
+    Tiro atrás  del poste i *= 2  si el poste i tiene algún armado con
+        primer dígito '7' (a1 o a2). No depende de los vecinos.
+
+    Tiro adelante del poste i *= 2  ÚNICAMENTE si el poste cuyo número en
+        ruta es numero_en_ruta[i] + 1 también tiene algún armado con primer
+        dígito '7'. Si ese poste n+1 no existe (fin de tramo o fin de la
+        tabla) o no tiene armado 7, el tiro adelante NO se duplica —
+        incluso si el poste actual tiene uno o los dos armados en 7.
+    """
+
+    COL_AT = "Tiro Atrás (kg-f)"
+    COL_AD = "Tiro Adelante (kg-f)"
+
+    # Columnas de tiro separadas por circuito: nivel 0 terminado en "1" o "2"
+    cols_at_1 = [c for c in est_v_max.columns if c[1] == COL_AT and str(c[0]).endswith("1")]
+    cols_ad_1 = [c for c in est_v_max.columns if c[1] == COL_AD and str(c[0]).endswith("1")]
+    cols_at_2 = [c for c in est_v_max.columns if c[1] == COL_AT and str(c[0]).endswith("2")]
+    cols_ad_2 = [c for c in est_v_max.columns if c[1] == COL_AD and str(c[0]).endswith("2")]
+
+    if not (cols_at_1 or cols_ad_1 or cols_at_2 or cols_ad_2):
+        raise ValueError(
+            f"No se encontraron columnas con nivel 1 == '{COL_AT}' o '{COL_AD}' "
+            f"en est_v_max. Verifica los nombres del MultiIndex."
+        )
+
+    # ── Circuito primario ─────────────────────────────────────────────────
+    factor_at_p, factor_ad_p = _factores_tiro_por_circuito(prim1, prim2, numero_en_ruta)
+    factor_at_p.index = est_v_max.index
+    factor_ad_p.index = est_v_max.index
+
+    for col in cols_at_1:
+        est_v_max[col] = est_v_max[col].astype(float) * factor_at_p
+    for col in cols_ad_1:
+        est_v_max[col] = est_v_max[col].astype(float) * factor_ad_p
+
+    # ── Circuito secundario ────────────────────────────────────────────────
+    factor_at_s, factor_ad_s = _factores_tiro_por_circuito(sec1, sec2, numero_en_ruta)
+    factor_at_s.index = est_v_max.index
+    factor_ad_s.index = est_v_max.index
+
+    for col in cols_at_2:
+        est_v_max[col] = est_v_max[col].astype(float) * factor_at_s
+    for col in cols_ad_2:
+        est_v_max[col] = est_v_max[col].astype(float) * factor_ad_s
+
+    return est_v_max
+
+
 def sumar_columnas_retenidas(
     est_v_max,
     grupo_columna="Estructura",
