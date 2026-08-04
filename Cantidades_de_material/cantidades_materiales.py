@@ -334,6 +334,132 @@ COLUMNAS_RETENIDA_DEFAULT = [
 ]
 
 
+COL_CONDUCTOR_PRINCIPAL1_DEFAULT = ("Conductor Principal1", "Tipo Conductor")
+COL_CONDUCTOR_PRINCIPAL2_DEFAULT = ("Conductor Principal2", "Tipo Conductor")
+
+# Valores que en la columna 'Tipo Conductor' significan "no aplica".
+_VALORES_VACIOS_CONDUCTOR = {"", "nan", "none", "-", "n/a", "na"}
+
+
+# =====================================================================
+#  3-ter. AJUSTE DE FASE (reemplazo del "" por el calibre del conductor)
+# =====================================================================
+#
+# Algunos materiales del catálogo (p.ej. "GRAPA DE RETENCION RECTA "" ")
+# tienen el texto literal "" en su nombre en lugar de un calibre concreto,
+# porque ese material depende del calibre del conductor de fase instalado
+# en el poste. Esta sección resuelve ese calibre a partir de la columna
+# 'Tipo Conductor' de la planilla y lo usa para reemplazar el "" cuando se
+# calculan las cantidades de material de cada armado.
+
+# Materiales de conductor reconocidos dentro del texto de 'Tipo Conductor'.
+MATERIALES_CONDUCTOR = ("AAAC", "ACSR")
+
+# Marcador literal que se reemplaza por el calibre dentro del nombre del
+# material, p.ej. 'GRAPA DE RETENCION RECTA "" ' -> 'GRAPA DE RETENCION RECTA 1/0 AWG'.
+MARCADOR_CALIBRE_FASE = '""'
+
+
+def extraer_calibre_conductor(tipo_conductor) -> Optional[str]:
+    """
+    Extrae el calibre de un texto de 'Tipo Conductor' (columnas
+    'Conductor Principal1'/'Conductor Principal2' de la planilla).
+
+    Se buscan los materiales conocidos (AAAC, ACSR) dentro del texto:
+
+      1. Si el material aparece justo al inicio del string, el calibre son
+         las siguientes 2 palabras que le siguen al material.
+             "AAAC 123,3 kcmil"  ->  "123,3 kcmil"
+             "ACSR 1/0 AWG"      ->  "1/0 AWG"
+
+      2. Si el material NO aparece al inicio, el calibre es el texto escrito
+         entre la última "x" antes del material y el material mismo. A ese
+         texto se le agrega la unidad: "AWG" si contiene "/", o "kcmil" si es
+         solo un número.
+             "SM34.5-3x1/0ACSR / Al7N8"        ->  "1/0 AWG"
+             'SM34.5-3x1/0ACSR / EHS 3/8"'     ->  "1/0 AWG"
+
+    Devuelve None si el valor está vacío/"-"/NaN, o si no se reconoce ningún
+    material dentro del texto (no se puede determinar el calibre).
+    """
+    if tipo_conductor is None:
+        return None
+    if isinstance(tipo_conductor, float) and np.isnan(tipo_conductor):
+        return None
+    s = str(tipo_conductor).strip()
+    if s == "" or s.lower() in _VALORES_VACIOS_CONDUCTOR:
+        return None
+
+    s_upper = s.upper()
+    idx_material = None
+    material = None
+    for mat in MATERIALES_CONDUCTOR:
+        idx = s_upper.find(mat)
+        if idx != -1 and (idx_material is None or idx < idx_material):
+            idx_material = idx
+            material = mat
+    if idx_material is None:
+        return None
+
+    if idx_material == 0:
+        # Caso 1: material al inicio -> calibre = las 2 palabras siguientes.
+        resto = s[len(material):].strip()
+        palabras = resto.split()
+        if not palabras:
+            return None
+        calibre = " ".join(palabras[:2]).strip()
+        return calibre or None
+
+    # Caso 2: material no está al inicio -> calibre = texto entre la última
+    # "x" antes del material y el material, más la unidad correspondiente.
+    antes = s[:idx_material]
+    pos_x = antes.lower().rfind("x")
+    if pos_x == -1:
+        return None
+    crudo = antes[pos_x + 1:].strip()
+    if not crudo:
+        return None
+    if "/" in crudo:
+        return f"{crudo} AWG"
+    return f"{crudo} kcmil"
+
+
+def _principal_para_tipo_armado(tipo_armado: str) -> Optional[int]:
+    """
+    Indica a qué conductor principal (1 o 2) se asocia un armado según su
+    columna de origen: los armados 'Primario1'/'Primario2' se asocian al
+    conductor de 'Conductor Principal1' y los 'Secundario1'/'Secundario2' al
+    de 'Conductor Principal2'. Devuelve None para cualquier otro tipo (p.ej.
+    retenidas), que no tienen conductor de fase asociado.
+    """
+    if not tipo_armado:
+        return None
+    t = str(tipo_armado).strip().lower()
+    if t.startswith("primario"):
+        return 1
+    if t.startswith("secundario"):
+        return 2
+    return None
+
+
+def ajustar_nombre_material_fase(nombre: str, calibre: Optional[str]) -> str:
+    """
+    Reemplaza el marcador "" dentro de `nombre` por `calibre`.
+
+    Si `nombre` no contiene el marcador, se devuelve sin cambios. Si lo
+    contiene pero `calibre` es None (no se pudo determinar el conductor de
+    fase), también se devuelve sin cambios, dejando el "" visible para que
+    quede en evidencia en la exportación.
+    """
+    if nombre is None or MARCADOR_CALIBRE_FASE not in nombre:
+        return nombre
+    if not isinstance(calibre, str) or not calibre.strip():
+        return nombre
+    ajustado = nombre.replace(MARCADOR_CALIBRE_FASE, calibre)
+    ajustado = re.sub(r"\s+", " ", ajustado).strip()
+    return ajustado
+
+
 def cargar_planilla(ruta: str) -> pd.DataFrame:
     """
     Lee una planilla de estructuras PlanillaEstTotal*.XLS con cabecera de dos
@@ -354,37 +480,58 @@ def extraer_armados_planilla(
     col_nombre: Tuple[str, str] = COL_NOMBRE_DEFAULT,
     col_nruta: Optional[Tuple[str, str]] = COL_NRUTA_DEFAULT,
     col_derivacion: Optional[Tuple[str, str]] = COL_DERIVACION_DEFAULT,
+    col_conductor_principal1: Optional[Tuple[str, str]] = COL_CONDUCTOR_PRINCIPAL1_DEFAULT,
+    col_conductor_principal2: Optional[Tuple[str, str]] = COL_CONDUCTOR_PRINCIPAL2_DEFAULT,
 ) -> pd.DataFrame:
     """
     Convierte la planilla (un poste por fila, hasta 4 armados por fila) en una
     tabla "larga" con un armado por fila:
 
-        nombre_poste | derivacion | n_est | tipo_armado | armado
+        nombre_poste | derivacion | n_est | tipo_armado | armado | calibre
 
     `tipo_armado` indica de qué columna provino (Primario1, Secundario1, ...),
     útil para auditar. Las celdas vacías se descartan.
+
+    `calibre` es el calibre del conductor de fase asociado a ese armado (ver
+    `extraer_calibre_conductor` y `ajustar_fase`), usado más adelante para
+    reemplazar el "" que aparece en algunos nombres de material del catálogo.
+    Los armados Primario1/Primario2 toman el calibre de 'Conductor Principal1'
+    y los armados Secundario1/Secundario2 el de 'Conductor Principal2'. Si el
+    conductor respectivo no tiene un valor reconocible, `calibre` queda en None.
     """
     registros: List[dict] = []
     for idx, fila in est_df.iterrows():
         nombre = fila.get(col_nombre, idx)
         derivacion = fila.get(col_derivacion) if col_derivacion else None
         n_est = fila.get(col_nruta) if col_nruta else None
+
+        calibre_p1 = (extraer_calibre_conductor(fila.get(col_conductor_principal1))
+                      if col_conductor_principal1 and col_conductor_principal1 in est_df.columns
+                      else None)
+        calibre_p2 = (extraer_calibre_conductor(fila.get(col_conductor_principal2))
+                      if col_conductor_principal2 and col_conductor_principal2 in est_df.columns
+                      else None)
+
         for col in columnas_armado:
             if col not in est_df.columns:
                 continue
             valor = fila.get(col)
             if pd.isna(valor) or str(valor).strip() == "":
                 continue
+            tipo_armado = col[1] if isinstance(col, tuple) else str(col)
+            principal = _principal_para_tipo_armado(tipo_armado)
+            calibre = calibre_p1 if principal == 1 else (calibre_p2 if principal == 2 else None)
             registros.append({
                 "nombre_poste": str(nombre).strip() if pd.notna(nombre) else "",
                 "derivacion": str(derivacion).strip() if pd.notna(derivacion) else "",
                 "n_est": n_est,
-                "tipo_armado": col[1] if isinstance(col, tuple) else str(col),
+                "tipo_armado": tipo_armado,
                 "armado": str(valor).strip(),
+                "calibre": calibre,
             })
     df = pd.DataFrame(registros,
                       columns=["nombre_poste", "derivacion", "n_est",
-                               "tipo_armado", "armado"])
+                               "tipo_armado", "armado", "calibre"])
     df["armado_norm"] = df["armado"].apply(normalizar_codigo_armado)
     return df
 
@@ -441,11 +588,14 @@ def extraer_retenidas_planilla(
                     "n_est": n_est,
                     "tipo_armado": codigo_armado,
                     "armado": codigo_armado,
+                    # Las retenidas no tienen un conductor de fase asociado, por
+                    # lo que no participan del ajuste de fase (ver `ajustar_fase`).
+                    "calibre": None,
                 })
 
     df = pd.DataFrame(registros,
                       columns=["nombre_poste", "derivacion", "n_est",
-                               "tipo_armado", "armado"])
+                               "tipo_armado", "armado", "calibre"])
     df["armado_norm"] = df["armado"].apply(normalizar_codigo_armado)
     return df
 
@@ -587,18 +737,38 @@ def calcular_cantidades(
       'totales'        -> codigo | material | unidad | cantidad_total
       'no_encontrados' -> armados cuyo núcleo no existe en el catálogo
       'detalle'        -> aporte de cada armado a cada material (trazabilidad)
+      'fase_sin_calibre' -> materiales con "" que no se pudieron ajustar por
+                            no haberse podido determinar el calibre del
+                            conductor del poste/armado correspondiente
+
+    Ajuste de fase
+    --------------
+    Si el nombre de un material contiene el marcador "" (ver `ajustar_fase`),
+    se reemplaza por el calibre del conductor de fase asociado a ese armado
+    (columna `calibre` de `armados_planilla`, ver `extraer_armados_planilla`).
+    Como el mismo código de material puede terminar representando nombres
+    distintos según el calibre de cada poste, los totales se acumulan por el
+    nombre YA ajustado (no por la clave interna del catálogo) para no mezclar
+    cantidades de calibres distintos bajo un mismo renglón.
     """
     # Índice nucleo -> clave_interna del catálogo (construido una sola vez)
     indice = _construir_indice_catalogo(catalogo)
 
     # Acumuladores
     totales: Dict[str, float] = {}
+    info_efectiva: Dict[str, dict] = {}
     detalle_rows: List[dict] = []
     faltantes: Dict[str, dict] = {}
+    sin_calibre: Dict[Tuple[str, str], dict] = {}
 
     for _, fila in armados_planilla.iterrows():
         armado_orig = fila["armado"]
         nucleo = fila["armado_norm"]          # ya es el núcleo alfanumérico
+        calibre = fila.get("calibre")
+        # Según el dtype de la columna (puede variar entre versiones de
+        # pandas), un calibre ausente puede llegar como None, NaN o <NA>.
+        if calibre is None or (not isinstance(calibre, str) and pd.isna(calibre)):
+            calibre = None
 
         clave_cat = indice.get(nucleo)
 
@@ -609,19 +779,44 @@ def calcular_cantidades(
             continue
 
         for clave_mat, mult in catalogo.materiales[clave_cat].items():
-            totales[clave_mat] = totales.get(clave_mat, 0.0) + mult
+            info_original = catalogo.info_material[clave_mat]
+            nombre_original = info_original["nombre"]
+            nombre_ajustado = ajustar_nombre_material_fase(nombre_original, calibre)
+
+            if nombre_ajustado != nombre_original:
+                clave_efectiva = f"{clave_mat}::FASE::{nombre_ajustado}"
+            elif MARCADOR_CALIBRE_FASE in nombre_original and not calibre:
+                # No se pudo determinar el calibre: se deja el "" visible y se
+                # registra para el reporte de advertencias.
+                clave_efectiva = clave_mat
+                info_sc = sin_calibre.setdefault(
+                    (fila["nombre_poste"], armado_orig),
+                    {"nombre_poste": fila["nombre_poste"], "armado": armado_orig,
+                     "material": nombre_original, "veces": 0})
+                info_sc["veces"] += 1
+            else:
+                clave_efectiva = clave_mat
+
+            if clave_efectiva not in info_efectiva:
+                info_efectiva[clave_efectiva] = {
+                    "codigo": info_original["codigo"],
+                    "nombre": nombre_ajustado,
+                    "unidad": info_original["unidad"],
+                }
+
+            totales[clave_efectiva] = totales.get(clave_efectiva, 0.0) + mult
             detalle_rows.append({
                 "nombre_poste": fila["nombre_poste"],
                 "armado": armado_orig,
-                "material": catalogo.info_material[clave_mat]["nombre"],
-                "codigo": catalogo.info_material[clave_mat]["codigo"],
+                "material": nombre_ajustado,
+                "codigo": info_original["codigo"],
                 "cantidad": mult,
             })
 
     # --- Tabla de totales ---
     filas_tot = []
-    for clave_mat, cant in totales.items():
-        info = catalogo.info_material[clave_mat]
+    for clave_efectiva, cant in totales.items():
+        info = info_efectiva[clave_efectiva]
         filas_tot.append({
             "codigo": info["codigo"],
             "material": info["nombre"],
@@ -643,8 +838,24 @@ def calcular_cantidades(
         detalle_rows,
         columns=["nombre_poste", "armado", "material", "codigo", "cantidad"])
 
+    # --- Tabla de ajustes de fase sin calibre resuelto ---
+    df_sin_calibre = pd.DataFrame(
+        list(sin_calibre.values()),
+        columns=["nombre_poste", "armado", "material", "veces"])
+    if len(df_sin_calibre):
+        df_sin_calibre = df_sin_calibre.sort_values(
+            ["nombre_poste", "armado"]).reset_index(drop=True)
+
     if verbose:
         print(f"[calculo] Materiales totales distintos: {len(df_totales)}")
+        if len(df_sin_calibre):
+            print(f"[calculo] ⚠ Materiales con \"\" sin calibre resuelto "
+                  f"({len(df_sin_calibre)}):")
+            for _, r in df_sin_calibre.iterrows():
+                print(f"          - poste={r['nombre_poste']!r} armado={r['armado']!r} "
+                      f"material={r['material']!r} (aparece {r['veces']} vez/veces)")
+            print("          Revisa el 'Tipo Conductor' del poste: no se reconoció "
+                  "ningún material (AAAC/ACSR).")
         if len(df_faltantes):
             print(f"[calculo] ⚠ Armados SIN correspondencia en el catálogo "
                   f"({len(df_faltantes)}):")
@@ -656,7 +867,8 @@ def calcular_cantidades(
 
     return {"totales": df_totales,
             "no_encontrados": df_faltantes,
-            "detalle": df_detalle}
+            "detalle": df_detalle,
+            "fase_sin_calibre": df_sin_calibre}
 
 
 # =====================================================================
@@ -673,6 +885,7 @@ def exportar_cantidades_excel(resultado: Dict[str, pd.DataFrame],
       Hoja 'Cantidades'          -> material y cantidad total (entregable principal)
       Hoja 'Tipos de Soporte'    -> cantidad total de postes por tipo de soporte
       Hoja 'Armados no hallados' -> trazabilidad de lo que no se pudo mapear
+      Hoja 'Fase sin calibre' (si aplica) -> materiales con "" sin calibre resuelto
       Hoja 'Detalle' (opcional)  -> aporte poste×armado×material
 
     Devuelve la ruta del archivo escrito.
@@ -691,6 +904,10 @@ def exportar_cantidades_excel(resultado: Dict[str, pd.DataFrame],
     if df_tipos is not None and len(df_tipos):
         df_tipos = df_tipos.copy()
         df_tipos.columns = ["Tipo Soporte", "Cantidad"]
+    df_fase_sc = resultado.get("fase_sin_calibre")
+    if df_fase_sc is not None and len(df_fase_sc):
+        df_fase_sc = df_fase_sc.copy()
+        df_fase_sc.columns = ["Poste", "Armado", "Material", "Veces"]
 
     with pd.ExcelWriter(ruta_salida, engine="openpyxl") as writer:
         df_tot.to_excel(writer, sheet_name="Cantidades", index=False)
@@ -701,6 +918,8 @@ def exportar_cantidades_excel(resultado: Dict[str, pd.DataFrame],
         else:
             pd.DataFrame({"Estado": ["Todos los armados fueron encontrados ✅"]}) \
                 .to_excel(writer, sheet_name="Armados no hallados", index=False)
+        if df_fase_sc is not None and len(df_fase_sc):
+            df_fase_sc.to_excel(writer, sheet_name="Fase sin calibre", index=False)
         if incluir_detalle and len(resultado.get("detalle", [])):
             det = resultado["detalle"].copy()
             det.columns = ["Poste", "Armado", "Material", "Código", "Cantidad"]
@@ -747,6 +966,8 @@ def generar_cantidades_materiales(
     columnas_armado: Sequence[Tuple[str, str]] = COLUMNAS_ARMADO_DEFAULT,
     columnas_retenida: Sequence[Tuple[str, str]] = COLUMNAS_RETENIDA_DEFAULT,
     col_tipo_soporte: Tuple[str, str] = COL_TIPO_SOPORTE_DEFAULT,
+    col_conductor_principal1: Optional[Tuple[str, str]] = COL_CONDUCTOR_PRINCIPAL1_DEFAULT,
+    col_conductor_principal2: Optional[Tuple[str, str]] = COL_CONDUCTOR_PRINCIPAL2_DEFAULT,
     incluir_retenidas: bool = True,
     ruta_salida: str = "Cantidades_totales_proyecto.xlsx",
     incluir_detalle: bool = True,
@@ -766,6 +987,11 @@ def generar_cantidades_materiales(
     col_tipo_soporte : tupla
         Columna (multi-índice) con el tipo de soporte/poste, usada para el
         conteo de postes por tipo (hoja 'Tipos de Soporte' en la salida).
+    col_conductor_principal1 / col_conductor_principal2 : tuplas
+        Columnas 'Tipo Conductor' de 'Conductor Principal1'/'Conductor
+        Principal2', usadas para el ajuste de fase (reemplazo del "" en
+        nombres de material por el calibre real del conductor de cada
+        poste/armado). Ver `extraer_calibre_conductor` y `ajustar_fase`.
     columnas_retenida : lista de tuplas
         Columnas RT00X (retenidas) a incluir en el cálculo de materiales.
     incluir_retenidas : bool
@@ -774,7 +1000,7 @@ def generar_cantidades_materiales(
 
     Devuelve un dict con las claves:
         'catalogo', 'armados', 'retenidas', 'totales', 'no_encontrados',
-        'detalle', 'tipos_soporte', 'ruta_salida'
+        'detalle', 'fase_sin_calibre', 'tipos_soporte', 'ruta_salida'
     """
     etapa = "inicio"
     try:
@@ -784,7 +1010,10 @@ def generar_cantidades_materiales(
 
         # --- Etapa 2: extraer armados del DataFrame ya en memoria ---
         etapa = "extracción de armados"
-        armados = extraer_armados_planilla(est_df, columnas_armado=columnas_armado)
+        armados = extraer_armados_planilla(
+            est_df, columnas_armado=columnas_armado,
+            col_conductor_principal1=col_conductor_principal1,
+            col_conductor_principal2=col_conductor_principal2)
         if verbose:
             print(f"[planilla] {armados['nombre_poste'].nunique()} postes, "
                   f"{len(armados)} armados instalados en total.")
@@ -792,7 +1021,7 @@ def generar_cantidades_materiales(
         # --- Etapa 2-bis: extraer retenidas (RT00X) y unirlas a los armados ---
         retenidas = pd.DataFrame(
             columns=["nombre_poste", "derivacion", "n_est",
-                     "tipo_armado", "armado", "armado_norm"])
+                     "tipo_armado", "armado", "calibre", "armado_norm"])
         if incluir_retenidas:
             etapa = "extracción de retenidas"
             retenidas = extraer_retenidas_planilla(est_df, columnas_retenida=columnas_retenida)
@@ -826,6 +1055,7 @@ def generar_cantidades_materiales(
         "totales": resultado["totales"],
         "no_encontrados": resultado["no_encontrados"],
         "detalle": resultado["detalle"],
+        "fase_sin_calibre": resultado["fase_sin_calibre"],
         "tipos_soporte": resultado["tipos_soporte"],
         "ruta_salida": ruta_salida,
     }
