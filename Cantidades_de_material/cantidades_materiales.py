@@ -39,12 +39,22 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 import unicodedata
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
+
+# zona_contaminacion.py debe estar en la misma carpeta que este módulo (o en
+# el PYTHONPATH) para poder determinar el nivel de contaminación de la línea
+# a partir de las coordenadas de los postes. Se importa de forma perezosa
+# (dentro de las funciones que lo usan) para no romper el resto del módulo si
+# faltan sus dependencias (Pillow, scipy) o el archivo mapa_contaminacion.png.
+_DIR_MODULO = os.path.dirname(os.path.abspath(__file__))
+if _DIR_MODULO not in sys.path:
+    sys.path.append(_DIR_MODULO)
 
 
 # =====================================================================
@@ -302,6 +312,126 @@ def cargar_catalogo(ruta: str,
 
 
 # =====================================================================
+#  2-bis. NIVEL DE CONTAMINACIÓN DE LA LÍNEA (a partir de la 1ª coordenada)
+# =====================================================================
+#
+# El nivel de contaminación ("Alto" = altamente contaminado / "Normal" = baja
+# contaminación) se determina UNA sola vez para todo el proyecto/línea, a
+# partir de la coordenada del primer poste válido de la planilla (columnas
+# 'Topografía' -> 'X'/'Y'), usando el mapa de zona_contaminacion.py (región
+# Caribe de Colombia). Ese único nivel se aplica luego a todos los postes del
+# proyecto para decidir el aislador (ver sección 3-quater).
+#
+# Las coordenadas de la planilla ('Topografía' X/Y) están en un sistema de
+# referencia PROYECTADO (no son lat/lon), por lo que hay que transformarlas
+# antes de poder consultar el mapa de contaminación. Por defecto se asume
+# MAGNA-SIRGAS / UTM zona 18N (EPSG:32618), que es razonable para la costa
+# Caribe (Atlántico, Magdalena, Cesar, Guajira, Bolívar, Sucre, Córdoba), pero
+# **debe verificarse contra el CRS real del proyecto** y ajustarse con el
+# parámetro `epsg_planilla` si no corresponde (p.ej. otra franja UTM o un
+# sistema MAGNA-SIRGAS de origen específico).
+
+COL_TOPO_X_DEFAULT = ("Topografía", "X")
+COL_TOPO_Y_DEFAULT = ("Topografía", "Y")
+
+# CRS de las coordenadas de la planilla. AJUSTAR si el proyecto usa otro
+# sistema (ver advertencia arriba).
+EPSG_PLANILLA_DEFAULT = "EPSG:32618"  # MAGNA-SIRGAS / UTM zona 18N
+
+_TRANSFORMER_CACHE: Dict[str, object] = {}
+
+
+def _obtener_transformador(epsg_origen: str):
+    """Crea (una sola vez, con caché) el transformador epsg_origen -> lat/lon."""
+    if epsg_origen not in _TRANSFORMER_CACHE:
+        try:
+            from pyproj import Transformer
+        except ImportError as e:
+            raise ImportError(
+                "Se requiere el paquete 'pyproj' para convertir las coordenadas "
+                "de la planilla (proyectadas) a lat/lon. Instálalo con "
+                "`pip install pyproj`."
+            ) from e
+        _TRANSFORMER_CACHE[epsg_origen] = Transformer.from_crs(
+            epsg_origen, "EPSG:4326", always_xy=True)
+    return _TRANSFORMER_CACHE[epsg_origen]
+
+
+def coordenadas_planilla_a_latlon(
+    x: float, y: float, epsg_origen: str = EPSG_PLANILLA_DEFAULT
+) -> Tuple[float, float]:
+    """
+    Convierte una coordenada (x, y) de la planilla (CRS proyectado) a
+    (lat, lon) en WGS84, para poder consultarla en zona_contaminacion.py.
+    """
+    transformador = _obtener_transformador(epsg_origen)
+    lon, lat = transformador.transform(x, y)
+    return float(lat), float(lon)
+
+
+def determinar_nivel_contaminacion_linea(
+    est_df: pd.DataFrame,
+    col_x: Tuple[str, str] = COL_TOPO_X_DEFAULT,
+    col_y: Tuple[str, str] = COL_TOPO_Y_DEFAULT,
+    epsg_origen: str = EPSG_PLANILLA_DEFAULT,
+    verbose: bool = True,
+) -> dict:
+    """
+    Determina el nivel de contaminación de TODA la línea/proyecto, a partir de
+    la coordenada del primer poste de la planilla con X/Y válidos.
+
+    Devuelve un dict con:
+        nivel            : 'Alto', 'Normal' o None si no se pudo determinar
+        lat, lon          : coordenada usada (ya convertida a WGS84)
+        x, y              : coordenada original de la planilla
+        mensaje           : explicación cuando nivel es None
+    """
+    import zona_contaminacion as zc
+
+    resultado = {"nivel": None, "lat": None, "lon": None, "x": None, "y": None,
+                 "mensaje": None}
+
+    if col_x not in est_df.columns or col_y not in est_df.columns:
+        resultado["mensaje"] = (
+            f"No se encontraron las columnas de coordenadas {col_x!r}/{col_y!r} "
+            "en la planilla."
+        )
+        if verbose:
+            print(f"[contaminacion] AVISO: {resultado['mensaje']}")
+        return resultado
+
+    fila_valida = None
+    for _, fila in est_df.iterrows():
+        x, y = fila.get(col_x), fila.get(col_y)
+        if pd.notna(x) and pd.notna(y):
+            fila_valida = (float(x), float(y))
+            break
+
+    if fila_valida is None:
+        resultado["mensaje"] = "Ningún poste de la planilla tiene coordenadas X/Y válidas."
+        if verbose:
+            print(f"[contaminacion] AVISO: {resultado['mensaje']}")
+        return resultado
+
+    x, y = fila_valida
+    lat, lon = coordenadas_planilla_a_latlon(x, y, epsg_origen=epsg_origen)
+    r = zc.obtener_nivel_contaminacion(lat, lon)
+
+    resultado.update({"nivel": r["nivel"], "lat": lat, "lon": lon, "x": x, "y": y,
+                       "mensaje": r.get("mensaje")})
+
+    if verbose:
+        if r["nivel"] is None:
+            print(f"[contaminacion] No se pudo determinar el nivel: {r.get('mensaje')}")
+        else:
+            print(f"[contaminacion] Nivel de contaminación de la línea: {r['nivel']} "
+                  f"(1er poste -> lat={lat:.4f}, lon={lon:.4f}, "
+                  f"confianza={r.get('confianza')})")
+
+    return resultado
+
+
+# =====================================================================
 #  3. EXTRACCIÓN DE LOS ARMADOS DE CADA POSTE EN LA PLANILLA
 # =====================================================================
 
@@ -424,6 +554,184 @@ def extraer_calibre_conductor(tipo_conductor) -> Optional[str]:
     return f"{crudo} kcmil"
 
 
+# =====================================================================
+#  3-quater. SELECCIÓN DE AISLADOR (contaminación + nivel de aislamiento +
+#            tipo de conductor)
+# =====================================================================
+#
+# Reglas de selección (confirmadas con el usuario):
+#
+#   1) Tipo de conductor (forrado / desnudo), por código de armado:
+#        - "MTF..." (tiene F después de MT)  -> conductor FORRADO
+#        - "MT..."  (sin F después de MT)    -> conductor DESNUDO
+#      Esta verificación se hace de forma independiente para el conductor
+#      Principal1 (armados Primario1/Primario2) y Principal2 (armados
+#      Secundario1/Secundario2): es posible tener, por ejemplo, Principal1
+#      forrado (MTF) y Principal2 desnudo (MT) en el mismo poste.
+#
+#   2) Nivel de aislamiento (13.2 kV o 34.5 kV): lo indica el último dígito
+#      del código de armado (después del guion), ya diferenciado en la
+#      planilla:
+#        - termina en 1  ->  13.2 kV
+#        - termina en 2  ->  34.5 kV
+#
+#   3) Aislador a usar:
+#        - Conductor DESNUDO -> siempre "AISLADOR PORCELANA TIPO POSTE X kV"
+#          (X = 13.2 o 34.5 según el nivel de aislamiento), sin importar la
+#          contaminación.
+#        - Conductor FORRADO -> depende de la contaminación de la línea
+#          (determinada una sola vez para todo el proyecto, ver
+#          `determinar_nivel_contaminacion_linea`):
+#            * Contaminación NORMAL (baja)  -> AISLADOR PORCELANA TIPO POSTE X kV
+#            * Contaminación ALTA           -> AISLADOR COMPUESTO HIBRIDO 13,2 kV
+#                                               (si nivel = 13.2 kV), o
+#                                               AISLADOR LINEPOST 66KV 1143mm
+#                                               (ANSI 57-5) (si nivel = 34.5 kV)
+
+# Regex para extraer el sufijo numérico final de un código de armado, p.ej.
+# "MTF635-1 (S)" -> "1", "MT331-2" -> "2".
+_RE_SUFIJO_ARMADO = re.compile(r"-(\d+)\s*(?:\(.*\))?\s*$")
+
+
+def es_conductor_forrado(codigo_armado) -> Optional[bool]:
+    """
+    Indica si el conductor asociado a un código de armado es forrado o
+    desnudo, según el prefijo del código:
+
+        "MTF..."  ->  True   (forrado)
+        "MT..."   ->  False  (desnudo, sin F después de MT)
+
+    Devuelve None si el código no tiene ese prefijo (p.ej. una retenida
+    "RT00X", donde el concepto de forrado/desnudo no aplica).
+
+    >>> es_conductor_forrado("MTF635-1 (S)")
+    True
+    >>> es_conductor_forrado("MT331-2")
+    False
+    >>> es_conductor_forrado("RT003")
+    """
+    if codigo_armado is None:
+        return None
+    s = str(codigo_armado).strip().upper()
+    if s.startswith("MTF"):
+        return True
+    if s.startswith("MT"):
+        return False
+    return None
+
+
+def nivel_aislamiento_armado(codigo_armado) -> Optional[str]:
+    """
+    Devuelve el nivel de aislamiento ('13.2' o '34.5', en kV) según el último
+    dígito del código de armado (el que sigue al guion):
+
+        termina en 1  ->  '13.2'
+        termina en 2  ->  '34.5'
+
+    Devuelve None si no se reconoce un sufijo numérico terminado en 1 o 2.
+
+    >>> nivel_aislamiento_armado("MTF731-1")
+    '13.2'
+    >>> nivel_aislamiento_armado("MT331-2")
+    '34.5'
+    """
+    if codigo_armado is None:
+        return None
+    s = str(codigo_armado).strip()
+    m = _RE_SUFIJO_ARMADO.search(s)
+    if not m:
+        return None
+    ultimo_digito = m.group(1)[-1]
+    if ultimo_digito == "1":
+        return "13.2"
+    if ultimo_digito == "2":
+        return "34.5"
+    return None
+
+
+def determinar_aislador(
+    forrado: Optional[bool],
+    nivel_kv: Optional[str],
+    nivel_contaminacion: Optional[str],
+) -> Optional[str]:
+    """
+    Determina el aislador a usar para un armado, según:
+
+        forrado             : True (forrado) / False (desnudo) / None (n/a)
+        nivel_kv            : '13.2' o '34.5' (ver `nivel_aislamiento_armado`)
+        nivel_contaminacion : 'Alto' o 'Normal' (ver
+                               `determinar_nivel_contaminacion_linea`), solo
+                               relevante si el conductor es forrado.
+
+    Devuelve None si falta información suficiente para decidir (p.ej. no se
+    reconoció el nivel de aislamiento, o -siendo forrado- no se pudo
+    determinar la contaminación de la línea).
+    """
+    if forrado is None or nivel_kv is None:
+        return None
+
+    if forrado is False:
+        # Conductor desnudo: siempre porcelana tipo poste, del nivel que
+        # corresponda, sin importar la contaminación.
+        return f"AISLADOR PORCELANA TIPO POSTE {nivel_kv} kV"
+
+    # Conductor forrado: depende de la contaminación de la línea.
+    if nivel_contaminacion == "Normal":
+        return f"AISLADOR PORCELANA TIPO POSTE {nivel_kv} kV"
+    if nivel_contaminacion == "Alto":
+        if nivel_kv == "13.2":
+            return "AISLADOR COMPUESTO HIBRIDO 13,2 kV"
+        if nivel_kv == "34.5":
+            return "AISLADOR LINEPOST 66KV 1143mm (ANSI 57-5)"
+        return None
+    return None
+
+
+# Familias de aislador "alternativas" que aparecen en el catálogo para un
+# mismo armado (p.ej. la hoja "AFINIAAIR-E (Forradas - 13,2 kV" trae, para el
+# mismo armado, tanto "AISLADOR PORCELANA TIPO POSTE 13,2 kV (ANSI-57-1)"
+# como "AISLADOR COMPUESTO HIBRIDO 13,2 kV.", cada una con su propia
+# cantidad). El catálogo NO decide cuál de las dos corresponde: eso lo decide
+# `determinar_aislador` según la contaminación. `_familia_aislador` permite
+# reconocer, tanto en el nombre de un material del catálogo como en el
+# resultado de `determinar_aislador`, a cuál de esas familias pertenece, para
+# poder quedarnos únicamente con la fila que aplica y descartar la(s) otra(s).
+#
+# IMPORTANTE: al revisar Cantidades_de_postes.xlsx, el catálogo NO tiene
+# ningún renglón "AISLADOR LINEPOST 66KV..." (ni en las hojas de 34,5 kV
+# forradas ni en las desnudas): solo existe la alternativa PORCELANA para
+# 34,5 kV. Es decir, hoy no hay forma de cuantificar el caso "forrado + alta
+# contaminación + 34,5 kV" con este catálogo. El código lo señala en el
+# reporte 'aislador_sin_correspondencia' en vez de inventar una cantidad;
+# hay que agregar esa fila al catálogo (con su cantidad por armado) para que
+# se pueda calcular.
+_FAMILIAS_AISLADOR = {
+    "PORCELANA": "aislador porcelana tipo poste",
+    "COMPUESTO_HIBRIDO": "aislador compuesto hibrido",
+    "LINEPOST": "aislador linepost",
+}
+
+
+def _familia_aislador(nombre: Optional[str]) -> Optional[str]:
+    """
+    Clasifica un nombre de material (del catálogo) o un aislador ya
+    determinado (ver `determinar_aislador`) en una de las familias
+    'PORCELANA' / 'COMPUESTO_HIBRIDO' / 'LINEPOST'.
+
+    Devuelve None si el nombre no corresponde a ninguna de estas familias
+    (p.ej. "AISLADOR PIN PARA RED FORRADA" o "AISLADOR COMPUESTO TIPO
+    SUSPENSION ANSI DS 15 70 kN", que son materiales fijos que no dependen de
+    la contaminación y por lo tanto no se filtran).
+    """
+    if not nombre:
+        return None
+    nombre_norm = _normalizar_texto(nombre)
+    for familia, patron in _FAMILIAS_AISLADOR.items():
+        if patron in nombre_norm:
+            return familia
+    return None
+
+
 def _principal_para_tipo_armado(tipo_armado: str) -> Optional[int]:
     """
     Indica a qué conductor principal (1 o 2) se asocia un armado según su
@@ -482,12 +790,13 @@ def extraer_armados_planilla(
     col_derivacion: Optional[Tuple[str, str]] = COL_DERIVACION_DEFAULT,
     col_conductor_principal1: Optional[Tuple[str, str]] = COL_CONDUCTOR_PRINCIPAL1_DEFAULT,
     col_conductor_principal2: Optional[Tuple[str, str]] = COL_CONDUCTOR_PRINCIPAL2_DEFAULT,
+    nivel_contaminacion: Optional[str] = None,
 ) -> pd.DataFrame:
     """
     Convierte la planilla (un poste por fila, hasta 4 armados por fila) en una
     tabla "larga" con un armado por fila:
 
-        nombre_poste | derivacion | n_est | tipo_armado | armado | calibre
+        nombre_poste | derivacion | n_est | tipo_armado | armado | calibre | aislador
 
     `tipo_armado` indica de qué columna provino (Primario1, Secundario1, ...),
     útil para auditar. Las celdas vacías se descartan.
@@ -498,6 +807,14 @@ def extraer_armados_planilla(
     Los armados Primario1/Primario2 toman el calibre de 'Conductor Principal1'
     y los armados Secundario1/Secundario2 el de 'Conductor Principal2'. Si el
     conductor respectivo no tiene un valor reconocible, `calibre` queda en None.
+
+    `aislador` es el aislador que corresponde a ese armado según el tipo de
+    conductor (forrado/desnudo, deducido del propio código de armado), el
+    nivel de aislamiento (13.2/34.5 kV, también deducido del código de
+    armado) y `nivel_contaminacion` ('Alto'/'Normal', el mismo para toda la
+    línea, ver `determinar_nivel_contaminacion_linea`). Ver `determinar_aislador`.
+    Queda en None para armados donde no aplica o no se pudo determinar
+    (p.ej. retenidas, o códigos sin el prefijo MT/MTF reconocido).
     """
     registros: List[dict] = []
     for idx, fila in est_df.iterrows():
@@ -521,17 +838,24 @@ def extraer_armados_planilla(
             tipo_armado = col[1] if isinstance(col, tuple) else str(col)
             principal = _principal_para_tipo_armado(tipo_armado)
             calibre = calibre_p1 if principal == 1 else (calibre_p2 if principal == 2 else None)
+
+            codigo_armado = str(valor).strip()
+            forrado = es_conductor_forrado(codigo_armado)
+            nivel_kv = nivel_aislamiento_armado(codigo_armado)
+            aislador = determinar_aislador(forrado, nivel_kv, nivel_contaminacion)
+
             registros.append({
                 "nombre_poste": str(nombre).strip() if pd.notna(nombre) else "",
                 "derivacion": str(derivacion).strip() if pd.notna(derivacion) else "",
                 "n_est": n_est,
                 "tipo_armado": tipo_armado,
-                "armado": str(valor).strip(),
+                "armado": codigo_armado,
                 "calibre": calibre,
+                "aislador": aislador,
             })
     df = pd.DataFrame(registros,
                       columns=["nombre_poste", "derivacion", "n_est",
-                               "tipo_armado", "armado", "calibre"])
+                               "tipo_armado", "armado", "calibre", "aislador"])
     df["armado_norm"] = df["armado"].apply(normalizar_codigo_armado)
     return df
 
@@ -589,13 +913,15 @@ def extraer_retenidas_planilla(
                     "tipo_armado": codigo_armado,
                     "armado": codigo_armado,
                     # Las retenidas no tienen un conductor de fase asociado, por
-                    # lo que no participan del ajuste de fase (ver `ajustar_fase`).
+                    # lo que no participan del ajuste de fase (ver `ajustar_fase`)
+                    # ni de la selección de aislador (ver `determinar_aislador`).
                     "calibre": None,
+                    "aislador": None,
                 })
 
     df = pd.DataFrame(registros,
                       columns=["nombre_poste", "derivacion", "n_est",
-                               "tipo_armado", "armado", "calibre"])
+                               "tipo_armado", "armado", "calibre", "aislador"])
     df["armado_norm"] = df["armado"].apply(normalizar_codigo_armado)
     return df
 
@@ -732,14 +1058,21 @@ def calcular_cantidades(
     sus letras y números coinciden. Así "MTF331-1", "MTF 331-1", "MTF_331_1"
     y "MTF331-1 (2)" apuntan todos al mismo armado del catálogo.
 
-    Devuelve un diccionario con tres DataFrames:
+    Devuelve un diccionario con DataFrames:
 
-      'totales'        -> codigo | material | unidad | cantidad_total
-      'no_encontrados' -> armados cuyo núcleo no existe en el catálogo
-      'detalle'        -> aporte de cada armado a cada material (trazabilidad)
-      'fase_sin_calibre' -> materiales con "" que no se pudieron ajustar por
-                            no haberse podido determinar el calibre del
-                            conductor del poste/armado correspondiente
+      'totales'                    -> codigo | material | unidad | cantidad_total
+      'no_encontrados'             -> armados cuyo núcleo no existe en el catálogo
+      'detalle'                    -> aporte de cada armado a cada material (trazabilidad)
+      'fase_sin_calibre'           -> materiales con "" que no se pudieron ajustar por
+                                       no haberse podido determinar el calibre del
+                                       conductor del poste/armado correspondiente
+      'aislador_sin_determinar'    -> armados MT/MTF donde no se pudo decidir qué
+                                       aislador corresponde (falta nivel de
+                                       aislamiento reconocible o nivel de
+                                       contaminación de la línea)
+      'aislador_sin_correspondencia' -> armados donde SÍ se determinó el aislador
+                                       a usar, pero el catálogo no tiene ese
+                                       renglón para ese armado (ver más abajo)
 
     Ajuste de fase
     --------------
@@ -750,6 +1083,27 @@ def calcular_cantidades(
     distintos según el calibre de cada poste, los totales se acumulan por el
     nombre YA ajustado (no por la clave interna del catálogo) para no mezclar
     cantidades de calibres distintos bajo un mismo renglón.
+
+    Selección de aislador (filtrado, NO se suma aparte)
+    ----------------------------------------------------
+    El catálogo (Cantidades_de_postes.xlsx) trae, para un mismo armado, más
+    de un renglón de aislador "alternativo" con su propia cantidad (p.ej. las
+    hojas "AFINIAAIR-E (Forradas/Desnudas - 13,2 kV" traen tanto "AISLADOR
+    PORCELANA TIPO POSTE 13,2 kV (ANSI-57-1)" como "AISLADOR COMPUESTO
+    HIBRIDO 13,2 kV.", cada una con su propia cantidad para ese armado). El
+    aislador NO se suma aparte: se recorre el catálogo igual que cualquier
+    otro material, pero cuando un renglón pertenece a una de las familias de
+    aislador "alternativas" (ver `_familia_aislador`), solo se incluye si su
+    familia coincide con el aislador determinado para ese armado (columna
+    `aislador` de `armados_planilla`, ver `determinar_aislador`); si no
+    coincide, se descarta esa fila para ese armado. Los demás materiales del
+    armado (crucetas, grapas, pines, etc.) se incluyen siempre, sin filtrar.
+
+    Si el aislador determinado no tiene NINGÚN renglón correspondiente en el
+    catálogo para ese armado (p.ej. hoy el catálogo no trae ningún "AISLADOR
+    LINEPOST 66KV..." para la combinación forrado + alta contaminación +
+    34,5 kV), el armado queda sin ese material y se reporta en
+    'aislador_sin_correspondencia' en vez de inventar una cantidad.
     """
     # Índice nucleo -> clave_interna del catálogo (construido una sola vez)
     indice = _construir_indice_catalogo(catalogo)
@@ -760,6 +1114,8 @@ def calcular_cantidades(
     detalle_rows: List[dict] = []
     faltantes: Dict[str, dict] = {}
     sin_calibre: Dict[Tuple[str, str], dict] = {}
+    aislador_sin_determinar: Dict[str, dict] = {}
+    aislador_sin_correspondencia: Dict[Tuple[str, str], dict] = {}
 
     for _, fila in armados_planilla.iterrows():
         armado_orig = fila["armado"]
@@ -770,6 +1126,19 @@ def calcular_cantidades(
         if calibre is None or (not isinstance(calibre, str) and pd.isna(calibre)):
             calibre = None
 
+        # --- Aislador determinado para este armado (ver determinar_aislador) ---
+        aislador_val = fila.get("aislador")
+        if aislador_val is None or (not isinstance(aislador_val, str) and pd.isna(aislador_val)):
+            aislador_val = None
+        familia_aislador_esperada = _familia_aislador(aislador_val) if aislador_val else None
+        if aislador_val is None and es_conductor_forrado(armado_orig) is not None:
+            # Es un armado tipo MT/MTF (aplica selección de aislador) pero no
+            # se pudo determinar (falta nivel de aislamiento reconocible o
+            # falta el nivel de contaminación de la línea).
+            info_ad = aislador_sin_determinar.setdefault(
+                armado_orig, {"armado": armado_orig, "veces": 0})
+            info_ad["veces"] += 1
+
         clave_cat = indice.get(nucleo)
 
         if clave_cat is None:
@@ -778,9 +1147,28 @@ def calcular_cantidades(
             info["veces"] += 1
             continue
 
+        familia_incluida = False
+        familias_presentes_armado = set()
         for clave_mat, mult in catalogo.materiales[clave_cat].items():
             info_original = catalogo.info_material[clave_mat]
             nombre_original = info_original["nombre"]
+
+            # --- Filtro de aislador: descartar la(s) alternativa(s) que no
+            # correspondan al aislador determinado para este armado ---
+            familia_material = _familia_aislador(nombre_original)
+            if familia_material is not None:
+                # Se registra que el catálogo SÍ modela una alternativa de
+                # aislador para este armado (con cantidad > 0, ya que
+                # `cargar_catalogo` descarta los multiplicadores en 0), sin
+                # importar si es la que corresponde o no. Sirve para no
+                # advertir "sin correspondencia" cuando el armado
+                # sencillamente no lleva ninguna de estas alternativas (p.ej.
+                # porque usa un aislador tipo pin fijo en su lugar).
+                familias_presentes_armado.add(familia_material)
+                if familia_material != familia_aislador_esperada:
+                    continue
+                familia_incluida = True
+
             nombre_ajustado = ajustar_nombre_material_fase(nombre_original, calibre)
 
             if nombre_ajustado != nombre_original:
@@ -812,6 +1200,21 @@ def calcular_cantidades(
                 "codigo": info_original["codigo"],
                 "cantidad": mult,
             })
+
+        if (familia_aislador_esperada is not None and not familia_incluida
+                and familias_presentes_armado):
+            # El catálogo SÍ modela alguna alternativa de aislador para este
+            # armado (con cantidad > 0), pero no la que corresponde según la
+            # contaminación/nivel de aislamiento determinados (ver docstring:
+            # hoy pasa con "forrado + alta contaminación + 34,5 kV" ->
+            # LINEPOST, que no existe en Cantidades_de_postes.xlsx). Si el
+            # catálogo no modela NINGUNA alternativa para este armado (p.ej.
+            # porque usa un aislador tipo pin fijo en su lugar), no se
+            # reporta nada: es un caso legítimo, no un dato faltante.
+            info_sc2 = aislador_sin_correspondencia.setdefault(
+                (armado_orig, aislador_val),
+                {"armado": armado_orig, "aislador_esperado": aislador_val, "veces": 0})
+            info_sc2["veces"] += 1
 
     # --- Tabla de totales ---
     filas_tot = []
@@ -846,8 +1249,38 @@ def calcular_cantidades(
         df_sin_calibre = df_sin_calibre.sort_values(
             ["nombre_poste", "armado"]).reset_index(drop=True)
 
+    # --- Tabla de aisladores sin determinar (falta info para decidir) ---
+    df_aislador_sin_det = pd.DataFrame(
+        list(aislador_sin_determinar.values()),
+        columns=["armado", "veces"])
+    if len(df_aislador_sin_det):
+        df_aislador_sin_det = df_aislador_sin_det.sort_values("armado").reset_index(drop=True)
+
+    # --- Tabla de aisladores sin correspondencia en el catálogo ---
+    df_aislador_sin_corr = pd.DataFrame(
+        list(aislador_sin_correspondencia.values()),
+        columns=["armado", "aislador_esperado", "veces"])
+    if len(df_aislador_sin_corr):
+        df_aislador_sin_corr = df_aislador_sin_corr.sort_values(
+            ["armado", "aislador_esperado"]).reset_index(drop=True)
+
     if verbose:
         print(f"[calculo] Materiales totales distintos: {len(df_totales)}")
+        if len(df_aislador_sin_det):
+            print(f"[calculo] ⚠ Armados MT/MTF sin aislador determinado "
+                  f"({len(df_aislador_sin_det)}):")
+            for _, r in df_aislador_sin_det.iterrows():
+                print(f"          - {r['armado']!r}  (aparece {r['veces']} vez/veces)")
+            print("          Revisa que el código de armado termine en '-1'/'-2' y que "
+                  "se haya podido determinar el nivel de contaminación de la línea.")
+        if len(df_aislador_sin_corr):
+            print(f"[calculo] ⚠ Aislador determinado SIN correspondencia en el catálogo "
+                  f"({len(df_aislador_sin_corr)}):")
+            for _, r in df_aislador_sin_corr.iterrows():
+                print(f"          - armado={r['armado']!r}  se esperaba {r['aislador_esperado']!r}  "
+                      f"(aparece {r['veces']} vez/veces)")
+            print("          Falta ese renglón (con su cantidad) en Cantidades_de_postes.xlsx "
+                  "para ese armado.")
         if len(df_sin_calibre):
             print(f"[calculo] ⚠ Materiales con \"\" sin calibre resuelto "
                   f"({len(df_sin_calibre)}):")
@@ -868,7 +1301,11 @@ def calcular_cantidades(
     return {"totales": df_totales,
             "no_encontrados": df_faltantes,
             "detalle": df_detalle,
-            "fase_sin_calibre": df_sin_calibre}
+            "fase_sin_calibre": df_sin_calibre,
+            "aislador_sin_determinar": df_aislador_sin_det,
+            "aislador_sin_correspondencia": df_aislador_sin_corr}
+
+
 
 
 # =====================================================================
@@ -882,10 +1319,18 @@ def exportar_cantidades_excel(resultado: Dict[str, pd.DataFrame],
     """
     Escribe el resultado en un .xlsx con formato profesional:
 
-      Hoja 'Cantidades'          -> material y cantidad total (entregable principal)
+      Hoja 'Cantidades'          -> material y cantidad total (entregable principal;
+                                     el aislador de cada armado ya viene filtrado
+                                     según contaminación/nivel de aislamiento/tipo
+                                     de conductor, con la cantidad tomada del propio
+                                     catálogo, ver `calcular_cantidades`)
       Hoja 'Tipos de Soporte'    -> cantidad total de postes por tipo de soporte
+      Hoja 'Contaminación'       -> nivel de contaminación de la línea y coordenada usada
       Hoja 'Armados no hallados' -> trazabilidad de lo que no se pudo mapear
       Hoja 'Fase sin calibre' (si aplica) -> materiales con "" sin calibre resuelto
+      Hoja 'Aislador sin determinar' (si aplica) -> armados MT/MTF sin aislador resuelto
+      Hoja 'Aislador sin catálogo' (si aplica) -> aislador determinado pero sin
+                                     ese renglón en Cantidades_de_postes.xlsx
       Hoja 'Detalle' (opcional)  -> aporte poste×armado×material
 
     Devuelve la ruta del archivo escrito.
@@ -908,11 +1353,30 @@ def exportar_cantidades_excel(resultado: Dict[str, pd.DataFrame],
     if df_fase_sc is not None and len(df_fase_sc):
         df_fase_sc = df_fase_sc.copy()
         df_fase_sc.columns = ["Poste", "Armado", "Material", "Veces"]
+    df_aislador_sd = resultado.get("aislador_sin_determinar")
+    if df_aislador_sd is not None and len(df_aislador_sd):
+        df_aislador_sd = df_aislador_sd.copy()
+        df_aislador_sd.columns = ["Armado", "Veces"]
+    df_aislador_sc = resultado.get("aislador_sin_correspondencia")
+    if df_aislador_sc is not None and len(df_aislador_sc):
+        df_aislador_sc = df_aislador_sc.copy()
+        df_aislador_sc.columns = ["Armado", "Aislador esperado", "Veces"]
+    contaminacion = resultado.get("contaminacion")
 
     with pd.ExcelWriter(ruta_salida, engine="openpyxl") as writer:
         df_tot.to_excel(writer, sheet_name="Cantidades", index=False)
         if df_tipos is not None and len(df_tipos):
             df_tipos.to_excel(writer, sheet_name="Tipos de Soporte", index=False)
+        if contaminacion is not None:
+            filas_contam = [
+                {"Campo": "Nivel de contaminación de la línea", "Valor": contaminacion.get("nivel")},
+                {"Campo": "Latitud (1er poste)", "Valor": contaminacion.get("lat")},
+                {"Campo": "Longitud (1er poste)", "Valor": contaminacion.get("lon")},
+                {"Campo": "X planilla (1er poste)", "Valor": contaminacion.get("x")},
+                {"Campo": "Y planilla (1er poste)", "Valor": contaminacion.get("y")},
+                {"Campo": "Observación", "Valor": contaminacion.get("mensaje") or ""},
+            ]
+            pd.DataFrame(filas_contam).to_excel(writer, sheet_name="Contaminación", index=False)
         if len(df_falt):
             df_falt.to_excel(writer, sheet_name="Armados no hallados", index=False)
         else:
@@ -920,6 +1384,10 @@ def exportar_cantidades_excel(resultado: Dict[str, pd.DataFrame],
                 .to_excel(writer, sheet_name="Armados no hallados", index=False)
         if df_fase_sc is not None and len(df_fase_sc):
             df_fase_sc.to_excel(writer, sheet_name="Fase sin calibre", index=False)
+        if df_aislador_sd is not None and len(df_aislador_sd):
+            df_aislador_sd.to_excel(writer, sheet_name="Aislador sin determinar", index=False)
+        if df_aislador_sc is not None and len(df_aislador_sc):
+            df_aislador_sc.to_excel(writer, sheet_name="Aislador sin catálogo", index=False)
         if incluir_detalle and len(resultado.get("detalle", [])):
             det = resultado["detalle"].copy()
             det.columns = ["Poste", "Armado", "Material", "Código", "Cantidad"]
@@ -968,6 +1436,10 @@ def generar_cantidades_materiales(
     col_tipo_soporte: Tuple[str, str] = COL_TIPO_SOPORTE_DEFAULT,
     col_conductor_principal1: Optional[Tuple[str, str]] = COL_CONDUCTOR_PRINCIPAL1_DEFAULT,
     col_conductor_principal2: Optional[Tuple[str, str]] = COL_CONDUCTOR_PRINCIPAL2_DEFAULT,
+    col_topografia_x: Tuple[str, str] = COL_TOPO_X_DEFAULT,
+    col_topografia_y: Tuple[str, str] = COL_TOPO_Y_DEFAULT,
+    epsg_planilla: str = EPSG_PLANILLA_DEFAULT,
+    nivel_contaminacion_forzado: Optional[str] = None,
     incluir_retenidas: bool = True,
     ruta_salida: str = "Cantidades_totales_proyecto.xlsx",
     incluir_detalle: bool = True,
@@ -992,15 +1464,41 @@ def generar_cantidades_materiales(
         Principal2', usadas para el ajuste de fase (reemplazo del "" en
         nombres de material por el calibre real del conductor de cada
         poste/armado). Ver `extraer_calibre_conductor` y `ajustar_fase`.
+    col_topografia_x / col_topografia_y : tuplas
+        Columnas con la coordenada (X, Y) de cada poste ('Topografía'),
+        usadas para determinar el nivel de contaminación de la línea a
+        partir del primer poste con coordenada válida. Ver
+        `determinar_nivel_contaminacion_linea`.
+    epsg_planilla : str
+        CRS de las coordenadas X/Y de la planilla (ver advertencia en
+        `EPSG_PLANILLA_DEFAULT`: por defecto se asume MAGNA-SIRGAS/UTM 18N,
+        pero debe verificarse contra el proyecto real).
+    nivel_contaminacion_forzado : str, opcional
+        Si se indica ('Alto' o 'Normal'), se usa este nivel de contaminación
+        directamente y NO se intenta determinar a partir de las coordenadas
+        (útil si ya se conoce el nivel, o para pruebas).
     columnas_retenida : lista de tuplas
         Columnas RT00X (retenidas) a incluir en el cálculo de materiales.
     incluir_retenidas : bool
         Si es False, omite por completo el aporte de retenidas (equivalente
         al comportamiento anterior a esta función).
 
+    Aislador
+    --------
+    A partir del nivel de contaminación de la línea (determinado una sola vez
+    a partir del primer poste) y, por cada armado, del tipo de conductor
+    (forrado/desnudo) y nivel de aislamiento (13.2/34.5 kV) deducidos de su
+    propio código, se determina el aislador a instalar (ver
+    `determinar_aislador`), el aislador correcto ya queda filtrado dentro de
+    'totales' (mismo mecanismo de `calcular_cantidades`: se recorren los
+    materiales del catálogo para ese armado y solo se conserva la alternativa
+    de aislador cuya familia coincide con la determinada).
+
     Devuelve un dict con las claves:
         'catalogo', 'armados', 'retenidas', 'totales', 'no_encontrados',
-        'detalle', 'fase_sin_calibre', 'tipos_soporte', 'ruta_salida'
+        'detalle', 'fase_sin_calibre', 'aislador_sin_determinar',
+        'aislador_sin_correspondencia', 'contaminacion', 'tipos_soporte',
+        'ruta_salida'
     """
     etapa = "inicio"
     try:
@@ -1008,12 +1506,26 @@ def generar_cantidades_materiales(
         etapa = "carga del catálogo"
         catalogo = cargar_catalogo(ruta_catalogo, hojas=hojas_catalogo, verbose=verbose)
 
+        # --- Etapa 1-bis: nivel de contaminación de la línea (1er poste) ---
+        etapa = "determinación del nivel de contaminación"
+        if nivel_contaminacion_forzado is not None:
+            contaminacion = {"nivel": nivel_contaminacion_forzado, "lat": None, "lon": None,
+                              "x": None, "y": None, "mensaje": "Nivel forzado por parámetro."}
+            if verbose:
+                print(f"[contaminacion] Nivel forzado por parámetro: {nivel_contaminacion_forzado}")
+        else:
+            contaminacion = determinar_nivel_contaminacion_linea(
+                est_df, col_x=col_topografia_x, col_y=col_topografia_y,
+                epsg_origen=epsg_planilla, verbose=verbose)
+        nivel_contaminacion = contaminacion.get("nivel")
+
         # --- Etapa 2: extraer armados del DataFrame ya en memoria ---
         etapa = "extracción de armados"
         armados = extraer_armados_planilla(
             est_df, columnas_armado=columnas_armado,
             col_conductor_principal1=col_conductor_principal1,
-            col_conductor_principal2=col_conductor_principal2)
+            col_conductor_principal2=col_conductor_principal2,
+            nivel_contaminacion=nivel_contaminacion)
         if verbose:
             print(f"[planilla] {armados['nombre_poste'].nunique()} postes, "
                   f"{len(armados)} armados instalados en total.")
@@ -1021,7 +1533,7 @@ def generar_cantidades_materiales(
         # --- Etapa 2-bis: extraer retenidas (RT00X) y unirlas a los armados ---
         retenidas = pd.DataFrame(
             columns=["nombre_poste", "derivacion", "n_est",
-                     "tipo_armado", "armado", "calibre", "armado_norm"])
+                     "tipo_armado", "armado", "calibre", "aislador", "armado_norm"])
         if incluir_retenidas:
             etapa = "extracción de retenidas"
             retenidas = extraer_retenidas_planilla(est_df, columnas_retenida=columnas_retenida)
@@ -1033,6 +1545,7 @@ def generar_cantidades_materiales(
         # --- Etapa 3: calcular cantidades (armados + retenidas juntos) ---
         etapa = "cálculo de cantidades"
         resultado = calcular_cantidades(armados, catalogo, verbose=verbose)
+        resultado["contaminacion"] = contaminacion
 
         # --- Etapa 3-ter: contar postes por tipo de soporte ---
         etapa = "conteo de tipos de soporte"
@@ -1056,6 +1569,9 @@ def generar_cantidades_materiales(
         "no_encontrados": resultado["no_encontrados"],
         "detalle": resultado["detalle"],
         "fase_sin_calibre": resultado["fase_sin_calibre"],
+        "aislador_sin_determinar": resultado["aislador_sin_determinar"],
+        "aislador_sin_correspondencia": resultado["aislador_sin_correspondencia"],
+        "contaminacion": resultado["contaminacion"],
         "tipos_soporte": resultado["tipos_soporte"],
         "ruta_salida": ruta_salida,
     }
