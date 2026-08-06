@@ -7831,3 +7831,148 @@ def expandir_mec_postes_repetidos(
 
     mec_expandido = pd.DataFrame(filas_expandidas).reset_index(drop=True)
     return mec_expandido
+
+
+
+def numero_fases_v2(armado_export, nombre_columna="Número de Fases"):
+    """
+    Igual que numero_fases(), pero SIN colapsar por poste: devuelve
+    una Serie alineada 1:1 con armado_export (una fila por aparición),
+    tomando directamente el segundo dígito numérico del código de armado
+    de ESA fila (sin buscar entre repeticiones del mismo poste).
+    """
+    def extraer_fases(codigo):
+        try:
+            if not isinstance(codigo, str):
+                return np.nan
+            if " " in codigo:
+                codigo = codigo.replace(" ", "")
+            if not re.search(r"MT\s*F?\s*\d{3}-\d", codigo, re.IGNORECASE) and \
+               re.search(r"MT\s*F?\s*\d{3}$", codigo, re.IGNORECASE):
+                codigo = codigo + "-1"
+            match = re.search(r"MT(F?)(\d{3})-(\d)", codigo, re.IGNORECASE)
+            if not match:
+                return np.nan
+            return int(match.group(2)[1])
+        except Exception:
+            return np.nan
+
+    return armado_export.reset_index(drop=True).apply(extraer_fases).rename(nombre_columna)
+
+
+def numero_perforaciones_v2(armado_primario_export, armado_secundario_export,
+                             nombre_columna="Número de Perforaciones"):
+    """
+    Igual que numero_perforaciones(), pero SIN colapsar por poste: para
+    cada fila usa el armado primario y secundario de ESA aparición puntual
+    (no busca el primer valor válido entre repeticiones del poste).
+    """
+    def perforaciones_armado(codigo):
+        try:
+            if not isinstance(codigo, str) or str(codigo).strip() in ("", "-", "0"):
+                return 0
+            if " " in codigo:
+                codigo = codigo.replace(" ", "")
+            if not re.search(r"MT\s*F?\s*\d{3}-\d", codigo, re.IGNORECASE) and \
+               re.search(r"MT\s*F?\s*\d{3}$", codigo, re.IGNORECASE):
+                codigo = codigo + "-1"
+            match = re.search(r"MT(F?)(\d{3})-(\d)", codigo, re.IGNORECASE)
+            if not match:
+                return 0
+            tercer_digito = int(match.group(2)[2])
+            return 2 if tercer_digito == 5 else 1
+        except Exception:
+            return 0
+
+    prim = armado_primario_export.reset_index(drop=True)
+    sec  = armado_secundario_export.reset_index(drop=True)
+
+    resultado = prim.apply(perforaciones_armado) + sec.apply(perforaciones_armado)
+    return resultado.rename(nombre_columna)
+
+
+def agregar_origen_v2(postes_export, x_export, y_export, vano_adelante_export):
+    """
+    Igual que agregar_origen(), pero SIN colapsar por poste: devuelve la
+    Serie origen_export completa, alineada 1:1 con postes_export (una fila
+    por aparición), en lugar de reducirla a un mapa por primera ocurrencia.
+
+    Misma lógica geométrica que la versión original: para cada aparición
+    se calcula el cardinal de origen según la línea que llega desde la
+    aparición anterior (en el orden de exportación), y si no hay anterior
+    con vano > 0 se hereda el origen de la siguiente aparición disponible.
+    """
+    SEMIEJES = {"E": 0, "N": 90, "O": 180, "S": 270}
+
+    def angulo_minimo_cardinal(dx, dy):
+        angulo_vec = math.degrees(math.atan2(dy, dx)) % 360
+        min_ang = None
+        cardinal = None
+        for c, ref in SEMIEJES.items():
+            diff_normal  = abs((angulo_vec - ref + 180) % 360 - 180)
+            diff_horario = abs((ref - angulo_vec + 180) % 360 - 180)
+            diff = min(diff_normal, diff_horario)
+            if min_ang is None or diff < min_ang:
+                min_ang = diff
+                cardinal = c
+        return cardinal
+
+    x_exp    = x_export.reset_index(drop=True)
+    y_exp    = y_export.reset_index(drop=True)
+    vano_exp = vano_adelante_export.reset_index(drop=True)
+
+    n = len(postes_export.reset_index(drop=True))
+    origen_export = [None] * n
+
+    for i in range(n):
+        if i > 0 and not pd.isna(vano_exp.iloc[i - 1]) and vano_exp.iloc[i - 1] != 0:
+            dx = x_exp.iloc[i - 1] - x_exp.iloc[i]
+            dy = y_exp.iloc[i - 1] - y_exp.iloc[i]
+            origen_export[i] = angulo_minimo_cardinal(dx, dy)
+        else:
+            origen_export[i] = None
+
+    # Resolver apariciones sin origen anterior: tomar el origen de la siguiente
+    for i in range(n - 1, -1, -1):
+        if origen_export[i] is None:
+            for j in range(i + 1, n):
+                if origen_export[j] is not None:
+                    origen_export[i] = origen_export[j]
+                    break
+
+    return pd.Series(origen_export, name="Origen")
+
+
+def calcular_tense_v2(tiro_adelante_export, tiro_atras_export, nombre_columna="Tense"):
+    """
+    Igual que calcular_tiro_maximo(), pero SIN colapsar por poste: para
+    cada fila devuelve max(|tiro_atras|, |tiro_adelante|) de ESA aparición
+    puntual, en lugar del máximo entre todas las repeticiones del poste.
+    """
+    ta = tiro_adelante_export.reset_index(drop=True)
+    td = tiro_atras_export.reset_index(drop=True)
+
+    def _max_abs(a, d):
+        vals = [abs(v) for v in (a, d) if not pd.isna(v)]
+        return max(vals) if vals else np.nan
+
+    return pd.Series(
+        [_max_abs(a, d) for a, d in zip(ta, td)],
+        name=nombre_columna,
+    )
+
+
+def mapear_por_poste_v2(postes_export, mapa_valores):
+    """
+    Helper genérico: dado postes_export (por-aparición) y un diccionario
+    {nombre_poste: valor} indexado por poste único (ej. construido desde
+    mec['Numero de apoyo']), devuelve una Serie alineada con postes_export
+    repitiendo el valor del poste correspondiente en cada una de sus
+    apariciones.
+
+    Útil para columnas que son intrínsecamente "por poste" (como C.R.,
+    que no varía entre derivaciones) y que se quieren repetir en la
+    versión expandida sin decir que fueron calculadas por aparición.
+    """
+    postes_exp = postes_export.reset_index(drop=True)
+    return postes_exp.map(mapa_valores)
