@@ -7981,117 +7981,88 @@ def mapear_por_poste_v2(postes_export, mapa_valores):
 def construir_tipo_armado_unico_v2(
     carac_postes: pd.DataFrame,
     postes_orden: pd.Series,
-    postes_export: pd.Series,
-    prim1: pd.Series,
-    prim2: pd.Series,
-    sec1: pd.Series,
-    sec2: pd.Series,
+    postes_export: pd.Series = None,
+    prim1: pd.Series = None,
+    prim2: pd.Series = None,
+    sec1: pd.Series = None,
+    sec2: pd.Series = None,
 ) -> pd.DataFrame:
     """
-    Versión de construir_tipo_armado_unico() que mantiene ÚNICAMENTE la
-    expansión de filas por poste con múltiples armados válidos (sufijos
-    alfabéticos a, b, c...), pero SIN calcular ni escribir ninguna columna
-    de armado: 'Tipo de Armado Primario' y 'Tipo de Armado Secundario' se
-    conservan intactas, tal como venían en carac_postes, duplicadas en
-    todas las filas generadas para un mismo poste.
+    Versión de construir_tipo_armado_unico() adaptada a una entrada que YA
+    viene por-aparición (una fila por cada elemento de post_exp, como la
+    nueva _base_red_mt), en lugar de una fila por poste único como
+    carac_postes original.
 
-    Lógica de expansión (idéntica a la original)
-    ----------------------------------------------
-    Para cada poste se recorren los armados en orden de prioridad:
-        prim1 → prim2 → sec1 → sec2
-    Un valor es válido si no es NaN, None, 0, "-" ni cadena vacía.
-    El NÚMERO de valores válidos (considerando TODAS las apariciones del
-    poste en postes_export) sigue determinando cuántas filas se generan:
-        - 1 valor válido (o ninguno) -> una sola fila, sin sufijo.
-        - n > 1 valores válidos      -> n filas, sufijos a, b, c, ...
-    A diferencia de la original, aquí ese conteo solo se usa para decidir
-    la expansión de filas; no se persiste ningún valor de armado en una
-    columna nueva ni se eliminan columnas existentes.
+    Diferencia clave frente a construir_tipo_armado_unico() y frente a la
+    primera versión de construir_tipo_armado_unico_v2:
+    ------------------------------------------------------------------
+    La función original (y la primera V2) recalculaban, a partir de
+    prim1/prim2/sec1/sec2, CUÁNTOS armados válidos tiene cada poste y
+    generaban esa cantidad de filas nuevas. Eso funcionaba cuando la
+    entrada era una fila por poste único (carac_postes), pero si la
+    entrada ya es por-aparición, cada variante de armado YA tiene su
+    propia fila en carac_postes (una por cada aparición en post_exp).
+    Recalcular y volver a expandir sobre esas filas duplica lo que ya
+    estaba correctamente separado (ej. un poste con 2 apariciones y 2
+    armados válidos terminaba generando 2 x 2 = 4 filas en vez de 2).
+
+    Esta versión NO recalcula nada a partir de prim1/prim2/sec1/sec2 ni
+    genera filas nuevas. Simplemente:
+        1. Agrupa las filas YA EXISTENTES de carac_postes por el nombre
+           base de poste (postes_orden).
+        2. Si un poste tiene una sola fila, la deja tal cual (sin sufijo).
+        3. Si un poste tiene más de una fila (varias apariciones), les
+           asigna sufijos alfabéticos a, b, c... en el mismo orden en que
+           aparecen en carac_postes -- sin duplicar ni crear filas.
+
+    Los parámetros postes_export, prim1, prim2, sec1, sec2 se mantienen
+    en la firma únicamente por compatibilidad posicional con el resto del
+    código (no se usan); pueden omitirse.
 
     Parámetros
     ----------
-    Mismos que construir_tipo_armado_unico() (ver esa función para el
-    detalle de cada uno).
+    carac_postes : DataFrame ya por-aparición (ej. _base_red_mt nueva).
+    postes_orden : Serie con el nombre base de poste para cada fila de
+                   carac_postes, en el mismo orden e índice.
 
     Retorna
     -------
-    DataFrame con la misma estructura y columnas que carac_postes
-    (incluyendo 'Tipo de Armado Primario' y 'Tipo de Armado Secundario'
-    intactas), con posibles filas extra (sufijos a/b/c...) para postes
-    con múltiples armados válidos.
+    DataFrame con las mismas columnas y mismo número de filas que
+    carac_postes, con 'No. Apoyo' sufijado (a, b, c...) para postes con
+    más de una fila.
     """
 
     import string
-    from collections import defaultdict
 
-    INVALIDOS = {0, "-", ""}
-
-    def es_valido(v):
-        if v is None:
-            return False
-        try:
-            if pd.isna(v):
-                return False
-        except (TypeError, ValueError):
-            pass
-        return str(v).strip() not in INVALIDOS
-
-    # Alinear todas las series por posición (reset_index)
-    postes_exp = postes_export.reset_index(drop=True)
-    s_prim1    = prim1.reset_index(drop=True)
-    s_prim2    = prim2.reset_index(drop=True)
-    s_sec1     = sec1.reset_index(drop=True)
-    s_sec2     = sec2.reset_index(drop=True)
-
-    # Para cada poste, contar cuántos armados válidos tiene en orden de
-    # prioridad, usando TODAS las ocurrencias del poste en postes_export.
-    # (Se mantiene la misma estructura candidatos -> vistos que en la
-    # versión original, ya que el NÚMERO de armados válidos es lo que
-    # determina la expansión; el valor en sí ya no se usa para escribir
-    # ninguna columna.)
-    candidatos = defaultdict(list)   # poste -> [(prioridad, valor), ...]
-
-    for i, poste in enumerate(postes_exp):
-        for prioridad, serie in enumerate([s_prim1, s_prim2, s_sec1, s_sec2]):
-            v = serie.iloc[i]
-            if es_valido(v):
-                candidatos[poste].append((prioridad, str(v).strip()))
-
-    # Colapsar: por cada poste, un valor por slot de prioridad
-    # (prim1, prim2, sec1, sec2), manteniendo ese orden. Solo se usa la
-    # CANTIDAD resultante (len(...)) para decidir cuántas filas expandir.
-    armados_por_poste = {}
-    for poste, pares in candidatos.items():
-        vistos = {}
-        for prio, val in sorted(pares, key=lambda x: x[0]):
-            if prio not in vistos:
-                vistos[prio] = val
-        armados_por_poste[poste] = list(vistos.values())
-
-    # A diferencia de la original: no se quita ninguna columna ni se
-    # inserta 'Tipo de Armado'. Se conservan tal cual las columnas de
-    # carac_postes, incluidas 'Tipo de Armado Primario' y
-    # 'Tipo de Armado Secundario'.
-    cols_resultado = list(carac_postes.columns)
+    postes_ord = postes_orden.reset_index(drop=True)
+    base = carac_postes.reset_index(drop=True).copy()
 
     letras = list(string.ascii_lowercase)  # a, b, c, ...
 
-    filas = []
-    for idx in carac_postes.index:
-        poste = postes_orden.loc[idx]
-        armados = armados_por_poste.get(poste, [])
+    # Conteo de apariciones totales por poste, para saber si hace falta sufijo
+    conteo_por_poste = postes_ord.value_counts()
 
-        base = {c: carac_postes.at[idx, c] for c in cols_resultado}
+    # Contador de aparición actual por poste, para asignar el sufijo correcto
+    # en el mismo orden en que las filas ya vienen en carac_postes
+    contador_actual = {}
 
-        if len(armados) <= 1:
-            filas.append(dict(base))
-        else:
-            nombre_base = base.get("No. Apoyo", poste)
-            for k in range(len(armados)):
-                fila = dict(base)
-                sufijo = letras[k] if k < len(letras) else str(k)
-                fila["No. Apoyo"] = f"{nombre_base}{sufijo}"
-                filas.append(fila)
+    nombres_finales = []
+    for i in range(len(base)):
+        poste = postes_ord.iloc[i]
+        total = conteo_por_poste.get(poste, 1)
 
-    resultado = pd.DataFrame(filas, columns=cols_resultado).reset_index(drop=True)
-    return resultado
+        if total <= 1:
+            nombres_finales.append(base.at[i, "No. Apoyo"] if "No. Apoyo" in base.columns else poste)
+            continue
+
+        k = contador_actual.get(poste, 0)
+        sufijo = letras[k] if k < len(letras) else str(k)
+        contador_actual[poste] = k + 1
+
+        nombre_base = poste
+        nombres_finales.append(f"{nombre_base}{sufijo}")
+
+    if "No. Apoyo" in base.columns:
+        base["No. Apoyo"] = nombres_finales
+
+    return base
