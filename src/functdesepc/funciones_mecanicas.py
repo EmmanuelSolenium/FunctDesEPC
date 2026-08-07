@@ -7976,3 +7976,122 @@ def mapear_por_poste_v2(postes_export, mapa_valores):
     """
     postes_exp = postes_export.reset_index(drop=True)
     return postes_exp.map(mapa_valores)
+
+
+def construir_tipo_armado_unico_v2(
+    carac_postes: pd.DataFrame,
+    postes_orden: pd.Series,
+    postes_export: pd.Series,
+    prim1: pd.Series,
+    prim2: pd.Series,
+    sec1: pd.Series,
+    sec2: pd.Series,
+) -> pd.DataFrame:
+    """
+    Versión de construir_tipo_armado_unico() que mantiene ÚNICAMENTE la
+    expansión de filas por poste con múltiples armados válidos (sufijos
+    alfabéticos a, b, c...), pero SIN calcular ni escribir ninguna columna
+    de armado: 'Tipo de Armado Primario' y 'Tipo de Armado Secundario' se
+    conservan intactas, tal como venían en carac_postes, duplicadas en
+    todas las filas generadas para un mismo poste.
+
+    Lógica de expansión (idéntica a la original)
+    ----------------------------------------------
+    Para cada poste se recorren los armados en orden de prioridad:
+        prim1 → prim2 → sec1 → sec2
+    Un valor es válido si no es NaN, None, 0, "-" ni cadena vacía.
+    El NÚMERO de valores válidos (considerando TODAS las apariciones del
+    poste en postes_export) sigue determinando cuántas filas se generan:
+        - 1 valor válido (o ninguno) -> una sola fila, sin sufijo.
+        - n > 1 valores válidos      -> n filas, sufijos a, b, c, ...
+    A diferencia de la original, aquí ese conteo solo se usa para decidir
+    la expansión de filas; no se persiste ningún valor de armado en una
+    columna nueva ni se eliminan columnas existentes.
+
+    Parámetros
+    ----------
+    Mismos que construir_tipo_armado_unico() (ver esa función para el
+    detalle de cada uno).
+
+    Retorna
+    -------
+    DataFrame con la misma estructura y columnas que carac_postes
+    (incluyendo 'Tipo de Armado Primario' y 'Tipo de Armado Secundario'
+    intactas), con posibles filas extra (sufijos a/b/c...) para postes
+    con múltiples armados válidos.
+    """
+
+    import string
+    from collections import defaultdict
+
+    INVALIDOS = {0, "-", ""}
+
+    def es_valido(v):
+        if v is None:
+            return False
+        try:
+            if pd.isna(v):
+                return False
+        except (TypeError, ValueError):
+            pass
+        return str(v).strip() not in INVALIDOS
+
+    # Alinear todas las series por posición (reset_index)
+    postes_exp = postes_export.reset_index(drop=True)
+    s_prim1    = prim1.reset_index(drop=True)
+    s_prim2    = prim2.reset_index(drop=True)
+    s_sec1     = sec1.reset_index(drop=True)
+    s_sec2     = sec2.reset_index(drop=True)
+
+    # Para cada poste, contar cuántos armados válidos tiene en orden de
+    # prioridad, usando TODAS las ocurrencias del poste en postes_export.
+    # (Se mantiene la misma estructura candidatos -> vistos que en la
+    # versión original, ya que el NÚMERO de armados válidos es lo que
+    # determina la expansión; el valor en sí ya no se usa para escribir
+    # ninguna columna.)
+    candidatos = defaultdict(list)   # poste -> [(prioridad, valor), ...]
+
+    for i, poste in enumerate(postes_exp):
+        for prioridad, serie in enumerate([s_prim1, s_prim2, s_sec1, s_sec2]):
+            v = serie.iloc[i]
+            if es_valido(v):
+                candidatos[poste].append((prioridad, str(v).strip()))
+
+    # Colapsar: por cada poste, un valor por slot de prioridad
+    # (prim1, prim2, sec1, sec2), manteniendo ese orden. Solo se usa la
+    # CANTIDAD resultante (len(...)) para decidir cuántas filas expandir.
+    armados_por_poste = {}
+    for poste, pares in candidatos.items():
+        vistos = {}
+        for prio, val in sorted(pares, key=lambda x: x[0]):
+            if prio not in vistos:
+                vistos[prio] = val
+        armados_por_poste[poste] = list(vistos.values())
+
+    # A diferencia de la original: no se quita ninguna columna ni se
+    # inserta 'Tipo de Armado'. Se conservan tal cual las columnas de
+    # carac_postes, incluidas 'Tipo de Armado Primario' y
+    # 'Tipo de Armado Secundario'.
+    cols_resultado = list(carac_postes.columns)
+
+    letras = list(string.ascii_lowercase)  # a, b, c, ...
+
+    filas = []
+    for idx in carac_postes.index:
+        poste = postes_orden.loc[idx]
+        armados = armados_por_poste.get(poste, [])
+
+        base = {c: carac_postes.at[idx, c] for c in cols_resultado}
+
+        if len(armados) <= 1:
+            filas.append(dict(base))
+        else:
+            nombre_base = base.get("No. Apoyo", poste)
+            for k in range(len(armados)):
+                fila = dict(base)
+                sufijo = letras[k] if k < len(letras) else str(k)
+                fila["No. Apoyo"] = f"{nombre_base}{sufijo}"
+                filas.append(fila)
+
+    resultado = pd.DataFrame(filas, columns=cols_resultado).reset_index(drop=True)
+    return resultado
