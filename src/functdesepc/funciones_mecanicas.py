@@ -8065,4 +8065,10 @@ def construir_tipo_armado_unico_v2(
     if "No. Apoyo" in base.columns:
         base["No. Apoyo"] = nombres_finales
 
+    # Ordenar por "No. Apoyo" con sort_values estándar (mismo criterio de
+    # orden léxico simple que usan mec y ret: mec.sort_values("Numero de
+    # apoyo")), no un "natural sort" numérico.
+    if "No. Apoyo" in base.columns:
+        base = base.sort_values("No. Apoyo").reset_index(drop=True)
+
     return base
