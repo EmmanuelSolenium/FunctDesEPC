@@ -526,13 +526,78 @@ MATERIALES_CONDUCTOR = ("AAAC", "ACSR")
 # material, p.ej. 'GRAPA DE RETENCION RECTA "" ' -> 'GRAPA DE RETENCION RECTA 1/0 AWG'.
 MARCADOR_CALIBRE_FASE = '""'
 
+# Regex que reconoce el patrón "#xSM..." (p.ej. "1xSM34.5-3x1/0ACSR / Al7N8"
+# o "3xSM..."), usado para distinguir, en un 'Tipo Conductor' con dos cables
+# unidos por "+", cuál de los dos lados corresponde al cable de guarda/mensajero
+# tipo "SM..." y cuál al conductor de fase simple (ACSR/AAAC "suelto").
+_RE_LADO_SM = re.compile(r"[13]\s*X\s*SM", re.IGNORECASE)
 
-def extraer_calibre_conductor(tipo_conductor) -> Optional[str]:
+# Armados cuyo conductor de fase asociado, cuando el 'Tipo Conductor' tiene
+# dos cables unidos por "+", es el lado "#xSM..." (y no el lado "suelto").
+# Ver `_seleccionar_lado_conductor`.
+_RE_ARMADO_LADO_SM = re.compile(r"^MTF[67]\d\d-\d", re.IGNORECASE)
+
+
+def _seleccionar_lado_conductor(tipo_conductor: str, armado: Optional[str]) -> str:
+    """
+    Cuando 'Tipo Conductor' describe DOS cables distintos unidos por "+"
+    (p.ej. "1xACSR 1/0 AWG+1xSM34.5-3x1/0ACSR / Al7N8"), decide cuál de los
+    dos lados usar para extraer el calibre, según el código de `armado`:
+
+      * Si `armado` es de la forma "MTF6XX-X" o "MTF7XX-X" (ver
+        `_RE_ARMADO_LADO_SM`): se toma el lado que contiene el patrón
+        "#xSM..." (# = 1 o 3). Si por algún motivo NINGÚN lado tiene ese
+        patrón, se toma el lado izquierdo por defecto.
+      * En cualquier otro caso (otro tipo de armado, o `armado` es None):
+        se toma el lado que NO contiene "#xSM...". Si ambos o ninguno lo
+        tienen, se deja el string sin dividir (se procesa completo, igual
+        que antes de este ajuste).
+
+    Si `tipo_conductor` no contiene "+", se devuelve sin cambios.
+    """
+    if "+" not in tipo_conductor:
+        return tipo_conductor
+
+    lados = tipo_conductor.split("+")
+    if len(lados) != 2:
+        # Más de un "+": caso no contemplado, se deja el string completo.
+        return tipo_conductor
+
+    izq, der = lados[0], lados[1]
+    izq_es_sm = bool(_RE_LADO_SM.search(izq))
+    der_es_sm = bool(_RE_LADO_SM.search(der))
+
+    quiere_lado_sm = bool(armado) and bool(_RE_ARMADO_LADO_SM.match(str(armado).strip()))
+
+    if quiere_lado_sm:
+        if izq_es_sm and not der_es_sm:
+            return izq
+        if der_es_sm and not izq_es_sm:
+            return der
+        # Ninguno (o ambos) tienen el patrón #xSM: por defecto, lado izquierdo.
+        return izq
+
+    # Se quiere el lado que NO es "#xSM..."
+    if izq_es_sm and not der_es_sm:
+        return der
+    if der_es_sm and not izq_es_sm:
+        return izq
+    # Ambiguo (ambos o ninguno son "#xSM..."): se deja el string completo.
+    return tipo_conductor
+
+
+def extraer_calibre_conductor(tipo_conductor, armado: Optional[str] = None) -> Optional[str]:
     """
     Extrae el calibre de un texto de 'Tipo Conductor' (columnas
     'Conductor Principal1'/'Conductor Principal2' de la planilla).
 
-    Se buscan los materiales conocidos (AAAC, ACSR) dentro del texto:
+    Si el texto describe dos cables unidos por "+" (p.ej. un conductor de
+    fase simple junto con un cable tipo "SM..."), primero se selecciona el
+    lado correcto según el código de `armado` (ver
+    `_seleccionar_lado_conductor`) antes de aplicar las reglas de extracción.
+
+    Sobre el texto ya reducido a un solo cable, se buscan los materiales
+    conocidos (AAAC, ACSR):
 
       1. Si el material aparece justo al inicio del string, el calibre son
          las siguientes 2 palabras que le siguen al material.
@@ -557,6 +622,10 @@ def extraer_calibre_conductor(tipo_conductor) -> Optional[str]:
     if s == "" or s.lower() in _VALORES_VACIOS_CONDUCTOR:
         return None
 
+    s = _seleccionar_lado_conductor(s, armado).strip()
+    if s == "":
+        return None
+
     s_upper = s.upper()
     idx_material = None
     material = None
@@ -568,22 +637,27 @@ def extraer_calibre_conductor(tipo_conductor) -> Optional[str]:
     if idx_material is None:
         return None
 
-    if idx_material == 0:
-        # Caso 1: material al inicio -> calibre = las 2 palabras siguientes.
-        resto = s[len(material):].strip()
+    antes_material = s[:idx_material]
+
+    # Caso 1: el material está al inicio, o lo único que lo precede es un
+    # simple contador de cables tipo "1x"/"3x" (p.ej. "1xACSR 1/0 AWG"), que
+    # no es un calibre sino la cantidad de conductores de ese tipo -> el
+    # calibre son las 2 palabras que siguen al material.
+    if idx_material == 0 or re.fullmatch(r"[13]\s*x\s*", antes_material, re.IGNORECASE):
+        resto = s[idx_material + len(material):].strip()
         palabras = resto.split()
         if not palabras:
             return None
         calibre = " ".join(palabras[:2]).strip()
         return calibre or None
 
-    # Caso 2: material no está al inicio -> calibre = texto entre la última
-    # "x" antes del material y el material, más la unidad correspondiente.
-    antes = s[:idx_material]
-    pos_x = antes.lower().rfind("x")
+    # Caso 2: material no está al inicio (y lo que lo precede no es un simple
+    # contador) -> calibre = texto entre la última "x" antes del material y
+    # el material, más la unidad correspondiente.
+    pos_x = antes_material.lower().rfind("x")
     if pos_x == -1:
         return None
-    crudo = antes[pos_x + 1:].strip()
+    crudo = antes_material[pos_x + 1:].strip()
     if not crudo:
         return None
     if "/" in crudo:
@@ -845,6 +919,13 @@ def extraer_armados_planilla(
     y los armados Secundario1/Secundario2 el de 'Conductor Principal2'. Si el
     conductor respectivo no tiene un valor reconocible, `calibre` queda en None.
 
+    Cuando el texto de 'Tipo Conductor' describe DOS cables unidos por "+"
+    (p.ej. "1xACSR 1/0 AWG+1xSM34.5-3x1/0ACSR / Al7N8"), el lado del "+" que
+    se usa depende del propio código de armado de esa fila (no es fijo por
+    poste): ver `_seleccionar_lado_conductor`. Por eso el calibre se calcula
+    aquí dentro del loop de armados, con el código de armado de cada uno,
+    en vez de una sola vez por poste.
+
     `aislador` es el aislador que corresponde a ese armado según el tipo de
     conductor (forrado/desnudo, deducido del propio código de armado), el
     nivel de aislamiento (13.2/34.5 kV, también deducido del código de
@@ -859,12 +940,12 @@ def extraer_armados_planilla(
         derivacion = fila.get(col_derivacion) if col_derivacion else None
         n_est = fila.get(col_nruta) if col_nruta else None
 
-        calibre_p1 = (extraer_calibre_conductor(fila.get(col_conductor_principal1))
-                      if col_conductor_principal1 and col_conductor_principal1 in est_df.columns
-                      else None)
-        calibre_p2 = (extraer_calibre_conductor(fila.get(col_conductor_principal2))
-                      if col_conductor_principal2 and col_conductor_principal2 in est_df.columns
-                      else None)
+        texto_conductor_p1 = (fila.get(col_conductor_principal1)
+                               if col_conductor_principal1 and col_conductor_principal1 in est_df.columns
+                               else None)
+        texto_conductor_p2 = (fila.get(col_conductor_principal2)
+                               if col_conductor_principal2 and col_conductor_principal2 in est_df.columns
+                               else None)
 
         for col in columnas_armado:
             if col not in est_df.columns:
@@ -874,9 +955,11 @@ def extraer_armados_planilla(
                 continue
             tipo_armado = col[1] if isinstance(col, tuple) else str(col)
             principal = _principal_para_tipo_armado(tipo_armado)
-            calibre = calibre_p1 if principal == 1 else (calibre_p2 if principal == 2 else None)
 
             codigo_armado = str(valor).strip()
+            texto_conductor = (texto_conductor_p1 if principal == 1
+                                else (texto_conductor_p2 if principal == 2 else None))
+            calibre = extraer_calibre_conductor(texto_conductor, armado=codigo_armado)
             forrado = es_conductor_forrado(codigo_armado)
             nivel_kv = nivel_aislamiento_armado(codigo_armado)
             aislador = determinar_aislador(forrado, nivel_kv, nivel_contaminacion)
