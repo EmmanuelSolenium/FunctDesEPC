@@ -159,15 +159,36 @@ def _detectar_layout_hoja(crudo: pd.DataFrame) -> Dict[str, int]:
     col_codigo = next((i for i, v in enumerate(fila0) if v.startswith("codigo")), None)
     col_unidad = next((i for i, v in enumerate(fila0) if v.startswith("unidad")), None)
 
-    # La columna donde comienza la cabecera "Armado" marca el inicio de armados.
-    col_armado_marca = next((i for i, v in enumerate(fila0) if v.startswith("armado")), None)
-    if col_armado_marca is None:
-        # Fallback: empezar tras la última columna de metadata conocida.
-        ultima_meta = max([c for c in (col_elemento, col_codigo, col_unidad)
-                           if c is not None])
-        col_inicio_armado = ultima_meta + 1
-    else:
-        col_inicio_armado = col_armado_marca
+    # Fallback si no se puede determinar el inicio real de armados (ver más abajo):
+    # empezar tras la última columna de metadata conocida.
+    ultima_meta = max([c for c in (col_elemento, col_codigo, col_unidad)
+                       if c is not None])
+
+    # IMPORTANTE: la celda de texto "Armado" en la fila 0 NO siempre está
+    # alineada con la primera columna que realmente tiene un código de armado
+    # en la fila 1 (en algunas hojas, p.ej. "ESSA (13.2 kV - con viento)",
+    # Excel deja la celda "Armado" varias columnas más a la derecha del
+    # primer código real). Usar esa posición como `col_inicio_armado` hace
+    # que se pierdan las primeras columnas de armados y que el resto quede
+    # desalineado (los multiplicadores terminan asociados a un código de
+    # armado que no les corresponde).
+    #
+    # Por eso el inicio real de armados se determina a partir de la fila de
+    # códigos (fila 1): es la primera columna, después de la metadata
+    # conocida (elemento/codigo/unidad), que tiene un valor no vacío en la
+    # fila 1.
+    fila1 = crudo.iloc[1].tolist() if crudo.shape[0] > 1 else []
+    col_inicio_armado = None
+    for i in range(ultima_meta + 1, len(fila1)):
+        val = fila1[i]
+        if pd.notna(val) and str(val).strip() != "":
+            col_inicio_armado = i
+            break
+    if col_inicio_armado is None:
+        # Fallback: no se encontró ningún código en la fila 1 tras la
+        # metadata; usar el criterio anterior basado en la celda "Armado".
+        col_armado_marca = next((i for i, v in enumerate(fila0) if v.startswith("armado")), None)
+        col_inicio_armado = col_armado_marca if col_armado_marca is not None else ultima_meta + 1
 
     # Los códigos de armado suelen estar en la fila 1 (segunda fila).
     fila_codigos = 1
@@ -266,7 +287,22 @@ def cargar_catalogo(ruta: str,
                 unidad = str(crudo.iloc[r, c_uni]).strip()
 
             # Clave única del material: código si existe y es real, si no el nombre.
-            if codigo_mat and codigo_mat.upper() not in ("N/A", "NAN"):
+            #
+            # IMPORTANTE: varios materiales del catálogo NO tienen código JDE y
+            # esa ausencia se representa con el texto literal "-" (además de
+            # "N/A"/"NaN"). Si se tratara "-" como un código real, decenas de
+            # materiales DISTINTOS colisionarían bajo la misma clave "COD::-",
+            # y el catálogo terminaría fusionándolos en un solo renglón: se
+            # quedaría con el nombre del primero que se haya leído (de
+            # cualquier hoja) pero sumando los multiplicadores de todos los
+            # demás, atribuyendo cantidades de un material a armados que en
+            # realidad correspondían a otro material completamente distinto.
+            codigo_normalizado = codigo_mat.strip().upper()
+            codigo_es_real = (
+                codigo_normalizado != ""
+                and codigo_normalizado not in ("N/A", "NAN", "-", "--", "S/C", "SC")
+            )
+            if codigo_es_real:
                 clave_mat = f"COD::{codigo_mat}"
             else:
                 clave_mat = f"NOM::{nombre.upper()}"
