@@ -1951,6 +1951,126 @@ def determinar_tense(
     return carac_postes
 
 
+
+def determinar_tense_v2(
+    postes_export,
+    armado_export,
+    tiro_adelante_export,
+    tiro_atras_export,
+    tabla_tiro_rotura,
+    cable_export,
+    area,
+    nombre_columna="Tense",
+):
+    """
+    Versión de determinar_tense() por-aparición: evalúa cada fila de
+    postes_export de forma individual (en orden export), en lugar de
+    colapsar todas las repeticiones de cada poste en un solo valor.
+
+    Mantiene las mismas 4 reglas de la función original:
+        1. Si area no es "Urbano"/"Urbana" (case-insensitive) -> "Normal"
+           para todas las filas.
+        2. Si el primer dígito numérico del armado de ESA fila es 6 o 7
+           -> "Normal" para esa fila.
+        3. En otro caso: se calcula max(|tiro_adelante|, |tiro_atrás|) de
+           ESA fila puntual (sin comparar con otras apariciones del mismo
+           poste) y se compara contra el 8% de la carga de rotura del
+           cable de ESA fila (cable_export).
+        4. tiro > 0.08 * carga_rotura -> "Normal"; si no -> "Reducido".
+        Si no hay tiro o no se encuentra carga de rotura para esa fila,
+        el resultado queda como None (igual que la original dejaba el
+        poste sin asignar en ese caso).
+
+    Parámetros
+    ----------
+    postes_export : Serie con el nombre de poste de cada fila (post_exp).
+                    Se usa solo para fijar la longitud/orden del
+                    resultado; el cálculo en sí ya no agrupa por poste.
+    armado_export : Serie alineada con postes_export, un código de armado
+                    por fila (ej. prim1.fillna(prim2).fillna(sec1).fillna(sec2)).
+    tiro_adelante_export, tiro_atras_export : Series alineadas con
+                    postes_export (ej. tiro_ad, tiro_at).
+    tabla_tiro_rotura : tabla estática Conductor -> Carga de Rotura (daN)
+                    (ej. tabla_cap_conductores), igual que en la original.
+    cable_export : Serie alineada con postes_export con el nombre de
+                    cable de esa fila (ej. c_principal.fillna(c_secundario)).
+    area : str, igual que en la original.
+    nombre_columna : nombre de la Serie resultado.
+
+    Retorna
+    -------
+    Serie alineada 1:1 con postes_export, con "Normal" / "Reducido" / None
+    por fila.
+    """
+
+    n = len(postes_export.reset_index(drop=True))
+
+    # ------------------------------------------------------------
+    # Atajo: área no urbana -> todas "Normal"
+    # ------------------------------------------------------------
+    if str(area).strip().lower() not in {"urbano", "urbana"}:
+        return pd.Series(["Normal"] * n, name=nombre_columna)
+
+    armado_exp = armado_export.reset_index(drop=True)
+    ta_exp     = tiro_adelante_export.reset_index(drop=True)
+    td_exp     = tiro_atras_export.reset_index(drop=True)
+    cable_exp  = cable_export.reset_index(drop=True)
+
+    # ------------------------------------------------------------
+    # Auxiliares (idénticos a determinar_tense)
+    # ------------------------------------------------------------
+    def primer_digito_numerico(txt):
+        if not isinstance(txt, str):
+            return None
+        for ch in txt:
+            if ch.isdigit():
+                return int(ch)
+        return None
+
+    def carga_rotura_cable(nombre_cable):
+        if not isinstance(nombre_cable, str):
+            return None
+        for _, fila in tabla_tiro_rotura.iterrows():
+            conductor = fila["Conductor"]
+            if isinstance(conductor, str) and nombre_cable in conductor:
+                return fila["Carga de Rotura (daN)"]
+        return None
+
+    resultado = [None] * n
+
+    for i in range(n):
+        # 1) Evaluación directa por armado de ESTA fila
+        armado = armado_exp.iloc[i] if i < len(armado_exp) else None
+        dig = primer_digito_numerico(armado)
+        if dig in (6, 7):
+            resultado[i] = "Normal"
+            continue
+
+        # 2) Tiro máximo de ESTA fila puntual (sin comparar con otras
+        #    apariciones del mismo poste)
+        tiros = []
+        if i < len(ta_exp) and not pd.isna(ta_exp.iloc[i]):
+            tiros.append(abs(ta_exp.iloc[i]))
+        if i < len(td_exp) and not pd.isna(td_exp.iloc[i]):
+            tiros.append(abs(td_exp.iloc[i]))
+
+        if not tiros:
+            continue  # queda None, igual que la original
+
+        tiro_max = max(tiros)
+
+        # 3) Carga de rotura del cable de ESTA fila
+        nombre_cable = cable_exp.iloc[i] if i < len(cable_exp) else None
+        carga_rotura = carga_rotura_cable(nombre_cable)
+
+        if carga_rotura is None:
+            continue  # queda None, igual que la original
+
+        # 4) Comparación 8%
+        resultado[i] = "Normal" if tiro_max > 0.08 * carga_rotura else "Reducido"
+
+    return pd.Series(resultado, name=nombre_columna)
+
 def calcular_vanos_adelante_atras(
     carac_postes,
     postes_orden,
