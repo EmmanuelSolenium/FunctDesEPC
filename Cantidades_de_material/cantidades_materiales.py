@@ -446,6 +446,7 @@ COL_NOMBRE_DEFAULT = ("Identificación", "Nombre Est.")
 COL_NRUTA_DEFAULT = ("Identificación", "N° Est.")
 COL_DERIVACION_DEFAULT = ("Identificación", "Derivación")
 COL_TIPO_SOPORTE_DEFAULT = ("Estructura", "Tipo Soporte")
+COL_TIPO_PAT_DEFAULT = ("Estructura", "Tipo PAT")
 
 # Columnas de retenidas en el grupo "Estructura": el nombre de columna ES el
 # código de armado a buscar en el catálogo (p.ej. "RT003"), y el VALOR de la
@@ -926,19 +927,16 @@ def extraer_retenidas_planilla(
     return df
 
 
-# =====================================================================
-#  3-bis. CONTEO DE POSTES POR TIPO DE SOPORTE
-# =====================================================================
-
-# Valores que se consideran "vacíos" en 'Tipo Soporte' y por lo tanto no
-# cuentan como un tipo de poste válido.
+# Valores que se consideran "vacíos" en 'Tipo Soporte' / 'Tipo PAT' y por lo
+# tanto no cuentan como un tipo válido.
 _VALORES_VACIOS_TIPO_SOPORTE = {"", "nan", "none", "0", "-", "n/a", "na"}
 
 
 def _es_tipo_soporte_valido(valor) -> bool:
     """
-    Indica si un valor de 'Tipo Soporte' debe considerarse válido, es decir
-    que no es None, NaN, 0, ni equivalentes textuales vacíos como "-" o "".
+    Indica si un valor de 'Tipo Soporte' / 'Tipo PAT' debe considerarse
+    válido, es decir que no es None, NaN, 0, ni equivalentes textuales
+    vacíos como "-" o "".
     """
     if valor is None:
         return False
@@ -949,6 +947,68 @@ def _es_tipo_soporte_valido(valor) -> bool:
     s = str(valor).strip().lower()
     return s not in _VALORES_VACIOS_TIPO_SOPORTE
 
+
+def extraer_pat_planilla(
+    est_df: pd.DataFrame,
+    col_tipo_pat: Tuple[str, str] = COL_TIPO_PAT_DEFAULT,
+    col_nombre: Tuple[str, str] = COL_NOMBRE_DEFAULT,
+    col_nruta: Optional[Tuple[str, str]] = COL_NRUTA_DEFAULT,
+    col_derivacion: Optional[Tuple[str, str]] = COL_DERIVACION_DEFAULT,
+) -> pd.DataFrame:
+    """
+    Extrae el SPT (sistema de puesta a tierra) de cada poste a partir de la
+    columna 'Tipo PAT', donde el VALOR de la celda ES el código de armado a
+    buscar en el catálogo (p.ej. "SPT001").
+
+    A diferencia de las retenidas (RT00X), aquí no hay una columna por cada
+    código posible con una cantidad: hay una única columna 'Tipo PAT' cuyo
+    contenido es el código del SPT instalado en ese poste (o vacío/"-" si no
+    tiene). Se asume una unidad de SPT por poste cuando el valor es válido.
+
+    Genera el mismo formato "largo" que `extraer_armados_planilla` /
+    `extraer_retenidas_planilla` (nombre_poste | derivacion | n_est |
+    tipo_armado | armado | armado_norm), para poder reutilizar
+    `calcular_cantidades` sin modificarla.
+
+    Celdas vacías, NaN, None, 0 o equivalentes textuales vacíos ("-", "n/a",
+    etc., ver `_es_tipo_soporte_valido`) se ignoran (el poste no tiene SPT).
+    """
+    if col_tipo_pat not in est_df.columns:
+        raise KeyError(f"No se encontró la columna {col_tipo_pat!r} en la planilla.")
+
+    registros: List[dict] = []
+    for idx, fila in est_df.iterrows():
+        nombre = fila.get(col_nombre, idx)
+        derivacion = fila.get(col_derivacion) if col_derivacion else None
+        n_est = fila.get(col_nruta) if col_nruta else None
+
+        valor = fila.get(col_tipo_pat)
+        if not _es_tipo_soporte_valido(valor):
+            continue
+
+        codigo_armado = str(valor).strip()
+        registros.append({
+            "nombre_poste": str(nombre).strip() if pd.notna(nombre) else "",
+            "derivacion": str(derivacion).strip() if pd.notna(derivacion) else "",
+            "n_est": n_est,
+            "tipo_armado": "SPT",
+            "armado": codigo_armado,
+            # El SPT no tiene conductor de fase asociado ni participa de la
+            # selección de aislador (igual que las retenidas).
+            "calibre": None,
+            "aislador": None,
+        })
+
+    df = pd.DataFrame(registros,
+                      columns=["nombre_poste", "derivacion", "n_est",
+                               "tipo_armado", "armado", "calibre", "aislador"])
+    df["armado_norm"] = df["armado"].apply(normalizar_codigo_armado)
+    return df
+
+
+# =====================================================================
+#  3-bis. CONTEO DE POSTES POR TIPO DE SOPORTE
+# =====================================================================
 
 def contar_tipos_soporte(
     est_df: pd.DataFrame,
@@ -1434,6 +1494,7 @@ def generar_cantidades_materiales(
     columnas_armado: Sequence[Tuple[str, str]] = COLUMNAS_ARMADO_DEFAULT,
     columnas_retenida: Sequence[Tuple[str, str]] = COLUMNAS_RETENIDA_DEFAULT,
     col_tipo_soporte: Tuple[str, str] = COL_TIPO_SOPORTE_DEFAULT,
+    col_tipo_pat: Tuple[str, str] = COL_TIPO_PAT_DEFAULT,
     col_conductor_principal1: Optional[Tuple[str, str]] = COL_CONDUCTOR_PRINCIPAL1_DEFAULT,
     col_conductor_principal2: Optional[Tuple[str, str]] = COL_CONDUCTOR_PRINCIPAL2_DEFAULT,
     col_topografia_x: Tuple[str, str] = COL_TOPO_X_DEFAULT,
@@ -1441,6 +1502,7 @@ def generar_cantidades_materiales(
     epsg_planilla: str = EPSG_PLANILLA_DEFAULT,
     nivel_contaminacion_forzado: Optional[str] = None,
     incluir_retenidas: bool = True,
+    incluir_pat: bool = True,
     ruta_salida: str = "Cantidades_totales_proyecto.xlsx",
     incluir_detalle: bool = True,
     verbose: bool = True,
@@ -1482,6 +1544,11 @@ def generar_cantidades_materiales(
     incluir_retenidas : bool
         Si es False, omite por completo el aporte de retenidas (equivalente
         al comportamiento anterior a esta función).
+    col_tipo_pat : tupla
+        Columna 'Tipo PAT' con el código de SPT (sistema de puesta a tierra)
+        instalado en cada poste (p.ej. "SPT001"). Ver `extraer_pat_planilla`.
+    incluir_pat : bool
+        Si es False, omite por completo el aporte de SPT/PAT.
 
     Aislador
     --------
@@ -1495,7 +1562,7 @@ def generar_cantidades_materiales(
     de aislador cuya familia coincide con la determinada).
 
     Devuelve un dict con las claves:
-        'catalogo', 'armados', 'retenidas', 'totales', 'no_encontrados',
+        'catalogo', 'armados', 'retenidas', 'pat', 'totales', 'no_encontrados',
         'detalle', 'fase_sin_calibre', 'aislador_sin_determinar',
         'aislador_sin_correspondencia', 'contaminacion', 'tipos_soporte',
         'ruta_salida'
@@ -1542,7 +1609,19 @@ def generar_cantidades_materiales(
                       f"{len(retenidas)} retenidas instaladas en total.")
             armados = pd.concat([armados, retenidas], ignore_index=True)
 
-        # --- Etapa 3: calcular cantidades (armados + retenidas juntos) ---
+        # --- Etapa 2-ter: extraer SPT/PAT ('Tipo PAT') y unirlas a los armados ---
+        pat = pd.DataFrame(
+            columns=["nombre_poste", "derivacion", "n_est",
+                     "tipo_armado", "armado", "calibre", "aislador", "armado_norm"])
+        if incluir_pat:
+            etapa = "extracción de SPT (Tipo PAT)"
+            pat = extraer_pat_planilla(est_df, col_tipo_pat=col_tipo_pat)
+            if verbose:
+                print(f"[planilla] {pat['nombre_poste'].nunique()} postes con SPT, "
+                      f"{len(pat)} SPT instalados en total.")
+            armados = pd.concat([armados, pat], ignore_index=True)
+
+        # --- Etapa 3: calcular cantidades (armados + retenidas + SPT juntos) ---
         etapa = "cálculo de cantidades"
         resultado = calcular_cantidades(armados, catalogo, verbose=verbose)
         resultado["contaminacion"] = contaminacion
@@ -1565,6 +1644,7 @@ def generar_cantidades_materiales(
         "catalogo": catalogo,
         "armados": armados,
         "retenidas": retenidas,
+        "pat": pat,
         "totales": resultado["totales"],
         "no_encontrados": resultado["no_encontrados"],
         "detalle": resultado["detalle"],
