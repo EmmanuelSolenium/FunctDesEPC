@@ -1202,6 +1202,120 @@ def _numero_fases_armado(codigo_armado: Optional[str]) -> Optional[int]:
 COL_VANO_ADELANTE_DEFAULT_KEY = COL_VANO_ADELANTE_DEFAULT
 
 
+# =====================================================================
+#  3-sexies. EQUIVALENCIAS DE NOMBRE DE CABLE (nombre "original" a exportar)
+# =====================================================================
+#
+# El nombre de cable que se obtiene automáticamente a partir del código de
+# 'Tipo Conductor' (ver `identificar_cables_conductor`) no siempre coincide
+# con el nombre "oficial" que se usa en las cantidades de material del
+# proyecto (p.ej. el catálogo interno usa "1/0 ACSR 13.2 kV" mientras que el
+# nombre oficial de ese mismo cable es "1/0 ACSR, 15kV, Semiaislado"). Esta
+# tabla de equivalencias, cargada desde un Excel de dos columnas
+# ('Cable cantidades original' / 'equivalente'), permite reemplazar el
+# nombre calculado por el nombre original cuando coincide con alguno de los
+# "equivalentes" conocidos; si el nombre calculado NO aparece en la tabla,
+# se deja tal cual salió del código (comportamiento sin cambios).
+
+COL_CABLE_ORIGINAL_DEFAULT = "Cable cantidades original"
+COL_CABLE_EQUIVALENTE_DEFAULT = "equivalente"
+
+
+def _normalizar_nombre_cable(nombre) -> str:
+    """
+    Normaliza un nombre de cable para comparar equivalencias sin que
+    diferencias de espacios, mayúsculas o comas/puntos de más generen falsos
+    negativos (p.ej. "123,3 AAAC " con espacio final vs "123,3 AAAC").
+    """
+    if nombre is None:
+        return ""
+    if isinstance(nombre, float) and np.isnan(nombre):
+        return ""
+    s = str(nombre).strip()
+    s = re.sub(r"\s+", " ", s)
+    return s.upper()
+
+
+def cargar_equivalencias_cable(
+    ruta: str,
+    col_original: str = COL_CABLE_ORIGINAL_DEFAULT,
+    col_equivalente: str = COL_CABLE_EQUIVALENTE_DEFAULT,
+    hoja: Optional[str] = None,
+    verbose: bool = True,
+) -> Dict[str, str]:
+    """
+    Carga la tabla de equivalencias de nombre de cable desde un Excel de dos
+    columnas: 'Cable cantidades original' (nombre a usar en las cantidades
+    finales) y 'equivalente' (uno de los nombres que puede salir del cálculo
+    automático a partir del código de 'Tipo Conductor', ver
+    `identificar_cables_conductor`).
+
+    Puede haber varias filas con el mismo nombre "original" y distintos
+    "equivalentes" (varios alias apuntan al mismo cable oficial); todas se
+    incorporan al mapa. Si el mismo "equivalente" (normalizado) aparece más
+    de una vez con distinto "original", gana la ÚLTIMA fila leída y se
+    avisa por consola (dato inconsistente en el Excel de equivalencias, hay
+    que revisarlo).
+
+    Devuelve un diccionario  { equivalente_normalizado : nombre_original }
+    listo para usar con `aplicar_equivalencias_cable`.
+    """
+    if not os.path.exists(ruta):
+        raise FileNotFoundError(f"No se encontró el Excel de equivalencias de cable: {ruta}")
+
+    df = pd.read_excel(ruta, sheet_name=hoja if hoja else 0)
+    faltantes = [c for c in (col_original, col_equivalente) if c not in df.columns]
+    if faltantes:
+        raise KeyError(
+            f"El Excel de equivalencias no tiene las columnas {faltantes!r}. "
+            f"Columnas encontradas: {list(df.columns)!r}"
+        )
+
+    mapa: Dict[str, str] = {}
+    duplicados: List[Tuple[str, str, str]] = []
+    for _, fila in df.iterrows():
+        original = fila.get(col_original)
+        equivalente = fila.get(col_equivalente)
+        if pd.isna(original) or pd.isna(equivalente):
+            continue
+        original = str(original).strip()
+        equiv_norm = _normalizar_nombre_cable(equivalente)
+        if equiv_norm == "":
+            continue
+        if equiv_norm in mapa and mapa[equiv_norm] != original:
+            duplicados.append((equiv_norm, mapa[equiv_norm], original))
+        mapa[equiv_norm] = original
+
+    if verbose:
+        print(f"[equivalencias_cable] {len(mapa)} equivalencias cargadas desde {ruta!r}.")
+        for equiv_norm, ant, nuevo in duplicados:
+            print(f"[equivalencias_cable] ⚠ Equivalente {equiv_norm!r} aparece con más de "
+                  f"un original distinto ({ant!r} / {nuevo!r}); se usa el último: {nuevo!r}.")
+
+    return mapa
+
+
+def aplicar_equivalencias_cable(
+    nombre_cable,
+    mapa_equivalencias: Optional[Dict[str, str]],
+) -> str:
+    """
+    Devuelve el nombre "original" que corresponde a `nombre_cable` según
+    `mapa_equivalencias` (ver `cargar_equivalencias_cable`), si
+    `nombre_cable` (normalizado) coincide con alguno de los "equivalentes"
+    conocidos. Si no coincide con ninguno, o si `mapa_equivalencias` es
+    None/vacío, se devuelve `nombre_cable` sin cambios (tal como salió del
+    cálculo automático a partir del código, ver
+    `identificar_cables_conductor`).
+    """
+    if nombre_cable is None:
+        return nombre_cable
+    if not mapa_equivalencias:
+        return nombre_cable
+    equiv_norm = _normalizar_nombre_cable(nombre_cable)
+    return mapa_equivalencias.get(equiv_norm, nombre_cable)
+
+
 def extraer_longitudes_cable_planilla(
     est_df: pd.DataFrame,
     col_nombre: Tuple[str, str] = COL_NOMBRE_DEFAULT,
@@ -1215,6 +1329,7 @@ def extraer_longitudes_cable_planilla(
     col_armado_secundario1: Tuple[str, str] = COLUMNAS_ARMADO_DEFAULT[2],
     col_armado_secundario2: Tuple[str, str] = COLUMNAS_ARMADO_DEFAULT[3],
     col_vano_adelante: Tuple[str, str] = COL_VANO_ADELANTE_DEFAULT,
+    equivalencias_cable: Optional[Dict[str, str]] = None,
 ) -> pd.DataFrame:
     """
     Calcula la longitud total de cable (por tipo de cable) de TODA la línea,
@@ -1230,20 +1345,34 @@ def extraer_longitudes_cable_planilla(
     Ver `calcular_longitudes_cable_poste` para el detalle de las reglas de
     identificación de cables (compacta/normal) y sus multiplicadores.
 
+    Equivalencias de nombre
+    ------------------------
+    Si se pasa `equivalencias_cable` (ver `cargar_equivalencias_cable`), el
+    nombre de cable obtenido automáticamente del código se reemplaza por su
+    nombre "original" cuando coincide con alguno de los equivalentes
+    conocidos (ver `aplicar_equivalencias_cable`); si no coincide con
+    ninguno, se deja el nombre calculado sin cambios. El nombre ANTES del
+    reemplazo queda disponible en la columna `cable_calculado` para poder
+    auditar qué se reemplazó.
+
     Devuelve un DataFrame "largo" con una fila por cada aporte de cable de
     cada poste (para trazabilidad), con columnas:
 
         nombre_poste | derivacion | n_ruta | n_est | lado | rol |
-        cable | armado_usado | vano_adelante | metros
+        cable | cable_calculado | armado_usado | vano_adelante | metros
 
-    donde `cable` es el nombre del cable (fase/mensajero/normal), `lado` es
-    "principal1" o "principal2", y `rol` es "fase"/"mensajero"/"normal".
+    donde `cable` es el nombre del cable YA con la equivalencia aplicada
+    (fase/mensajero/normal), `cable_calculado` es el nombre tal como salió
+    de `identificar_cables_conductor` (antes de aplicar equivalencias),
+    `lado` es "principal1" o "principal2", y `rol` es
+    "fase"/"mensajero"/"normal".
 
     La suma total por cable (para las cantidades finales exportadas) se
     obtiene agregando esta tabla por `cable` (ver `sumar_totales_cable`).
     """
     columnas_salida = ["nombre_poste", "derivacion", "n_ruta", "n_est", "lado",
-                        "rol", "cable", "armado_usado", "vano_adelante", "metros"]
+                        "rol", "cable", "cable_calculado", "armado_usado",
+                        "vano_adelante", "metros"]
 
     faltantes_col = [c for c in (col_conductor_principal1, col_conductor_principal2,
                                   col_vano_adelante) if c not in est_df.columns]
@@ -1302,6 +1431,8 @@ def extraer_longitudes_cable_planilla(
             )
 
             for aporte in aportes:
+                cable_calculado = aporte["nombre"]
+                cable_final = aplicar_equivalencias_cable(cable_calculado, equivalencias_cable)
                 registros.append({
                     "nombre_poste": nombre,
                     "derivacion": derivacion,
@@ -1309,7 +1440,8 @@ def extraer_longitudes_cable_planilla(
                     "n_est": n_est,
                     "lado": aporte["lado"],
                     "rol": aporte["rol"],
-                    "cable": aporte["nombre"],
+                    "cable": cable_final,
+                    "cable_calculado": cable_calculado,
                     "armado_usado": aporte["armado_usado"],
                     "vano_adelante": vano_adelante,
                     "metros": aporte["metros"],
@@ -2070,8 +2202,8 @@ def exportar_cantidades_excel(resultado: Dict[str, pd.DataFrame],
         if incluir_detalle and len(resultado.get("detalle_cable", [])):
             det_cable = resultado["detalle_cable"].copy()
             det_cable.columns = ["Poste", "Derivación", "N° Ruta", "N° Est.",
-                                  "Lado", "Rol", "Cable", "Armado usado",
-                                  "Vano Adelante (m)", "Metros"]
+                                  "Lado", "Rol", "Cable", "Cable (calculado)",
+                                  "Armado usado", "Vano Adelante (m)", "Metros"]
             det_cable.to_excel(writer, sheet_name="Detalle Cable", index=False)
 
         wb = writer.book
@@ -2126,6 +2258,7 @@ def generar_cantidades_materiales(
     incluir_pat: bool = True,
     incluir_cable: bool = True,
     col_vano_adelante: Tuple[str, str] = COL_VANO_ADELANTE_DEFAULT,
+    ruta_equivalencias_cable: Optional[str] = None,
     decimales_cantidades: int = DECIMALES_CANTIDADES_DEFAULT,
     ruta_salida: str = "Cantidades_totales_proyecto.xlsx",
     incluir_detalle: bool = True,
@@ -2183,6 +2316,16 @@ def generar_cantidades_materiales(
     col_vano_adelante : tupla
         Columna 'Vano Adelante' (grupo 'Topografía') con la distancia en
         metros entre cada poste y el siguiente de su misma ruta.
+    ruta_equivalencias_cable : str, opcional
+        Ruta a un Excel de dos columnas ('Cable cantidades original' /
+        'equivalente') que mapea nombres de cable "equivalentes" (los que
+        puede producir el cálculo automático a partir del código, ver
+        `identificar_cables_conductor`) a su nombre "original" para las
+        cantidades finales (ver `cargar_equivalencias_cable`). Si un cable
+        calculado coincide con alguno de los equivalentes, se reemplaza por
+        su nombre original; si no coincide con ninguno, se deja el nombre
+        calculado sin cambios. Si es None (por defecto), no se aplica
+        ningún reemplazo.
     decimales_cantidades : int
         Ya no afecta el resultado (se conserva por compatibilidad): las
         cantidades siempre se redondean hacia ARRIBA al entero siguiente
@@ -2262,9 +2405,16 @@ def generar_cantidades_materiales(
         # --- Etapa 2-quater: calcular cantidades de cable (conductores) por vano ---
         detalle_cable = pd.DataFrame(
             columns=["nombre_poste", "derivacion", "n_ruta", "n_est", "lado",
-                     "rol", "cable", "armado_usado", "vano_adelante", "metros"])
+                     "rol", "cable", "cable_calculado", "armado_usado",
+                     "vano_adelante", "metros"])
         totales_cable = pd.DataFrame(columns=["cable", "metros_total"])
         if incluir_cable:
+            equivalencias_cable = None
+            if ruta_equivalencias_cable is not None:
+                etapa = "carga de equivalencias de nombre de cable"
+                equivalencias_cable = cargar_equivalencias_cable(
+                    ruta_equivalencias_cable, verbose=verbose)
+
             etapa = "cálculo de longitudes de cable"
             detalle_cable = extraer_longitudes_cable_planilla(
                 est_df,
@@ -2275,6 +2425,7 @@ def generar_cantidades_materiales(
                 col_armado_secundario1=columnas_armado[2],
                 col_armado_secundario2=columnas_armado[3],
                 col_vano_adelante=col_vano_adelante,
+                equivalencias_cable=equivalencias_cable,
             )
             totales_cable = sumar_totales_cable(detalle_cable)
             totales_cable = redondear_cantidades(
