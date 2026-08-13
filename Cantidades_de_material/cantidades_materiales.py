@@ -879,6 +879,428 @@ def ajustar_nombre_material_fase(nombre: str, calibre: Optional[str]) -> str:
     return ajustado
 
 
+# =====================================================================
+#  3-quinquies. CANTIDADES TOTALES DE CABLE (conductores) POR VANO
+# =====================================================================
+#
+# Esta sección determina, a partir de 'Tipo Conductor' (Conductor Principal1
+# / Conductor Principal2), 'Vano Adelante' y los armados Primario1/Primario2
+# / Secundario1/Secundario2, la cantidad TOTAL de cada cable (fase,
+# mensajero, o cable "normal") que hay en toda la línea.
+#
+# Ver docstring de `extraer_longitudes_cable_planilla` para el detalle
+# completo de las reglas (identificación de red compacta/normal,
+# multiplicadores por armado, definición de vano, etc.).
+
+# Columna con la cantidad en metros del vano ENTRE un poste y el siguiente
+# (en la misma ruta/derivación).
+COL_VANO_ADELANTE_DEFAULT = ("Topografía", "Vano Adelante")
+
+# Prefijo que identifica una red tipo "compacta" (ver
+# `identificar_cables_conductor`): "SM" + nivel de tensión + "-" + cantidad
+# de fases + "x" + calibre+tipo de fase + "/" + cable mensajero.
+#
+# IMPORTANTE: el separador "/" entre el bloque de fase y el mensajero debe
+# tener espacios a ambos lados (" / "). Esto es necesario porque el propio
+# calibre de la fase puede contener una "/" SIN espacios (p.ej. "1/0ACSR"
+# en "SM34.5-3x1/0ACSR / Al7N8"); si se aceptara cualquier "/" como
+# separador, la primera "/" (la del calibre) se confundiría con la del
+# mensajero y el calibre quedaría truncado.
+_RE_RED_COMPACTA = re.compile(
+    r"^SM\s*([\d.,]+)\s*-\s*(\d+)\s*x\s*(.+?)\s+/\s+(.+)$", re.IGNORECASE
+)
+
+# Dentro del bloque "calibre+tipo" de una red compacta (p.ej. "63AAAC" o
+# "1/0ACSR"), separa el calibre (números, comas, puntos, "/") del tipo de
+# cable (letras) que le sigue sin espacio.
+_RE_CALIBRE_TIPO_FASE = re.compile(r"^([\d.,/]+)\s*([A-Za-zÀ-ÿ]+)\s*$")
+
+# Multiplicador base (sin duplicar) de una red compacta: 1 mensajero y 3
+# fases por circuito.
+_MENSAJEROS_BASE_COMPACTA = 1
+_FASES_BASE_COMPACTA = 3
+
+# Patrón de armado que indica que el circuito está duplicado (2 circuitos
+# autosoportados, ver `identificar_poste`/`numero_fases` en
+# funciones_mecanicas.py: primer dígito numérico = 7): "MTF7XX-X". En ese
+# caso los multiplicadores de mensajero/fase de la red compacta se
+# multiplican x2 (2 mensajeros, 6 fases).
+_RE_ARMADO_DOBLE_CIRCUITO = re.compile(r"^MTF7\d\d-\d", re.IGNORECASE)
+
+
+def es_armado_doble_circuito(codigo_armado) -> bool:
+    """
+    Indica si un código de armado corresponde a un poste autosoportado de
+    2 circuitos (patrón "MTF7XX-X"), caso en el que los multiplicadores de
+    mensajero/fase de una red compacta se duplican (2 mensajeros, 6 fases
+    en vez de 1 mensajero y 3 fases).
+
+    >>> es_armado_doble_circuito("MTF731-1")
+    True
+    >>> es_armado_doble_circuito("MTF631-1")
+    False
+    >>> es_armado_doble_circuito("MT331-2")
+    False
+    """
+    if codigo_armado is None:
+        return False
+    s = str(codigo_armado).strip().upper()
+    s = re.sub(r"\s+", "", s)
+    return bool(_RE_ARMADO_DOBLE_CIRCUITO.match(s))
+
+
+def identificar_cables_conductor(tipo_conductor) -> Optional[List[dict]]:
+    """
+    Identifica el/los cable(s) que describe un texto de 'Tipo Conductor'
+    (columnas 'Conductor Principal1'/'Conductor Principal2' de la planilla),
+    y determina si la red es COMPACTA o NORMAL:
+
+    1. Red COMPACTA: el texto empieza con el prefijo "SM", seguido del nivel
+       de tensión, un "-", la cantidad de conductores de fase, una "x", el
+       calibre y tipo de la fase, una "/" y finalmente el cable mensajero.
+       Ejemplo:
+           "SM13.2-3x63AAAC / Aluminium Clad Steel 7 Nº 8"
+       produce DOS cables:
+         - Fase     = "63 AAAC 13.2 kV"       (calibre + tipo + nivel kV)
+         - Mensajero = "Aluminium Clad Steel 7 Nº 8"  (texto completo tras "/")
+
+    2. Red NORMAL: no tiene el prefijo "SM" de red compacta. El cable a
+       incluir es el nombre completo tal cual aparece, p.ej. "ACSR 1/0 AWG".
+       Produce UN solo cable.
+
+    Devuelve una lista de dicts, cada uno con:
+        {"nombre": <nombre del cable>, "rol": "fase" | "mensajero" | "normal"}
+
+    El orden de los multiplicadores (fases=3, mensajero=1) se aplica después,
+    en `calcular_longitudes_cable` / `extraer_longitudes_cable_planilla`;
+    esta función solo IDENTIFICA los cables, no calcula cantidades.
+
+    Devuelve None si el texto está vacío/"-"/NaN (no hay conductor).
+    """
+    if tipo_conductor is None:
+        return None
+    if isinstance(tipo_conductor, float) and np.isnan(tipo_conductor):
+        return None
+    s = str(tipo_conductor).strip()
+    if s == "" or s.lower() in _VALORES_VACIOS_CONDUCTOR:
+        return None
+
+    m = _RE_RED_COMPACTA.match(s)
+    if m:
+        nivel_kv, _cant_fases, calibre_tipo, mensajero = m.groups()
+        calibre_tipo = calibre_tipo.strip()
+        mensajero = mensajero.strip()
+        nivel_kv = nivel_kv.strip()
+
+        m_ct = _RE_CALIBRE_TIPO_FASE.match(calibre_tipo)
+        if m_ct:
+            calibre, tipo = m_ct.group(1).strip(), m_ct.group(2).strip()
+            nombre_fase = f"{calibre} {tipo} {nivel_kv} kV"
+        else:
+            # No se pudo separar calibre/tipo: se deja el bloque completo
+            # seguido del nivel de tensión, en vez de fallar.
+            nombre_fase = f"{calibre_tipo} {nivel_kv} kV"
+
+        return [
+            {"nombre": nombre_fase, "rol": "fase"},
+            {"nombre": mensajero, "rol": "mensajero"},
+        ]
+
+    # Red normal: el nombre completo tal cual aparece es el cable.
+    return [{"nombre": s, "rol": "normal"}]
+
+
+def _armado_para_conductor_principal(
+    valor_primero: Optional[str], valor_segundo: Optional[str]
+) -> Optional[str]:
+    """
+    Determina qué código de armado usar para calcular el multiplicador de
+    fase/mensajero de un conductor principal, a partir de sus dos posibles
+    columnas de armado (p.ej. Primario1/Primario2 para Conductor Principal1,
+    o Secundario1/Secundario2 para Conductor Principal2):
+
+        * Si solo uno de los dos tiene valor, se usa ese.
+        * Si ambos tienen valor, se toma el PRIMERO por defecto (ver
+          especificación: "en caso de que estén ambos se toma el 1 por
+          defecto").
+        * Si ninguno tiene valor, devuelve None.
+    """
+    def _valido(v) -> bool:
+        return v is not None and pd.notna(v) and str(v).strip() != ""
+
+    if _valido(valor_primero):
+        return str(valor_primero).strip()
+    if _valido(valor_segundo):
+        return str(valor_segundo).strip()
+    return None
+
+
+def calcular_longitudes_cable_poste(
+    tipo_conductor_principal1,
+    tipo_conductor_principal2,
+    armado_primario1,
+    armado_primario2,
+    armado_secundario1,
+    armado_secundario2,
+    vano_adelante: Optional[float],
+) -> List[dict]:
+    """
+    Calcula el aporte de cable (en metros) de UN poste hacia su vano
+    adelante, tanto para el conductor primario (Conductor Principal1) como
+    para el secundario (Conductor Principal2).
+
+    Reglas (ver especificación funcional completa):
+
+      1. El armado a usar para el multiplicador de Conductor Principal1 es
+         el de Primario1 (o Primario2 si Primario1 está vacío; si ambos
+         están, se usa Primario1 por defecto). Análogamente, el armado para
+         Conductor Principal2 es el de Secundario1 (o Secundario2, con el
+         mismo criterio de "1 por defecto").
+
+      2. Si 'Vano Adelante' es None/NaN/<=0, o el 'Tipo Conductor'
+         correspondiente está vacío, ese conductor no aporta cable (lista
+         vacía para ese lado).
+
+      3. Red COMPACTA (ver `identificar_cables_conductor`): el vano aporta
+         siempre 1 mensajero y 3 fases; si el armado usado en ese lado es de
+         la forma "MTF7XX-X" (ver `es_armado_doble_circuito`), el aporte se
+         duplica (2 mensajeros, 6 fases).
+
+      4. Red NORMAL: el vano aporta tantas veces el cable como fases indique
+         `funciones_mecanicas.numero_fases` (importado de forma perezosa)
+         aplicado al armado usado en ese lado.
+
+    Devuelve una lista de dicts:
+        [{"nombre": <cable>, "metros": <float>, "lado": "principal1"|"principal2"}, ...]
+
+    (uno por cada cable distinto que aporta ese poste; puede tener 0, 1 o 2
+    entradas por lado, según si hay fase+mensajero o un solo cable normal).
+    """
+    aportes: List[dict] = []
+
+    if vano_adelante is None or pd.isna(vano_adelante) or float(vano_adelante) <= 0:
+        return aportes
+    vano = float(vano_adelante)
+
+    def _procesar_lado(tipo_conductor, armado_a, armado_b, etiqueta_lado):
+        cables = identificar_cables_conductor(tipo_conductor)
+        if not cables:
+            return
+        armado_usado = _armado_para_conductor_principal(armado_a, armado_b)
+
+        for cable in cables:
+            nombre, rol = cable["nombre"], cable["rol"]
+            if rol == "normal":
+                # Red normal: se multiplica por el número de fases del
+                # armado usado en este lado.
+                n_fases = _numero_fases_armado(armado_usado)
+                if n_fases is None:
+                    # No se pudo determinar el número de fases: se reporta
+                    # tal cual (factor 1) para no perder el cable, pero
+                    # queda visible en el detalle para poder auditar.
+                    n_fases = 1
+                metros = vano * n_fases
+            else:
+                # Red compacta: multiplicadores base (fase=3, mensajero=1),
+                # duplicados si el armado usado es "MTF7XX-X".
+                factor = 2 if es_armado_doble_circuito(armado_usado) else 1
+                base = _FASES_BASE_COMPACTA if rol == "fase" else _MENSAJEROS_BASE_COMPACTA
+                metros = vano * base * factor
+
+            aportes.append({
+                "nombre": nombre,
+                "rol": rol,
+                "metros": metros,
+                "lado": etiqueta_lado,
+                "armado_usado": armado_usado,
+            })
+
+    _procesar_lado(tipo_conductor_principal1, armado_primario1, armado_primario2, "principal1")
+    _procesar_lado(tipo_conductor_principal2, armado_secundario1, armado_secundario2, "principal2")
+
+    return aportes
+
+
+_FUNCIONES_MECANICAS_MODULO = None
+
+
+def _numero_fases_armado(codigo_armado: Optional[str]) -> Optional[int]:
+    """
+    Determina el número de fases de un código de armado de red NORMAL
+    (p.ej. "MT331-1" -> 3 fases, "MT321-1" -> 2 fases), reutilizando la
+    misma lógica que `funciones_mecanicas.numero_fases` (segundo dígito
+    numérico del código de armado).
+
+    Se importa `funciones_mecanicas` de forma perezosa (y se cachea el
+    módulo) para no romper este archivo si esa dependencia no está
+    disponible en algún entorno; en ese caso se recalcula la misma regex
+    localmente como respaldo.
+
+    Devuelve None si no se reconoce el patrón "MT(F?)###-#" en el código.
+    """
+    if codigo_armado is None:
+        return None
+    codigo = str(codigo_armado).strip()
+    if codigo == "" or codigo.lower() in ("nan", "-", "none"):
+        return None
+
+    global _FUNCIONES_MECANICAS_MODULO
+    if _FUNCIONES_MECANICAS_MODULO is None:
+        try:
+            import funciones_mecanicas as _fm
+            _FUNCIONES_MECANICAS_MODULO = _fm
+        except ImportError:
+            _FUNCIONES_MECANICAS_MODULO = False  # marca "no disponible"
+
+    codigo_norm = codigo.replace(" ", "")
+    if not re.search(r"MT\s*F?\s*\d{3}-\d", codigo_norm, re.IGNORECASE) and \
+       re.search(r"MT\s*F?\s*\d{3}$", codigo_norm, re.IGNORECASE):
+        codigo_norm = codigo_norm + "-1"
+    match = re.search(r"MT(F?)(\d{3})-(\d)", codigo_norm, re.IGNORECASE)
+    if not match:
+        return None
+    return int(match.group(2)[1])
+
+
+COL_VANO_ADELANTE_DEFAULT_KEY = COL_VANO_ADELANTE_DEFAULT
+
+
+def extraer_longitudes_cable_planilla(
+    est_df: pd.DataFrame,
+    col_nombre: Tuple[str, str] = COL_NOMBRE_DEFAULT,
+    col_nruta: Optional[Tuple[str, str]] = COL_NRUTA_DEFAULT,
+    col_derivacion: Optional[Tuple[str, str]] = COL_DERIVACION_DEFAULT,
+    col_n_general: Tuple[str, str] = ("Identificación", "N°"),
+    col_conductor_principal1: Tuple[str, str] = COL_CONDUCTOR_PRINCIPAL1_DEFAULT,
+    col_conductor_principal2: Tuple[str, str] = COL_CONDUCTOR_PRINCIPAL2_DEFAULT,
+    col_armado_primario1: Tuple[str, str] = COLUMNAS_ARMADO_DEFAULT[0],
+    col_armado_primario2: Tuple[str, str] = COLUMNAS_ARMADO_DEFAULT[1],
+    col_armado_secundario1: Tuple[str, str] = COLUMNAS_ARMADO_DEFAULT[2],
+    col_armado_secundario2: Tuple[str, str] = COLUMNAS_ARMADO_DEFAULT[3],
+    col_vano_adelante: Tuple[str, str] = COL_VANO_ADELANTE_DEFAULT,
+) -> pd.DataFrame:
+    """
+    Calcula la longitud total de cable (por tipo de cable) de TODA la línea,
+    a partir de 'Tipo Conductor' (Conductor Principal1/2), los armados
+    (Primario1/2, Secundario1/2) y 'Vano Adelante' de cada poste.
+
+    Un VANO es la distancia entre un poste y el siguiente EN LA MISMA RUTA
+    (misma combinación de 'N°'+'Derivación'); por eso la planilla se agrupa
+    por esa combinación y, dentro de cada grupo, se procesa en el orden de
+    'N° Est.' -- 'Vano Adelante' de un poste es el vano hacia el poste
+    siguiente dentro de ese mismo grupo.
+
+    Ver `calcular_longitudes_cable_poste` para el detalle de las reglas de
+    identificación de cables (compacta/normal) y sus multiplicadores.
+
+    Devuelve un DataFrame "largo" con una fila por cada aporte de cable de
+    cada poste (para trazabilidad), con columnas:
+
+        nombre_poste | derivacion | n_ruta | n_est | lado | rol |
+        cable | armado_usado | vano_adelante | metros
+
+    donde `cable` es el nombre del cable (fase/mensajero/normal), `lado` es
+    "principal1" o "principal2", y `rol` es "fase"/"mensajero"/"normal".
+
+    La suma total por cable (para las cantidades finales exportadas) se
+    obtiene agregando esta tabla por `cable` (ver `sumar_totales_cable`).
+    """
+    columnas_salida = ["nombre_poste", "derivacion", "n_ruta", "n_est", "lado",
+                        "rol", "cable", "armado_usado", "vano_adelante", "metros"]
+
+    faltantes_col = [c for c in (col_conductor_principal1, col_conductor_principal2,
+                                  col_vano_adelante) if c not in est_df.columns]
+    if faltantes_col:
+        raise KeyError(f"No se encontraron las columnas {faltantes_col!r} en la planilla.")
+
+    # --- Determinar la clave de agrupación (ruta) ---
+    tiene_n_general = col_n_general in est_df.columns
+    tiene_derivacion = col_derivacion is not None and col_derivacion in est_df.columns
+    tiene_n_est = col_nruta is not None and col_nruta in est_df.columns
+
+    df = est_df.copy()
+    df["_orden_original"] = range(len(df))
+
+    if tiene_n_general and tiene_derivacion:
+        clave_ruta = list(zip(df[col_n_general], df[col_derivacion]))
+    elif tiene_derivacion:
+        clave_ruta = df[col_derivacion]
+    else:
+        # Sin columna de derivación/ruta: se asume que TODA la planilla es
+        # una sola ruta (se procesa en el orden en que aparece).
+        clave_ruta = [0] * len(df)
+    df["_clave_ruta"] = clave_ruta
+
+    if tiene_n_est:
+        df["_orden_en_ruta"] = df[col_nruta]
+    else:
+        df["_orden_en_ruta"] = df["_orden_original"]
+
+    registros: List[dict] = []
+
+    for _clave, grupo in df.groupby("_clave_ruta", sort=False):
+        grupo_ordenado = grupo.sort_values("_orden_en_ruta", kind="stable")
+
+        for _, fila in grupo_ordenado.iterrows():
+            nombre = fila.get(col_nombre)
+            nombre = str(nombre).strip() if pd.notna(nombre) else ""
+            derivacion = (str(fila.get(col_derivacion)).strip()
+                          if tiene_derivacion and pd.notna(fila.get(col_derivacion)) else "")
+            n_ruta = fila.get(col_n_general) if tiene_n_general else None
+            n_est = fila.get(col_nruta) if tiene_n_est else None
+            vano_adelante = fila.get(col_vano_adelante)
+
+            aportes = calcular_longitudes_cable_poste(
+                tipo_conductor_principal1=fila.get(col_conductor_principal1),
+                tipo_conductor_principal2=fila.get(col_conductor_principal2),
+                armado_primario1=(fila.get(col_armado_primario1)
+                                  if col_armado_primario1 in est_df.columns else None),
+                armado_primario2=(fila.get(col_armado_primario2)
+                                  if col_armado_primario2 in est_df.columns else None),
+                armado_secundario1=(fila.get(col_armado_secundario1)
+                                    if col_armado_secundario1 in est_df.columns else None),
+                armado_secundario2=(fila.get(col_armado_secundario2)
+                                    if col_armado_secundario2 in est_df.columns else None),
+                vano_adelante=vano_adelante,
+            )
+
+            for aporte in aportes:
+                registros.append({
+                    "nombre_poste": nombre,
+                    "derivacion": derivacion,
+                    "n_ruta": n_ruta,
+                    "n_est": n_est,
+                    "lado": aporte["lado"],
+                    "rol": aporte["rol"],
+                    "cable": aporte["nombre"],
+                    "armado_usado": aporte["armado_usado"],
+                    "vano_adelante": vano_adelante,
+                    "metros": aporte["metros"],
+                })
+
+    return pd.DataFrame(registros, columns=columnas_salida)
+
+
+def sumar_totales_cable(detalle_cable: pd.DataFrame) -> pd.DataFrame:
+    """
+    Suma el detalle de `extraer_longitudes_cable_planilla` para obtener la
+    cantidad TOTAL de cada cable distinto en toda la línea.
+
+    Devuelve un DataFrame con columnas:
+        cable | metros_total
+    ordenado alfabéticamente por `cable`.
+    """
+    columnas = ["cable", "metros_total"]
+    if detalle_cable is None or len(detalle_cable) == 0:
+        return pd.DataFrame(columns=columnas)
+
+    agregado = (detalle_cable.groupby("cable", as_index=False)["metros"]
+                .sum()
+                .rename(columns={"metros": "metros_total"}))
+    agregado = agregado.sort_values("cable", key=lambda s: s.str.lower()).reset_index(drop=True)
+    return agregado[columnas]
+
+
 def cargar_planilla(ruta: str) -> pd.DataFrame:
     """
     Lee una planilla de estructuras PlanillaEstTotal*.XLS con cabecera de dos
@@ -1227,6 +1649,7 @@ def _construir_indice_catalogo(catalogo) -> dict:
 def calcular_cantidades(
     armados_planilla: pd.DataFrame,
     catalogo: Catalogo,
+    totales_cable: Optional[pd.DataFrame] = None,
     verbose: bool = True,
 ) -> Dict[str, pd.DataFrame]:
     """
@@ -1283,6 +1706,15 @@ def calcular_cantidades(
     LINEPOST 66KV..." para la combinación forrado + alta contaminación +
     34,5 kV), el armado queda sin ese material y se reporta en
     'aislador_sin_correspondencia' en vez de inventar una cantidad.
+
+    Cantidades de cable (conductores)
+    ----------------------------------
+    Si se pasa `totales_cable` (ver `sumar_totales_cable`, con columnas
+    'cable'/'metros_total'), esas cantidades se agregan a la tabla
+    'totales' devuelta, con unidad "m" y sin código (no provienen del
+    catálogo de armados sino del cálculo de vanos). Así quedan incluidas en
+    las cantidades finales exportadas a Excel junto con el resto de
+    materiales.
     """
     # Índice nucleo -> clave_interna del catálogo (construido una sola vez)
     indice = _construir_indice_catalogo(catalogo)
@@ -1405,6 +1837,16 @@ def calcular_cantidades(
             "unidad": info["unidad"],
             "cantidad_total": cant,
         })
+    # --- Agregar cantidades de cable (conductores), si se proporcionaron ---
+    if totales_cable is not None and len(totales_cable):
+        for _, r in totales_cable.iterrows():
+            filas_tot.append({
+                "codigo": "",
+                "material": r["cable"],
+                "unidad": "m",
+                "cantidad_total": float(r["metros_total"]),
+            })
+
     df_totales = (pd.DataFrame(filas_tot,
                                columns=["codigo", "material", "unidad", "cantidad_total"])
                   .sort_values("material", key=lambda s: s.str.lower())
@@ -1511,6 +1953,13 @@ def exportar_cantidades_excel(resultado: Dict[str, pd.DataFrame],
       Hoja 'Aislador sin catálogo' (si aplica) -> aislador determinado pero sin
                                      ese renglón en Cantidades_de_postes.xlsx
       Hoja 'Detalle' (opcional)  -> aporte poste×armado×material
+      Hoja 'Detalle Cable' (opcional, si aplica) -> aporte poste×vano×cable
+                                     (trazabilidad del cálculo de longitudes
+                                     de cable; ver
+                                     `extraer_longitudes_cable_planilla`). Las
+                                     cantidades totales de cable YA están
+                                     incluidas en la hoja 'Cantidades'
+                                     (ver `calcular_cantidades`).
 
     Devuelve la ruta del archivo escrito.
     """
@@ -1571,6 +2020,12 @@ def exportar_cantidades_excel(resultado: Dict[str, pd.DataFrame],
             det = resultado["detalle"].copy()
             det.columns = ["Poste", "Armado", "Material", "Código", "Cantidad"]
             det.to_excel(writer, sheet_name="Detalle", index=False)
+        if incluir_detalle and len(resultado.get("detalle_cable", [])):
+            det_cable = resultado["detalle_cable"].copy()
+            det_cable.columns = ["Poste", "Derivación", "N° Ruta", "N° Est.",
+                                  "Lado", "Rol", "Cable", "Armado usado",
+                                  "Vano Adelante (m)", "Metros"]
+            det_cable.to_excel(writer, sheet_name="Detalle Cable", index=False)
 
         wb = writer.book
         # --- Formato de cabeceras y anchos ---
@@ -1622,6 +2077,8 @@ def generar_cantidades_materiales(
     nivel_contaminacion_forzado: Optional[str] = None,
     incluir_retenidas: bool = True,
     incluir_pat: bool = True,
+    incluir_cable: bool = True,
+    col_vano_adelante: Tuple[str, str] = COL_VANO_ADELANTE_DEFAULT,
     ruta_salida: str = "Cantidades_totales_proyecto.xlsx",
     incluir_detalle: bool = True,
     verbose: bool = True,
@@ -1668,6 +2125,16 @@ def generar_cantidades_materiales(
         instalado en cada poste (p.ej. "SPT001"). Ver `extraer_pat_planilla`.
     incluir_pat : bool
         Si es False, omite por completo el aporte de SPT/PAT.
+    incluir_cable : bool
+        Si es False, omite por completo el cálculo de cantidades de cable
+        (conductores) por vano. Si es True (por defecto), calcula la
+        longitud total de cada cable distinto (fase, mensajero o cable
+        normal) de toda la línea a partir de 'Tipo Conductor', los armados
+        y 'Vano Adelante' de cada poste (ver
+        `extraer_longitudes_cable_planilla`) y la incluye en 'totales'.
+    col_vano_adelante : tupla
+        Columna 'Vano Adelante' (grupo 'Topografía') con la distancia en
+        metros entre cada poste y el siguiente de su misma ruta.
 
     Aislador
     --------
@@ -1684,7 +2151,7 @@ def generar_cantidades_materiales(
         'catalogo', 'armados', 'retenidas', 'pat', 'totales', 'no_encontrados',
         'detalle', 'fase_sin_calibre', 'aislador_sin_determinar',
         'aislador_sin_correspondencia', 'contaminacion', 'tipos_soporte',
-        'ruta_salida'
+        'detalle_cable', 'totales_cable', 'ruta_salida'
     """
     etapa = "inicio"
     try:
@@ -1740,10 +2207,35 @@ def generar_cantidades_materiales(
                       f"{len(pat)} SPT instalados en total.")
             armados = pd.concat([armados, pat], ignore_index=True)
 
+        # --- Etapa 2-quater: calcular cantidades de cable (conductores) por vano ---
+        detalle_cable = pd.DataFrame(
+            columns=["nombre_poste", "derivacion", "n_ruta", "n_est", "lado",
+                     "rol", "cable", "armado_usado", "vano_adelante", "metros"])
+        totales_cable = pd.DataFrame(columns=["cable", "metros_total"])
+        if incluir_cable:
+            etapa = "cálculo de longitudes de cable"
+            detalle_cable = extraer_longitudes_cable_planilla(
+                est_df,
+                col_conductor_principal1=col_conductor_principal1,
+                col_conductor_principal2=col_conductor_principal2,
+                col_armado_primario1=columnas_armado[0],
+                col_armado_primario2=columnas_armado[1],
+                col_armado_secundario1=columnas_armado[2],
+                col_armado_secundario2=columnas_armado[3],
+                col_vano_adelante=col_vano_adelante,
+            )
+            totales_cable = sumar_totales_cable(detalle_cable)
+            if verbose:
+                print(f"[cable] {len(totales_cable)} tipos de cable distintos, "
+                      f"{detalle_cable['metros'].sum():.1f} m en total.")
+
         # --- Etapa 3: calcular cantidades (armados + retenidas + SPT juntos) ---
         etapa = "cálculo de cantidades"
-        resultado = calcular_cantidades(armados, catalogo, verbose=verbose)
+        resultado = calcular_cantidades(armados, catalogo, totales_cable=totales_cable,
+                                        verbose=verbose)
         resultado["contaminacion"] = contaminacion
+        resultado["detalle_cable"] = detalle_cable
+        resultado["totales_cable"] = totales_cable
 
         # --- Etapa 3-ter: contar postes por tipo de soporte ---
         etapa = "conteo de tipos de soporte"
@@ -1764,6 +2256,8 @@ def generar_cantidades_materiales(
         "armados": armados,
         "retenidas": retenidas,
         "pat": pat,
+        "detalle_cable": resultado["detalle_cable"],
+        "totales_cable": resultado["totales_cable"],
         "totales": resultado["totales"],
         "no_encontrados": resultado["no_encontrados"],
         "detalle": resultado["detalle"],
