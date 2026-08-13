@@ -7860,6 +7860,106 @@ def calcular_ftvc_flmc_individual(
     return ftvc_out, flmc_out
 
 
+def armado_por_aparicion(prim1, prim2):
+    """
+    Combina, FILA A FILA (sin agrupar/colapsar por poste), el armado
+    primario de cada aparición individual en post_exp.
+
+    A diferencia de construir_c2t1(mec, ..., "Armado", post_exp, prim1)
+    -- que agrupa TODAS las apariciones de un mismo poste en post_exp y
+    exige que compartan un único valor válido (o lanza error) -- esta
+    función simplemente toma, para cada fila/aparición, prim1 si tiene un
+    valor válido, y si no, cae a prim2. Es el análogo de "b" (que se toma
+    de am_postes en vez de construirse con construir_c2t1 a partir de
+    a_postes) pero para el armado: conserva el armado real de cada
+    derivación en vez de colapsarlo.
+
+    Parámetros
+    ----------
+    prim1, prim2 : pd.Series
+        Series alineadas 1:1 con post_exp (una entrada por cada aparición
+        del poste, incluyendo derivaciones), normalmente
+        est_v_max[("Armado Primario","Primario1")] y
+        est_v_max[("Armado Primario","Primario2")].
+
+    Retorna
+    -------
+    pd.Series
+        Serie alineada con prim1/prim2 (mismo índice), con el armado
+        válido de cada aparición individual: prim1 si tiene dato, si no
+        prim2, si no NaN.
+    """
+    prim1 = pd.Series(prim1).reset_index(drop=True)
+    prim2 = pd.Series(prim2).reset_index(drop=True)
+
+    def es_valido(v):
+        if pd.isna(v):
+            return False
+        s = str(v).strip()
+        return s not in ("", "-", "0")
+
+    mask_validos_prim1 = prim1.apply(es_valido)
+    return prim1.where(mask_validos_prim1, prim2)
+
+
+def renombrar_numero_apoyo_expandido(
+    mec_expandido,
+    col_identificador="Numero de apoyo",
+    col_repeticion="Repetición",
+):
+    """
+    Reconstruye la columna `col_identificador` de una tabla ya expandida
+    por expandir_mec_postes_repetidos() para que quede igual al criterio
+    de "No. Apoyo" que usa el notebook de automatización V5 (por-aparición,
+    ver construir_tipo_armado_unico_v2): el poste que NO tiene
+    derivaciones conserva su nombre tal cual, y el poste que SÍ tiene
+    varias apariciones (derivaciones) recibe un sufijo alfabético
+    a, b, c... en el mismo orden en que ya aparecen en la tabla expandida
+    (indicado por la columna auxiliar "Repetición").
+
+    No reordena filas ni recalcula nada más; solo reescribe
+    `col_identificador` in-place sobre una copia de `mec_expandido`.
+
+    Parámetros
+    ----------
+    mec_expandido : pd.DataFrame
+        Resultado de expandir_mec_postes_repetidos(), con las columnas
+        `col_identificador` (nombre base del poste, repetido en cada
+        derivación) y `col_repeticion` (1, 2, 3... por aparición).
+    col_identificador : str, default "Numero de apoyo"
+    col_repeticion : str, default "Repetición"
+
+    Retorna
+    -------
+    pd.DataFrame
+        Copia de mec_expandido con `col_identificador` sufijado donde
+        corresponda.
+    """
+    import string
+    letras = list(string.ascii_lowercase)
+
+    resultado = mec_expandido.reset_index(drop=True).copy()
+
+    conteo_por_poste = resultado[col_identificador].value_counts()
+
+    nombres_finales = []
+    for _, fila in resultado.iterrows():
+        poste = fila[col_identificador]
+        total = conteo_por_poste.get(poste, 1)
+
+        if total <= 1:
+            nombres_finales.append(poste)
+            continue
+
+        n_rep = int(fila[col_repeticion])  # 1-indexado
+        k = n_rep - 1
+        sufijo = letras[k] if k < len(letras) else str(k)
+        nombres_finales.append(f"{poste}{sufijo}")
+
+    resultado[col_identificador] = nombres_finales
+    return resultado
+
+
 def expandir_mec_postes_repetidos(
     mec,
     postes_df,        # Serie SIN repetición (ej. mec["Numero de apoyo"])
