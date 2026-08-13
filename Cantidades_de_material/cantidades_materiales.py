@@ -2212,8 +2212,11 @@ def exportar_cantidades_excel(resultado: Dict[str, pd.DataFrame],
                                      el aislador de cada armado ya viene filtrado
                                      según contaminación/nivel de aislamiento/tipo
                                      de conductor, con la cantidad tomada del propio
-                                     catálogo, ver `calcular_cantidades`)
-      Hoja 'Tipos de Soporte'    -> cantidad total de postes por tipo de soporte
+                                     catálogo, ver `calcular_cantidades`). Incluye
+                                     también, como filas más de esta misma hoja
+                                     (código vacío, unidad "Un"), la cantidad total
+                                     de postes de cada tipo de soporte (antes iba
+                                     en una hoja 'Tipos de Soporte' separada).
       Hoja 'Contaminación'       -> nivel de contaminación de la línea y coordenada usada
       Hoja 'Armados no hallados' -> trazabilidad de lo que no se pudo mapear
       Hoja 'Fase sin calibre' (si aplica) -> materiales con "" sin calibre resuelto
@@ -2245,6 +2248,18 @@ def exportar_cantidades_excel(resultado: Dict[str, pd.DataFrame],
     if df_tipos is not None and len(df_tipos):
         df_tipos = df_tipos.copy()
         df_tipos.columns = ["Tipo Soporte", "Cantidad"]
+        # Los postes (por tipo de soporte) se agregan como filas más de la
+        # propia hoja 'Cantidades', en el mismo formato que las demás filas
+        # (código vacío, unidad "Un"), en vez de ir en una hoja separada.
+        df_postes_para_cantidades = pd.DataFrame({
+            "Código": "",
+            "Material": df_tipos["Tipo Soporte"],
+            "Unidad": "Un",
+            "Cantidad total": df_tipos["Cantidad"],
+        })
+        df_tot = (pd.concat([df_tot, df_postes_para_cantidades], ignore_index=True)
+                  .sort_values("Material", key=lambda s: s.str.lower())
+                  .reset_index(drop=True))
     df_fase_sc = resultado.get("fase_sin_calibre")
     if df_fase_sc is not None and len(df_fase_sc):
         df_fase_sc = df_fase_sc.copy()
@@ -2261,8 +2276,6 @@ def exportar_cantidades_excel(resultado: Dict[str, pd.DataFrame],
 
     with pd.ExcelWriter(ruta_salida, engine="openpyxl") as writer:
         df_tot.to_excel(writer, sheet_name="Cantidades", index=False)
-        if df_tipos is not None and len(df_tipos):
-            df_tipos.to_excel(writer, sheet_name="Tipos de Soporte", index=False)
         if contaminacion is not None:
             filas_contam = [
                 {"Campo": "Nivel de contaminación de la línea", "Valor": contaminacion.get("nivel")},
@@ -2366,7 +2379,8 @@ def generar_cantidades_materiales(
         Ruta al archivo Cantidades_de_postes.xlsx en Drive montado.
     col_tipo_soporte : tupla
         Columna (multi-índice) con el tipo de soporte/poste, usada para el
-        conteo de postes por tipo (hoja 'Tipos de Soporte' en la salida).
+        conteo de postes por tipo (incluido dentro de la hoja 'Cantidades'
+        de la salida).
     col_conductor_principal1 / col_conductor_principal2 : tuplas
         Columnas 'Tipo Conductor' de 'Conductor Principal1'/'Conductor
         Principal2', usadas para el ajuste de fase (reemplazo del "" en
