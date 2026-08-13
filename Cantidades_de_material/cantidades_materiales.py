@@ -101,6 +101,43 @@ def _normalizar_texto(texto) -> str:
     return s.strip().lower()
 
 
+# Número de cifras decimales al que se redondean las cantidades finales
+# (ver `redondear_cantidades`). Ya no se usa como redondeo "normal": las
+# cantidades se redondean hacia ARRIBA al entero siguiente (ver más abajo),
+# se mantiene la constante solo por compatibilidad con quien la importe.
+DECIMALES_CANTIDADES_DEFAULT = 4
+
+
+def redondear_cantidades(
+    df_totales: pd.DataFrame,
+    columna: str = "cantidad_total",
+    decimales: int = DECIMALES_CANTIDADES_DEFAULT,
+) -> pd.DataFrame:
+    """
+    Redondea los valores de `columna` en `df_totales` hacia ARRIBA al
+    siguiente número entero (redondeo "al entero mayor" / ceiling), para
+    que las cantidades finales de material nunca queden por debajo de lo
+    realmente necesario (p.ej. las longitudes de cable, que arrastran
+    decimales largos de punto flotante al sumar vanos).
+
+    El parámetro `decimales` se conserva por compatibilidad con llamadas
+    existentes, pero ya no afecta el resultado: siempre se redondea a
+    entero (0 decimales), hacia arriba.
+
+    No modifica `df_totales` en el sitio: devuelve una copia.
+
+    >>> import pandas as pd
+    >>> df = pd.DataFrame({"cantidad_total": [12.0, 139.727269, 7.5]})
+    >>> redondear_cantidades(df)["cantidad_total"].tolist()
+    [12.0, 140.0, 8.0]
+    """
+    if df_totales is None or len(df_totales) == 0 or columna not in df_totales.columns:
+        return df_totales
+    resultado = df_totales.copy()
+    resultado[columna] = np.ceil(resultado[columna].astype(float))
+    return resultado
+
+
 # =====================================================================
 #  1. CARGA DEL CATÁLOGO DE CANTIDADES POR ARMADO
 # =====================================================================
@@ -1650,6 +1687,7 @@ def calcular_cantidades(
     armados_planilla: pd.DataFrame,
     catalogo: Catalogo,
     totales_cable: Optional[pd.DataFrame] = None,
+    decimales: int = DECIMALES_CANTIDADES_DEFAULT,
     verbose: bool = True,
 ) -> Dict[str, pd.DataFrame]:
     """
@@ -1715,6 +1753,14 @@ def calcular_cantidades(
     catálogo de armados sino del cálculo de vanos). Así quedan incluidas en
     las cantidades finales exportadas a Excel junto con el resto de
     materiales.
+
+    Redondeo
+    --------
+    La columna 'cantidad_total' de la tabla 'totales' devuelta se redondea
+    hacia ARRIBA al siguiente entero (ceiling, ver `redondear_cantidades`),
+    para evitar arrastrar decimales largos de punto flotante (frecuentes en
+    las longitudes de cable, que se acumulan sumando vanos con muchos
+    decimales) y para no subestimar la cantidad de material a pedir.
     """
     # Índice nucleo -> clave_interna del catálogo (construido una sola vez)
     indice = _construir_indice_catalogo(catalogo)
@@ -1851,6 +1897,7 @@ def calcular_cantidades(
                                columns=["codigo", "material", "unidad", "cantidad_total"])
                   .sort_values("material", key=lambda s: s.str.lower())
                   .reset_index(drop=True))
+    df_totales = redondear_cantidades(df_totales, decimales=decimales)
 
     # --- Tabla de no encontrados ---
     df_faltantes = (pd.DataFrame(list(faltantes.values()),
@@ -2079,6 +2126,7 @@ def generar_cantidades_materiales(
     incluir_pat: bool = True,
     incluir_cable: bool = True,
     col_vano_adelante: Tuple[str, str] = COL_VANO_ADELANTE_DEFAULT,
+    decimales_cantidades: int = DECIMALES_CANTIDADES_DEFAULT,
     ruta_salida: str = "Cantidades_totales_proyecto.xlsx",
     incluir_detalle: bool = True,
     verbose: bool = True,
@@ -2135,6 +2183,10 @@ def generar_cantidades_materiales(
     col_vano_adelante : tupla
         Columna 'Vano Adelante' (grupo 'Topografía') con la distancia en
         metros entre cada poste y el siguiente de su misma ruta.
+    decimales_cantidades : int
+        Ya no afecta el resultado (se conserva por compatibilidad): las
+        cantidades siempre se redondean hacia ARRIBA al entero siguiente
+        (ver `redondear_cantidades`).
 
     Aislador
     --------
@@ -2225,6 +2277,8 @@ def generar_cantidades_materiales(
                 col_vano_adelante=col_vano_adelante,
             )
             totales_cable = sumar_totales_cable(detalle_cable)
+            totales_cable = redondear_cantidades(
+                totales_cable, columna="metros_total", decimales=decimales_cantidades)
             if verbose:
                 print(f"[cable] {len(totales_cable)} tipos de cable distintos, "
                       f"{detalle_cable['metros'].sum():.1f} m en total.")
@@ -2232,7 +2286,7 @@ def generar_cantidades_materiales(
         # --- Etapa 3: calcular cantidades (armados + retenidas + SPT juntos) ---
         etapa = "cálculo de cantidades"
         resultado = calcular_cantidades(armados, catalogo, totales_cable=totales_cable,
-                                        verbose=verbose)
+                                        decimales=decimales_cantidades, verbose=verbose)
         resultado["contaminacion"] = contaminacion
         resultado["detalle_cable"] = detalle_cable
         resultado["totales_cable"] = totales_cable
