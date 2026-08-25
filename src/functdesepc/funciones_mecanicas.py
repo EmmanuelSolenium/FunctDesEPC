@@ -5568,7 +5568,7 @@ def _es_red_compacta(tipo_conductor) -> bool:
     return bool(_RE_RED_COMPACTA_FM.match(s))
 
 
-def ajustar_fuerza_viento_por_tipo_conductor(
+def ajustar_fuerza_por_tipo_conductor(
     tipo_conductor: pd.Series,
     fuerza_viento: pd.Series,
 ) -> pd.Series:
