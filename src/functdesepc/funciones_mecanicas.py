@@ -5529,6 +5529,81 @@ def numero_fases(
  
  
 # ─────────────────────────────────────────────────────────────────────────────
+# ajustar_fuerza_viento_por_tipo_conductor
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# NOTA DE MANTENIMIENTO: la detección de "red compacta" (prefijo "SM...")
+# está DUPLICADA intencionalmente aquí a partir de
+# `cantidades_materiales.identificar_cables_conductor`, para que
+# funciones_mecanicas.py pueda usarse de forma completamente independiente
+# (sin importar cantidades_materiales.py). Si el criterio de qué es una red
+# compacta cambia en cantidades_materiales.py, replicar el cambio aquí.
+
+_RE_RED_COMPACTA_FM = re.compile(
+    r"^SM\s*([\d.,]+)\s*-\s*(\d+)\s*x\s*(.+?)\s+/\s+(.+)$", re.IGNORECASE
+)
+
+_VALORES_VACIOS_CONDUCTOR_FM = {"", "nan", "none", "-", "n/a", "na", "0"}
+
+
+def _es_red_compacta(tipo_conductor) -> bool:
+    """
+    Indica si un texto de 'Tipo Conductor' corresponde a una red COMPACTA
+    (prefijo "SM" + nivel de tensión + "-" + cantidad de fases + "x" +
+    calibre/tipo de fase + " / " + cable mensajero, p.ej.
+    "SM13.2-3x63AAAC / Aluminium Clad Steel 7 Nº 8").
+
+    Devuelve False si el texto está vacío/"-"/0/NaN, o si no tiene el
+    prefijo "SM..." (red normal).
+    """
+    if tipo_conductor is None:
+        return False
+    if isinstance(tipo_conductor, (int, float)) and (np.isnan(tipo_conductor) if isinstance(tipo_conductor, float) else tipo_conductor == 0):
+        return False
+
+    s = str(tipo_conductor).strip()
+    if s == "" or s.lower() in _VALORES_VACIOS_CONDUCTOR_FM:
+        return False
+
+    return bool(_RE_RED_COMPACTA_FM.match(s))
+
+
+def ajustar_fuerza_viento_por_tipo_conductor(
+    tipo_conductor: pd.Series,
+    fuerza_viento: pd.Series,
+) -> pd.Series:
+    """
+    Ajusta la fuerza del viento de cada poste según el tipo de conductor.
+
+    Regla:
+      - Si el 'Tipo Conductor' corresponde a una red COMPACTA (prefijo
+        "SM...", ver `_es_red_compacta`), la fuerza se deja tal cual.
+      - Si el 'Tipo Conductor' corresponde a una red NORMAL, la fuerza se
+        multiplica por 3.
+      - Si el 'Tipo Conductor' está vacío/"-"/0/NaN (no hay conductor), la
+        fuerza también se multiplica por 3.
+
+    Parámetros
+    ----------
+    tipo_conductor : pd.Series
+        Serie de texto con el 'Tipo Conductor' de cada poste, alineada por
+        índice con `fuerza_viento` (mismo orden que en la exportación).
+    fuerza_viento : pd.Series
+        Serie con la fuerza del viento de cada poste, alineada por índice
+        con `tipo_conductor`.
+
+    Devuelve
+    --------
+    pd.Series
+        Fuerza del viento ajustada, con el mismo índice que `fuerza_viento`.
+    """
+    es_compacta = tipo_conductor.apply(_es_red_compacta)
+    factor = es_compacta.map({True: 1, False: 3})
+
+    return fuerza_viento * factor
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # numero_perforaciones  (corregido)
 # ─────────────────────────────────────────────────────────────────────────────
  
