@@ -3111,11 +3111,11 @@ def calcular_cs_V2(
             + Mec["FTVP"]
             + Mec["FTVE"]
             + Mec["FTEC"]
+            + FTVCv
         ) ** 2
         +
         (
             Mec["FLEE"]
-            + FTVCl
             + Ret["Fuerza Residual Fres (daN)"]
         ) ** 2
     )
