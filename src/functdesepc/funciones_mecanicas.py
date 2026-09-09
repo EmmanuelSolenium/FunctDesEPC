@@ -8451,3 +8451,588 @@ def construir_tipo_armado_unico_v2(
         base = base.sort_values("No. Apoyo").reset_index(drop=True)
 
     return base
+
+
+# ==========================================================================
+# Helper compartido (privado): resuelve, PARA UN SOLO POSTE, todos los
+# parámetros intermedios pesados que antes vivían dentro del loop de
+# calcular_fuerza_residual_retenidas_v2: calibre, tabla de coeficientes,
+# A/B/C, Hn/Hj, carga_poste.
+#
+# No es una de las funciones públicas: es reutilizado internamente por
+# todas ellas, cada una invocándolo de forma independiente.
+# ==========================================================================
+def _parametros_retenida_por_poste(
+    poste,
+    i,
+    postes_export,
+    retenidas,
+    altura_postes,
+    altura_retenidas,
+    capacidad_poste,
+    tablas_coeficientes,
+    tipo_retenida,
+    mapa_calibre,
+):
+    """
+    Retorna un dict con los parámetros resueltos para 'poste' (fila i de
+    postes_orden), o None si el poste no aplica (sin retenida real, sin
+    retenida > 0 en export, o tipo_retenida no reconocido).
+
+    Dict retornado:
+        {
+            "calibre": "1/2" o "3/8",
+            "A": float, "B": float, "C": float,
+            "Hn": float, "Hj": float,
+            "carga_poste": float,
+        }
+    """
+    mask = postes_export == poste
+    if not mask.any():
+        return None
+
+    calibre = mapa_calibre.get(poste)
+    if calibre is None:
+        return None
+
+    ret_vals = retenidas.loc[mask]
+    ret_vals = ret_vals[ret_vals > 0]
+    if ret_vals.empty:
+        return None
+
+    def seleccionar_longitud(delta_h):
+        if delta_h <= 1.2:
+            return "≤1.2 m"
+        elif delta_h <= 2.2:
+            return "1.2 < L ≤ 2.2 m"
+        else:
+            return ">3.0 m"
+
+    def valor_cercano(valores, objetivo):
+        valores = np.array(sorted(valores))
+        dif_rel = np.abs(valores - objetivo) / objetivo
+        mask_5 = dif_rel <= 0.05
+        if mask_5.any():
+            return valores[mask_5][np.argmin(np.abs(valores[mask_5] - objetivo))]
+        menores = valores[valores <= objetivo]
+        if len(menores) > 0:
+            return menores[-1]
+        return valores[0]
+
+    def obtener_tablas_calibre(calibre):
+        if calibre == "3/8":
+            return [tablas_coeficientes[0], tablas_coeficientes[2]]
+        else:
+            return [tablas_coeficientes[1], tablas_coeficientes[3]]
+
+    Hn = altura_postes.iloc[i]
+    Hj = altura_retenidas.iloc[i]
+    delta_h = Hn - Hj
+
+    tipo_fila = tipo_retenida.iloc[i]
+    if tipo_fila["Bisectora"] == "X":
+        es_90 = False
+    elif tipo_fila["Conjunto a 90º"] == "X":
+        es_90 = True
+    else:
+        return None
+
+    tablas_calibre = obtener_tablas_calibre(calibre)
+
+    if es_90:
+        tabla = tablas_calibre[1]
+        betas = tabla.index.get_level_values("β (°)").unique()
+        beta_sel = valor_cercano(betas, 90)
+    else:
+        tabla = tablas_calibre[0]
+
+    carga_poste = capacidad_poste.iloc[i]
+
+    if es_90:
+        cargas_tabla = tabla.index.get_level_values("Carga (daN)").unique()
+    else:
+        cargas_tabla = tabla.index
+
+    carga_sel = valor_cercano(cargas_tabla, carga_poste)
+    col_long = seleccionar_longitud(delta_h)
+
+    if es_90:
+        A = tabla.loc[(beta_sel, carga_sel), (col_long, "A")]
+        B = tabla.loc[(beta_sel, carga_sel), (col_long, "B")]
+        C = tabla.loc[(beta_sel, carga_sel), (col_long, "C")]
+    else:
+        A = tabla.loc[carga_sel, (col_long, "A")]
+        B = tabla.loc[carga_sel, (col_long, "B")]
+        C = tabla.loc[carga_sel, (col_long, "C")]
+
+    return {
+        "calibre": calibre,
+        "A": A, "B": B, "C": C,
+        "Hn": Hn, "Hj": Hj,
+        "carga_poste": carga_poste,
+    }
+
+
+def _resolver_mapa_calibre(
+    postes_orden,
+    postes_export,
+    retenidas,
+    tabla_cables_acero,
+    est_v_max=None,
+    postes_calibre_1_2=None,
+):
+    """
+    Reproduce, de forma independiente, la resolución de mapa_calibre que
+    antes se hacía una sola vez al inicio de calcular_fuerza_residual_retenidas_v2.
+    Se reutiliza (invocándola) desde cada una de las funciones públicas.
+    """
+    postes_con_retenida = set()
+    for poste in postes_orden:
+        mask = postes_export == poste
+        if not mask.any():
+            continue
+        ret_vals = retenidas.loc[mask]
+        if (ret_vals > 0).any():
+            postes_con_retenida.add(poste)
+
+    if postes_calibre_1_2 is None:
+        if est_v_max is None:
+            raise ValueError(
+                "Se requiere 'est_v_max' para detectar automáticamente los "
+                "postes con calibre de retenida 1/2\" (o bien pasar "
+                "'postes_calibre_1_2' explícitamente)."
+            )
+        postes_calibre_1_2 = detectar_postes_calibre_1_2(est_v_max, postes_export)
+
+    return _resolver_mapa_calibre_por_lista(
+        postes_orden=postes_orden,
+        postes_con_retenida=postes_con_retenida,
+        postes_calibre_1_2=postes_calibre_1_2,
+    )
+
+
+def _angulo_es_vacio(valor):
+    """
+    True si el ángulo debe tratarse como "sin valor" (poste de referencia):
+    None, NaN, "-" o 0 (numérico).
+    """
+    if valor is None:
+        return True
+    if isinstance(valor, str):
+        v = valor.strip()
+        return v in ("", "-") or (v.replace(".", "", 1).lstrip("-").isdigit() and float(v) == 0)
+    try:
+        if pd.isna(valor):
+            return True
+        return float(valor) == 0
+    except (TypeError, ValueError):
+        return False
+
+
+# ==========================================================================
+# 0) Fuerza horizontal equivalente fh (insumo de fres/fvert/tracción/pretensionado)
+# ==========================================================================
+def obtener_fh_retenida(
+    postes_orden,
+    postes_export,
+    tipo_poste,
+    angulo_b,
+    tiro_at,
+    tiro_ad,
+    f_viento_at,
+    f_viento_ad,
+):
+    """
+    Calcula fh (fuerza horizontal equivalente) para cada poste de
+    postes_orden. Este valor es insumo directo de Fres, Fvert, Tracción
+    total y Pretensionado (todas usan fh en vez de flmc).
+
+    Sin derivaciones (poste no se repite en postes_export):
+        - FL:  fh = tad si tad != 0, sino tat
+        - ANC con ángulo vacío (0/None/NaN/"-"):  fh = 0.5 + max(tat, tad)
+        - ANG:  fh = (fvat+fvad)*cos(d/2) + 2*tad*sin(d/2)
+        - ANC con ángulo numérico != 0:
+              fh = (fvat+fvad)*cos(d/2) + sqrt( (tad-tat)^2*cos²(d/2) + (tad+tat)^2*sin²(d/2) )
+
+    Con derivaciones (poste se repite):
+        - Tres = |T_res|, T_res = suma vectorial de tensiones sobre todas
+          las repeticiones del poste (igual que en calcular_ftvc_flmc)
+        - fh = Tres + fvat + fvad  (fvat/fvad ya sumados por poste, solo magnitudes)
+
+    Parámetros
+    ----------
+    tipo_poste, angulo_b, tiro_at, tiro_ad, f_viento_at, f_viento_ad : pd.Series
+        Todas indexadas por postes_export (una entrada por fila/repetición),
+        en orden export.
+
+    Retorna
+    -------
+    pd.Series indexada igual que postes_orden (un valor por poste, colapsado
+    tras sumar tensiones/vientos en el caso de derivaciones). NaN donde el
+    poste no tiene tipo reconocido.
+    """
+    resultado = pd.Series(np.nan, index=postes_orden.index)
+
+    for i, poste in enumerate(postes_orden):
+        mask = postes_export == poste
+        if not mask.any():
+            continue
+        n_rep = mask.sum()
+
+        if n_rep > 1:
+            # ---------------- Con derivaciones ----------------
+            delta = np.deg2rad(angulo_b.loc[mask].astype(float))
+            theta = np.pi - delta
+            ta_poste = tiro_at.loc[mask]
+            td_poste = tiro_ad.loc[mask]
+
+            T_res = np.array([0.0, 0.0])
+            for idx in delta.index:
+                th = theta.loc[idx]
+                dt = delta.loc[idx]
+                ta_i = ta_poste.loc[idx]
+                td_i = td_poste.loc[idx]
+
+                if ta_i > 0 and td_i > 0:
+                    tx = ta_i * np.cos(0) + td_i * np.cos(th)
+                    ty = ta_i * np.sin(0) + td_i * np.sin(th)
+                else:
+                    T = ta_i if ta_i > 0 else td_i
+                    tx = T * np.cos(th) if dt != 0 else T * np.cos(dt)
+                    ty = T * np.sin(th) if dt != 0 else T * np.sin(dt)
+
+                T_res += np.array([tx, ty])
+
+            Tres = np.linalg.norm(T_res)
+            fvat_p = f_viento_at.loc[mask].sum()
+            fvad_p = f_viento_ad.loc[mask].sum()
+
+            resultado.iloc[i] = Tres + fvat_p + fvad_p
+            continue
+
+        # ---------------- Sin derivaciones ----------------
+        tp = tipo_poste.iloc[i]
+        angulo = angulo_b.iloc[i]
+        tad = tiro_ad.iloc[i]
+        tat = tiro_at.iloc[i]
+        fvad = f_viento_ad.iloc[i]
+        fvat = f_viento_at.iloc[i]
+
+        if tp == "FL":
+            resultado.iloc[i] = tad if tad != 0 else tat
+            continue
+
+        if tp == "ANC" and _angulo_es_vacio(angulo):
+            resultado.iloc[i] = 0.5 + max(tat, tad)
+            continue
+
+        d = np.deg2rad(float(angulo))
+        sen_d2 = np.sin(d / 2)
+        cos_d2 = np.cos(d / 2)
+
+        if tp == "ANG":
+            resultado.iloc[i] = (fvat + fvad) * cos_d2 + 2 * tad * sen_d2
+            continue
+
+        if tp == "ANC":
+            resultado.iloc[i] = (fvat + fvad) * cos_d2 + np.sqrt(
+                (tad - tat) ** 2 * cos_d2 ** 2 + (tad + tat) ** 2 * sen_d2 ** 2
+            )
+            continue
+
+        # tipo_poste no reconocido: se deja NaN
+        continue
+
+    return resultado
+
+
+# ==========================================================================
+# 1) Fuerza Residual Fres (daN)
+# ==========================================================================
+def obtener_fres(
+    fh_retenida,
+    postes_orden,
+    postes_export,
+    retenidas,
+    altura_postes,
+    capacidad_poste,
+    tablas_coeficientes,
+    tipo_retenida,
+    tabla_cables_acero,
+    est_v_max=None,
+    postes_calibre_1_2=None,
+    altura_retenidas=None,
+):
+    """
+    Calcula la Fuerza Residual Fres (daN) = fh * A * Hj / Hn para cada
+    poste de postes_orden.
+
+    fh_retenida : pd.Series
+        Salida de obtener_fh_retenida, indexada igual que postes_orden.
+
+    Retorna
+    -------
+    pd.Series indexada igual que postes_orden. NaN donde no aplica.
+    """
+    mapa_calibre = _resolver_mapa_calibre(
+        postes_orden, postes_export, retenidas, tabla_cables_acero,
+        est_v_max=est_v_max, postes_calibre_1_2=postes_calibre_1_2,
+    )
+
+    if altura_retenidas is None:
+        altura_retenidas = altura_postes
+
+    resultado = pd.Series(np.nan, index=postes_orden.index)
+
+    for i, poste in enumerate(postes_orden):
+        params = _parametros_retenida_por_poste(
+            poste, i, postes_export, retenidas, altura_postes, altura_retenidas,
+            capacidad_poste, tablas_coeficientes, tipo_retenida, mapa_calibre,
+        )
+        if params is None:
+            continue
+
+        fh = fh_retenida.iloc[i]
+        if pd.isna(fh):
+            continue
+
+        resultado.iloc[i] = fh * params["A"] * params["Hj"] / params["Hn"]
+
+    return resultado
+
+
+# ==========================================================================
+# 2) Fuerza vertical por retenida Fvert (daN)
+# ==========================================================================
+def obtener_fvert(
+    fh_retenida,
+    postes_orden,
+    postes_export,
+    retenidas,
+    altura_postes,
+    capacidad_poste,
+    tablas_coeficientes,
+    tipo_retenida,
+    tabla_cables_acero,
+    est_v_max=None,
+    postes_calibre_1_2=None,
+    altura_retenidas=None,
+):
+    """
+    Calcula la Fuerza vertical por retenida Fvert (daN) = fh * B.
+
+    fh_retenida : pd.Series
+        Salida de obtener_fh_retenida, indexada igual que postes_orden.
+
+    Retorna
+    -------
+    pd.Series indexada igual que postes_orden. NaN donde no aplica.
+    """
+    mapa_calibre = _resolver_mapa_calibre(
+        postes_orden, postes_export, retenidas, tabla_cables_acero,
+        est_v_max=est_v_max, postes_calibre_1_2=postes_calibre_1_2,
+    )
+
+    if altura_retenidas is None:
+        altura_retenidas = altura_postes
+
+    resultado = pd.Series(np.nan, index=postes_orden.index)
+
+    for i, poste in enumerate(postes_orden):
+        params = _parametros_retenida_por_poste(
+            poste, i, postes_export, retenidas, altura_postes, altura_retenidas,
+            capacidad_poste, tablas_coeficientes, tipo_retenida, mapa_calibre,
+        )
+        if params is None:
+            continue
+
+        fh = fh_retenida.iloc[i]
+        if pd.isna(fh):
+            continue
+
+        resultado.iloc[i] = fh * params["B"]
+
+    return resultado
+
+
+# ==========================================================================
+# 3) Tracción total cable ret. (daN)
+# ==========================================================================
+def obtener_traccion_total(
+    fh_retenida,
+    postes_orden,
+    postes_export,
+    retenidas,
+    altura_postes,
+    capacidad_poste,
+    tablas_coeficientes,
+    tipo_retenida,
+    tabla_cables_acero,
+    est_v_max=None,
+    postes_calibre_1_2=None,
+    altura_retenidas=None,
+):
+    """
+    Calcula la Tracción total del cable de retenida (daN) = fh * C * 1.5.
+
+    fh_retenida : pd.Series
+        Salida de obtener_fh_retenida, indexada igual que postes_orden.
+
+    Retorna
+    -------
+    pd.Series indexada igual que postes_orden. NaN donde no aplica.
+    """
+    mapa_calibre = _resolver_mapa_calibre(
+        postes_orden, postes_export, retenidas, tabla_cables_acero,
+        est_v_max=est_v_max, postes_calibre_1_2=postes_calibre_1_2,
+    )
+
+    if altura_retenidas is None:
+        altura_retenidas = altura_postes
+
+    resultado = pd.Series(np.nan, index=postes_orden.index)
+
+    for i, poste in enumerate(postes_orden):
+        params = _parametros_retenida_por_poste(
+            poste, i, postes_export, retenidas, altura_postes, altura_retenidas,
+            capacidad_poste, tablas_coeficientes, tipo_retenida, mapa_calibre,
+        )
+        if params is None:
+            continue
+
+        fh = fh_retenida.iloc[i]
+        if pd.isna(fh):
+            continue
+
+        resultado.iloc[i] = fh * params["C"] * 1.5
+
+    return resultado
+
+
+# ==========================================================================
+# 4) Pretensionado de la Retenida (daN)
+# ==========================================================================
+def obtener_pretensionado(
+    fh_retenida,
+    postes_orden,
+    postes_export,
+    retenidas,
+    altura_postes,
+    capacidad_poste,
+    tablas_coeficientes,
+    tipo_retenida,
+    tabla_cables_acero,
+    tipo_poste,
+    est_v_max=None,
+    postes_calibre_1_2=None,
+    altura_retenidas=None,
+):
+    """
+    Calcula el Pretensionado de la Retenida (daN):
+
+        Si tipo_poste == "ANC":
+            pretr = max( 2*|A*fh - carga_poste/1.5| , 0.05*Ru )
+        En cualquier otro caso:
+            pretr = max( 2*|A*fh - carga_poste/2.5| , 0.05*Ru )
+
+    fh_retenida : pd.Series
+        Salida de obtener_fh_retenida, indexada igual que postes_orden.
+    tipo_poste : pd.Series
+        Indexada igual que postes_orden (un valor por poste, iloc[i]).
+
+    Retorna
+    -------
+    pd.Series indexada igual que postes_orden. NaN donde no aplica.
+    """
+    mapa_calibre = _resolver_mapa_calibre(
+        postes_orden, postes_export, retenidas, tabla_cables_acero,
+        est_v_max=est_v_max, postes_calibre_1_2=postes_calibre_1_2,
+    )
+
+    if altura_retenidas is None:
+        altura_retenidas = altura_postes
+
+    resultado = pd.Series(np.nan, index=postes_orden.index)
+
+    for i, poste in enumerate(postes_orden):
+        params = _parametros_retenida_por_poste(
+            poste, i, postes_export, retenidas, altura_postes, altura_retenidas,
+            capacidad_poste, tablas_coeficientes, tipo_retenida, mapa_calibre,
+        )
+        if params is None:
+            continue
+
+        fh = fh_retenida.iloc[i]
+        if pd.isna(fh):
+            continue
+
+        calibre = params["calibre"]
+        fila_ru = tabla_cables_acero[
+            tabla_cables_acero["Denominación"].astype(str).str.contains(str(calibre))
+        ]
+        Ru = np.nan if fila_ru.empty else float(fila_ru.iloc[0]["Carga de Rotura (daN)"])
+
+        A = params["A"]
+        carga_poste = params["carga_poste"]
+        tp = tipo_poste.iloc[i]
+
+        if tp == "ANC":
+            pretr = max(2 * abs(A * fh - carga_poste / 1.5), 0.05 * Ru)
+        else:
+            pretr = max(2 * abs(A * fh - carga_poste / 2.5), 0.05 * Ru)
+
+        resultado.iloc[i] = pretr
+
+    return resultado
+
+
+# ==========================================================================
+# 5) Carga rotura cable ret. (daN)
+# ==========================================================================
+def obtener_carga_rotura(
+    postes_orden,
+    postes_export,
+    retenidas,
+    altura_postes,
+    capacidad_poste,
+    tablas_coeficientes,
+    tipo_retenida,
+    tabla_cables_acero,
+    est_v_max=None,
+    postes_calibre_1_2=None,
+    altura_retenidas=None,
+):
+    """
+    Calcula la Carga rotura del cable de retenida (daN): busca en
+    tabla_cables_acero la fila cuya 'Denominación' contenga el calibre
+    ("1/2" o "3/8") asignado al poste. No depende de fh.
+
+    Retorna
+    -------
+    pd.Series indexada igual que postes_orden. NaN donde no aplica.
+    """
+    mapa_calibre = _resolver_mapa_calibre(
+        postes_orden, postes_export, retenidas, tabla_cables_acero,
+        est_v_max=est_v_max, postes_calibre_1_2=postes_calibre_1_2,
+    )
+
+    if altura_retenidas is None:
+        altura_retenidas = altura_postes
+
+    resultado = pd.Series(np.nan, index=postes_orden.index)
+
+    for i, poste in enumerate(postes_orden):
+        params = _parametros_retenida_por_poste(
+            poste, i, postes_export, retenidas, altura_postes, altura_retenidas,
+            capacidad_poste, tablas_coeficientes, tipo_retenida, mapa_calibre,
+        )
+        if params is None:
+            continue
+
+        calibre = params["calibre"]
+        fila_ru = tabla_cables_acero[
+            tabla_cables_acero["Denominación"].astype(str).str.contains(str(calibre))
+        ]
+        resultado.iloc[i] = np.nan if fila_ru.empty else float(fila_ru.iloc[0]["Carga de Rotura (daN)"])
+
+    return resultado

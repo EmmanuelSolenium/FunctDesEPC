@@ -1,0 +1,19 @@
+Metadata-Version: 2.4
+Name: functdesepc
+Version: 0.1.0
+Summary: Package for EPC functional design utilities.
+Author: Emmanuel Flórez
+Requires-Python: >=3.8
+Description-Content-Type: text/markdown
+Requires-Dist: pandas
+Requires-Dist: numpy
+Requires-Dist: utm
+Requires-Dist: pyproj
+Requires-Dist: matplotlib
+Requires-Dist: openpyxl
+Requires-Dist: Pillow
+Requires-Dist: scipy
+Requires-Dist: python-docx
+Requires-Dist: google-auth
+Requires-Dist: google-auth-oauthlib
+Requires-Dist: google-api-python-client

@@ -11,6 +11,20 @@ authors = [
 description = "Package for EPC functional design utilities."
 readme = "README.md"
 requires-python = ">=3.8"
+dependencies = [
+    "pandas",
+    "numpy",
+    "utm",
+    "pyproj",
+    "matplotlib",
+    "openpyxl",
+    "Pillow",
+    "scipy",
+    "python-docx",
+    "google-auth",
+    "google-auth-oauthlib",
+    "google-api-python-client",
+]
 
 [tool.setuptools.packages.find]
-where = ["."]
+where = ["src"]

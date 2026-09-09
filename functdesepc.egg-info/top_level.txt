@@ -1,0 +1,6 @@
+Cantidades_de_material
+autodocs
+data
+notebooks
+outputs
+src

@@ -1,0 +1,12 @@
+pyproject.toml
+src/functdesepc/__init__.py
+src/functdesepc/exportar_tablas.py
+src/functdesepc/extraer_info.py
+src/functdesepc/funciones_electricas.py
+src/functdesepc/funciones_mecanicas.py
+src/functdesepc/tablas_norma_afinia.py
+src/functdesepc.egg-info/PKG-INFO
+src/functdesepc.egg-info/SOURCES.txt
+src/functdesepc.egg-info/dependency_links.txt
+src/functdesepc.egg-info/requires.txt
+src/functdesepc.egg-info/top_level.txt
