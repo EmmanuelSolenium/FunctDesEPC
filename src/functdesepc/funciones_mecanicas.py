@@ -9036,3 +9036,128 @@ def obtener_carga_rotura(
         resultado.iloc[i] = np.nan if fila_ru.empty else float(fila_ru.iloc[0]["Carga de Rotura (daN)"])
 
     return resultado
+
+
+
+def calcular_fhrt(
+    Ftvc,
+    Fres,
+    Ftve,
+    Flee,
+    Ftvp,
+    postes_orden,
+    postes_export,
+    tipo_poste,
+    angulo=None,
+    col_salida="Fuerza Total Horiz. Resultante (daN)",
+):
+    """
+    Calcula la Fuerza Total Horiz. Resultante (daN), FHRT, por poste.
+
+    Entradas
+    --------
+    Ftvc, Fres, Ftve, Flee, Ftvp : pd.Series
+        Series alineadas con postes_orden (una fila por poste, sin
+        repeticiones), en el mismo orden.
+    postes_orden : pd.Series
+        Postes finales, ordenados y sin repeticiones.
+    postes_export : pd.Series
+        Postes tal como vienen en la exportación de RedLin (con
+        repeticiones y posible desorden). Se usa únicamente para
+        determinar si un poste tiene repeticiones.
+    tipo_poste : pd.Series
+        Tipo de poste (p.ej. "FL", "ANC", "ANG", ...), alineado con
+        postes_orden en el mismo orden.
+    angulo : pd.Series, opcional
+        Ángulo asociado a cada poste (alineado con postes_orden). Solo
+        se usa para postes tipo "ANC". Acepta valores mixtos (numéricos
+        o strings como "-", "None", "nan"); ver `_angulo_es_vacio`. Si
+        no se provee y hay postes ANC, se asume ángulo vacío (0) para
+        todos ellos.
+    col_salida : str
+        Nombre de la columna/índice de la Serie de salida.
+
+    Lógica (evaluada en este orden de prioridad por poste)
+    -------------------------------------------------------
+    1. Si el poste tiene repeticiones en postes_export:
+           FHRT = sqrt((Fres + Ftve + Ftvp)^2 + Flee^2)
+    2. Si no tiene repeticiones y es tipo FL:
+           FHRT = sqrt((Ftvc + Ftvp + Ftve)^2 + (Fres + Flee)^2)
+    3. Si no tiene repeticiones y es tipo ANG:
+           FHRT = sqrt((Fres + Ftve + Ftvp)^2 + Flee^2)
+    4. Si no tiene repeticiones y es tipo ANC con ángulo vacío
+       (0, "-", NaN o None):
+           FHRT = 1.5 * Fres
+    5. Si no tiene repeticiones y es tipo ANC con ángulo numérico
+       distinto de 0:
+           FHRT = sqrt((Fres + Ftve + Ftvp)^2 + Flee^2)
+
+    Retorna
+    -------
+    pd.Series
+        FHRT por poste, en el mismo orden que postes_orden, indexada
+        igual que postes_orden y nombrada `col_salida`.
+    """
+
+    n = len(postes_orden)
+    resultado = pd.Series(np.nan, index=postes_orden.index, name=col_salida)
+
+    for i in range(n):
+        poste = postes_orden.iloc[i]
+
+        fres_i = Fres.iloc[i]
+        ftve_i = Ftve.iloc[i]
+        ftvp_i = Ftvp.iloc[i]
+        flee_i = Flee.iloc[i]
+        ftvc_i = Ftvc.iloc[i]
+
+        formula_base = np.sqrt((fres_i + ftve_i + ftvp_i) ** 2 + flee_i ** 2)
+
+        # ------------------------------------------------------------
+        # Regla 1: repeticiones (máxima prioridad, sin importar tipo)
+        # ------------------------------------------------------------
+        mask = postes_export == poste
+        n_rep = mask.sum()
+
+        if n_rep > 1:
+            resultado.iloc[i] = formula_base
+            continue
+
+        tp = tipo_poste.iloc[i]
+
+        # ------------------------------------------------------------
+        # Regla 2: FL
+        # ------------------------------------------------------------
+        if tp == "FL":
+            resultado.iloc[i] = np.sqrt(
+                (ftvc_i + ftvp_i + ftve_i) ** 2 + (fres_i + flee_i) ** 2
+            )
+            continue
+
+        # ------------------------------------------------------------
+        # Regla 3: ANG
+        # ------------------------------------------------------------
+        if tp == "ANG":
+            resultado.iloc[i] = formula_base
+            continue
+
+        # ------------------------------------------------------------
+        # Reglas 4 y 5: ANC (depende del ángulo)
+        # ------------------------------------------------------------
+        if tp == "ANC":
+            ang_i = angulo.iloc[i] if angulo is not None else None
+
+            if _angulo_es_vacio(ang_i):
+                resultado.iloc[i] = 1.5 * fres_i
+            else:
+                resultado.iloc[i] = formula_base
+            continue
+
+        # ------------------------------------------------------------
+        # Tipo no contemplado: se deja NaN (comportamiento explícito,
+        # no se asume ninguna fórmula por defecto)
+        # ------------------------------------------------------------
+
+    return resultado
+
+    
