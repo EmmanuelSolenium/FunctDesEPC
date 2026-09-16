@@ -9160,4 +9160,95 @@ def calcular_fhrt(
 
     return resultado
 
-    
+
+
+def calcular_flmc(mec, o_postes, l_postes, tiro_at, tiro_ad, angulo_b, tipo_poste, col_flmc="FLMC"):
+    """
+    Calcula únicamente FLMC (esfuerzo longitudinal mecánico) para postes SIN
+    derivación y con ángulo de deflexión pequeño (|ángulo| <= 2°), aplicando
+    FLMC = |tiro_adelante - tiro_atrás| (tiro faltante, típico en fin de
+    línea, tratado como 0).
+
+    La salida queda como pd.Series alineada 1:1 con `mec` (mismo índice y
+    mismo orden que la tabla MEC), independientemente del orden en que
+    vengan `o_postes` / `l_postes`.
+
+    Reglas
+    ------
+    1. Si el poste tiene repeticiones (más de una fila en `l_postes`) → FLMC = None.
+    2. Si no tiene repeticiones:
+        a. Si |ángulo| > 2° → FLMC = None.
+        b. Si |ángulo| <= 2° y tipo_poste es "ANC" o "FL" → FLMC = |tiro_ad - tiro_at|.
+        c. En cualquier otro caso → FLMC = None.
+
+    Parámetros
+    ----------
+    mec : pd.DataFrame
+        Tabla MEC (o cualquier tabla) a cuyo índice/orden se alinea el
+        resultado. Debe tener una fila por poste único, en el orden final
+        deseado (típicamente ya ordenada por "Numero de apoyo").
+    o_postes : pd.Series
+        Postes en orden (postes_orden / mec["Numero de apoyo"]), sin
+        repetición, uno por poste único.
+    l_postes : pd.Series
+        Postes en orden de exportación (postes_export / post_exp), con
+        repeticiones cuando el poste tiene derivaciones.
+    tiro_at, tiro_ad : list[pd.Series]
+        Listas de series con el tiro de tensión, atrás y adelante,
+        alineadas con `l_postes`.
+    angulo_b : pd.Series
+        Ángulo de deflexión δ (grados), alineado con `l_postes`.
+    tipo_poste : pd.Series
+        Tipo de poste ("ANC", "FL", "ANG", etc.), alineado con `l_postes`.
+    col_flmc : str
+        Nombre de columna, solo como referencia si se asigna a un DataFrame.
+
+    Retorna
+    -------
+    pd.Series
+        FLMC alineado con el índice de `mec` (mismo orden que MEC),
+        con None donde no aplique.
+    """
+
+    ta = sumar_lista_series(tiro_at)
+    td = sumar_lista_series(tiro_ad)
+
+    o_postes = o_postes.reset_index(drop=True)
+    resultado_por_poste = {}
+
+    for poste in o_postes:
+
+        mask = l_postes == poste
+        n_rep = mask.sum()
+
+        if n_rep == 0:
+            continue
+
+        # --- Regla 1: postes con repeticiones (derivaciones) → None ---
+        if n_rep > 1:
+            resultado_por_poste[poste] = None
+            continue
+
+        d = float(angulo_b[mask].iloc[0])
+
+        # --- Regla 2.1: ángulo mayor a 2° → None ---
+        if abs(d) > 2:
+            resultado_por_poste[poste] = None
+            continue
+
+        tipo = tipo_poste[mask].iloc[0]
+
+        # --- Regla 2.2: ángulo pequeño y tipo ANC o FL ---
+        if tipo in ("ANC", "FL"):
+            ta_i = ta[mask].iloc[0] if ta is not None else 0.0
+            td_i = td[mask].iloc[0] if td is not None else 0.0
+            ta_i = 0.0 if pd.isna(ta_i) else ta_i
+            td_i = 0.0 if pd.isna(td_i) else td_i
+            resultado_por_poste[poste] = abs(td_i - ta_i)
+        else:
+            resultado_por_poste[poste] = None
+
+    # Se alinea el resultado al orden/índice de MEC usando "Numero de apoyo"
+    flmc_out = mec["Numero de apoyo"].map(resultado_por_poste)
+
+    return flmc_out
