@@ -195,7 +195,7 @@ def identificar_poste(codigo: str, detallado: bool = False):
         elif d3 == 3:
             sigla_poste = "ANG"
             tipo_poste  = "Ángulo"
-        elif d3 in (4, 5):
+        elif d3 in (4, 5, 6):
             sigla_poste = "ANC"
             tipo_poste  = "Anclaje"
         else:
