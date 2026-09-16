@@ -9252,3 +9252,145 @@ def calcular_flmc(mec, o_postes, l_postes, tiro_at, tiro_ad, angulo_b, tipo_post
     flmc_out = mec["Numero de apoyo"].map(resultado_por_poste)
 
     return flmc_out
+
+def calcular_ftvc(
+    postes_export,
+    postes_orden,
+    tiro_at,
+    tiro_ad,
+    f_viento_at,
+    f_viento_ad,
+    angulo_b,
+    tipo_poste,
+):
+    """
+    Calcula FTVC (esfuerzo transversal por viento) para cada poste de
+    postes_orden.
+
+    Sin derivaciones (poste no se repite en postes_export):
+        - FL:  ftvc = fvad si fvad != 0, sino fvat
+        - AL, o ANC/ANG con ángulo vacío (0/None/NaN/"-"):
+              ftvc = fvat + fvad
+        - ANC o ANG con ángulo numérico != 0 (misma fórmula para ambos,
+          ya que en ANG tad == tat y la fórmula general se reduce a la
+          simplificada):
+              ftvc = (fvat+fvad)*cos(d/2)
+                     + sqrt( (tad-tat)^2*cos²(d/2) + (tad+tat)^2*sen²(d/2) )
+        - tipo_poste no reconocido: NaN
+
+    Con derivaciones (poste se repite en postes_export):
+        - Se normaliza el viento (fvat, fvad) dividiendo por cos(delta/2)
+          en las filas donde hay viento adelante Y atrás simultáneamente.
+        - T_res = suma vectorial de tensiones sobre todas las repeticiones
+          del poste (igual método que calcular_ftvc_flmc / obtener_fh_retenida).
+        - ftvc = |T_res| + suma(fvat normalizado) + suma(fvad normalizado)
+
+    Parámetros
+    ----------
+    postes_export : pd.Series
+        Nombre de poste por fila/repetición (orden export, RedLin).
+    postes_orden : pd.Series
+        Nombre de poste, un valor por poste, en el orden de salida deseado.
+    tiro_at, tiro_ad : pd.Series
+        Tiro atrás / adelante, indexados igual que postes_export.
+    f_viento_at, f_viento_ad : pd.Series
+        Fuerza del viento atrás / adelante, indexados igual que postes_export.
+    angulo_b : pd.Series
+        Ángulo de deflexión (grados), indexado igual que postes_export.
+        Acepta valores mixtos (numéricos, None, NaN, "-").
+    tipo_poste : pd.Series
+        Tipo de poste ("FL", "AL", "ANC", "ANG", ...), indexado igual que
+        postes_export.
+
+    Retorna
+    -------
+    pd.Series indexada igual que postes_orden (un valor por poste). NaN
+    donde el poste no tiene tipo reconocido (sin derivaciones).
+    """
+    resultado = pd.Series(np.nan, index=postes_orden.index)
+
+    for i, poste in enumerate(postes_orden):
+        mask = postes_export == poste
+        if not mask.any():
+            continue
+        n_rep = mask.sum()
+
+        # ============================================================
+        # CON DERIVACIONES (poste repetido)
+        # ============================================================
+        if n_rep > 1:
+            delta = np.deg2rad(angulo_b.loc[mask].astype(float))
+            theta = np.pi - delta
+            ta_poste = tiro_at.loc[mask]
+            td_poste = tiro_ad.loc[mask]
+            fvat_poste = f_viento_at.loc[mask].copy()
+            fvad_poste = f_viento_ad.loc[mask].copy()
+
+            # ---- normalización del viento (solo si hay ad. y at.) ----
+            for idx in delta.index:
+                if fvat_poste.loc[idx] > 0 and fvad_poste.loc[idx] > 0:
+                    fvat_poste.loc[idx] /= np.cos(delta.loc[idx] / 2)
+                    fvad_poste.loc[idx] /= np.cos(delta.loc[idx] / 2)
+
+            # ---- vector resultante de tensiones ----
+            T_res = np.array([0.0, 0.0])
+            for idx in delta.index:
+                th = theta.loc[idx]
+                dt = delta.loc[idx]
+                ta_i = ta_poste.loc[idx]
+                td_i = td_poste.loc[idx]
+
+                if ta_i > 0 and td_i > 0:
+                    tx = ta_i * np.cos(0) + td_i * np.cos(th)
+                    ty = ta_i * np.sin(0) + td_i * np.sin(th)
+                else:
+                    T = ta_i if ta_i > 0 else td_i
+                    tx = T * np.cos(th) if dt != 0 else T * np.cos(dt)
+                    ty = T * np.sin(th) if dt != 0 else T * np.sin(dt)
+
+                T_res += np.array([tx, ty])
+
+            Tres = np.linalg.norm(T_res)
+            fvat_sum = fvat_poste.sum()
+            fvad_sum = fvad_poste.sum()
+
+            resultado.iloc[i] = Tres + fvat_sum + fvad_sum
+            continue
+
+        # ============================================================
+        # SIN DERIVACIONES
+        # ============================================================
+        tp = tipo_poste.iloc[i]
+        angulo = angulo_b.iloc[i]
+        tad = tiro_ad.iloc[i]
+        tat = tiro_at.iloc[i]
+        fvad = f_viento_ad.iloc[i]
+        fvat = f_viento_at.iloc[i]
+
+        if tp == "FL":
+            resultado.iloc[i] = fvad if fvad != 0 else fvat
+            continue
+
+        if tp == "AL":
+            resultado.iloc[i] = fvat + fvad
+            continue
+
+        if tp in ("ANC", "ANG") and _angulo_es_vacio(angulo):
+            resultado.iloc[i] = fvat + fvad
+            continue
+
+        if tp in ("ANC", "ANG"):
+            d = np.deg2rad(float(angulo))
+            sen_d2 = np.sin(d / 2)
+            cos_d2 = np.cos(d / 2)
+            resultado.iloc[i] = (fvat + fvad) * cos_d2 + np.sqrt(
+                (tad - tat) ** 2 * cos_d2 ** 2 + (tad + tat) ** 2 * sen_d2 ** 2
+            )
+            continue
+
+        # tipo_poste no reconocido: se deja NaN
+        continue
+
+    return resultado
+
+
