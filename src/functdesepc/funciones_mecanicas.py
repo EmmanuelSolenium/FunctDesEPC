@@ -9394,3 +9394,102 @@ def calcular_ftvc(
     return resultado
 
 
+def calcular_fhr(
+    tabla,
+    postes_export,      # serie CON repetición, para detectar derivaciones (l_postes)
+    postes_orden,        # o_postes: postes únicos, en el orden de iteración
+    ftvc,                # Series indexadas por poste (índice = postes_orden / mec["Numero de apoyo"])
+    flmc,
+    ftvp,
+    ftve,
+    flee,
+    tipo_poste,          # Series indexada por poste: "FL", "AL", "ANG", "ANC"
+    angulo_poste,        # Series indexada por poste: ángulo de deflexión δ (grados)
+    col_fhr="FHR"
+):
+    """
+    Calcula FHR (fuerza horizontal resultante) por poste.
+
+    Prioridad de reglas (la 1 pasa por encima de 2 y 3):
+    1. Si el poste tiene repeticiones (derivaciones):
+         FHR = sqrt( (FTVC + FTVE + FTVP)^2 + (FLEE)^2 )
+    2. Si NO tiene repeticiones y es FL o ANC con |ángulo| < 2°:
+         FHR = sqrt( (FTVC + FTVP + FTVE)^2 + (FLMC + FLEE)^2 )
+    3. Si NO tiene repeticiones y es AL, ANG o ANC con |ángulo| >= 2°:
+         FHR = sqrt( (FTVC + FTVE + FTVP)^2 + (FLEE)^2 )
+
+    Parámetros
+    ----------
+    tabla : pd.DataFrame
+        Tabla de resultados donde se escribirá la columna `col_fhr`. Se
+        asume que `tabla["Numero de apoyo"]` existe y es la clave para el
+        .map() final (mismo patrón que el resto de funciones _v2).
+    postes_export : pd.Series
+        Serie con repetición (una fila por cada aparición/derivación del
+        poste), usada únicamente para contar repeticiones — mismo rol que
+        `l_postes` en calcular_ftvc_flmc.
+    postes_orden : iterable
+        Postes únicos (o_postes), en el orden en que se recorren.
+    ftvc, flmc, ftvp, ftve, flee : pd.Series
+        Un valor por poste, indexados por el identificador de poste (no por
+        fila repetida). Se asume ya combinados/resueltos por poste.
+    tipo_poste : pd.Series
+        Un valor por poste ("FL", "AL", "ANG", "ANC"), indexado igual.
+    angulo_poste : pd.Series
+        Ángulo de deflexión δ (grados), un valor por poste, mismo índice.
+    col_fhr : str
+        Nombre de la columna de salida en `tabla`.
+
+    Retorna
+    -------
+    tabla : pd.DataFrame
+        La misma tabla de entrada, con la columna `col_fhr` añadida.
+    """
+
+    resultados = {}
+
+    for poste in postes_orden:
+
+        mask = postes_export == poste
+        n_rep = mask.sum()
+        if n_rep == 0:
+            continue
+
+        ftvc_p = ftvc[poste]
+        flmc_p = flmc[poste]
+        ftvp_p = ftvp[poste]
+        ftve_p = ftve[poste]
+        flee_p = flee[poste]
+
+        # ============================================================
+        # REGLA 1: POSTE CON REPETICIONES (derivaciones) — prioridad máxima
+        # ============================================================
+        if n_rep > 1:
+            fhr = np.sqrt((ftvc_p + ftve_p + ftvp_p) ** 2 + (flee_p) ** 2)
+
+        else:
+            tipo = tipo_poste[poste]
+            ang = abs(float(angulo_poste[poste]))
+
+            # ============================================================
+            # REGLA 2: FL o ANC con |ángulo| < 2°
+            # ============================================================
+            if tipo in ("FL", "ANC") and ang < 2:
+                fhr = np.sqrt((ftvc_p + ftvp_p + ftve_p) ** 2 + (flmc_p + flee_p) ** 2)
+
+            # ============================================================
+            # REGLA 3: AL, ANG, o ANC con |ángulo| >= 2°
+            # ============================================================
+            elif tipo in ("AL", "ANG", "ANC") and ang >= 2:
+                fhr = np.sqrt((ftvc_p + ftve_p + ftvp_p) ** 2 + (flee_p) ** 2)
+
+            else:
+                fhr = np.nan
+
+        resultados[poste] = fhr
+
+    fhr_series = pd.Series(resultados)
+    tabla[col_fhr] = tabla["Numero de apoyo"].map(fhr_series)
+
+    return tabla
+
