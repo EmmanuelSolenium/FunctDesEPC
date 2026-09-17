@@ -8789,7 +8789,7 @@ def obtener_fh_retenida(
             continue
 
         if tp == "ANC" and _angulo_es_vacio(angulo):
-            resultado.iloc[i] = 0.5 + max(tat, tad)
+            resultado.iloc[i] = 0.5 * max(tat, tad)
             continue
 
         d = np.deg2rad(float(angulo))
