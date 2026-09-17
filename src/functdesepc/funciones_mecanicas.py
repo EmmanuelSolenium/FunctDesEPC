@@ -9403,6 +9403,7 @@ def calcular_fhr(
     ftvp,
     ftve,
     flee,
+    ftec,
     tipo_poste,          # Series indexada por poste: "FL", "AL", "ANG", "ANC"
     angulo_poste,        # Series indexada por poste: ángulo de deflexión δ (grados)
     col_fhr="FHR"
@@ -9410,13 +9411,16 @@ def calcular_fhr(
     """
     Calcula FHR (fuerza horizontal resultante) por poste.
 
+    FTEC (esfuerzo transversal por equipos) se suma siempre junto a FTVP
+    en el término transversal, en los tres casos.
+
     Prioridad de reglas (la 1 pasa por encima de 2 y 3):
     1. Si el poste tiene repeticiones (derivaciones):
-         FHR = sqrt( (FTVC + FTVE + FTVP)^2 + (FLEE)^2 )
+         FHR = sqrt( (FTVC + FTVE + FTVP + FTEC)^2 + (FLEE)^2 )
     2. Si NO tiene repeticiones y es FL o ANC con |ángulo| < 2°:
-         FHR = sqrt( (FTVC + FTVP + FTVE)^2 + (FLMC + FLEE)^2 )
+         FHR = sqrt( (FTVC + FTVP + FTEC + FTVE)^2 + (FLMC + FLEE)^2 )
     3. Si NO tiene repeticiones y es AL, ANG o ANC con |ángulo| >= 2°:
-         FHR = sqrt( (FTVC + FTVE + FTVP)^2 + (FLEE)^2 )
+         FHR = sqrt( (FTVC + FTVE + FTVP + FTEC)^2 + (FLEE)^2 )
 
     Parámetros
     ----------
@@ -9430,7 +9434,7 @@ def calcular_fhr(
         `l_postes` en calcular_ftvc_flmc.
     postes_orden : iterable
         Postes únicos (o_postes), en el orden en que se recorren.
-    ftvc, flmc, ftvp, ftve, flee : pd.Series
+    ftvc, flmc, ftvp, ftve, flee, ftec : pd.Series
         Un valor por poste, indexados por el identificador de poste (no por
         fila repetida). Se asume ya combinados/resueltos por poste.
     tipo_poste : pd.Series
@@ -9460,12 +9464,13 @@ def calcular_fhr(
         ftvp_p = ftvp[poste]
         ftve_p = ftve[poste]
         flee_p = flee[poste]
+        ftec_p = ftec[poste]
 
         # ============================================================
         # REGLA 1: POSTE CON REPETICIONES (derivaciones) — prioridad máxima
         # ============================================================
         if n_rep > 1:
-            fhr = np.sqrt((ftvc_p + ftve_p + ftvp_p) ** 2 + (flee_p) ** 2)
+            fhr = np.sqrt((ftvc_p + ftve_p + ftvp_p + ftec_p) ** 2 + (flee_p) ** 2)
 
         else:
             tipo = tipo_poste[poste]
@@ -9475,13 +9480,13 @@ def calcular_fhr(
             # REGLA 2: FL o ANC con |ángulo| < 2°
             # ============================================================
             if tipo in ("FL", "ANC") and ang < 2:
-                fhr = np.sqrt((ftvc_p + ftvp_p + ftve_p) ** 2 + (flmc_p + flee_p) ** 2)
+                fhr = np.sqrt((ftvc_p + ftvp_p + ftec_p + ftve_p) ** 2 + (flmc_p + flee_p) ** 2)
 
             # ============================================================
             # REGLA 3: AL, ANG, o ANC con |ángulo| >= 2°
             # ============================================================
             elif tipo in ("AL", "ANG", "ANC") and ang >= 2:
-                fhr = np.sqrt((ftvc_p + ftve_p + ftvp_p) ** 2 + (flee_p) ** 2)
+                fhr = np.sqrt((ftvc_p + ftve_p + ftvp_p + ftec_p) ** 2 + (flee_p) ** 2)
 
             else:
                 fhr = np.nan
@@ -9492,4 +9497,3 @@ def calcular_fhr(
     tabla[col_fhr] = tabla["Numero de apoyo"].map(fhr_series)
 
     return tabla
-
