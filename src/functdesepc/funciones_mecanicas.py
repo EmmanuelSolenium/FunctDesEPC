@@ -5567,21 +5567,53 @@ def _es_red_compacta(tipo_conductor) -> bool:
 
     return bool(_RE_RED_COMPACTA_FM.match(s))
 
+def _tiene_armado_6_o_7(armado) -> bool:
+    """
+    Retorna True si el armado es un string cuyo PRIMER DÍGITO NUMÉRICO es
+    '6' o '7' (p.ej. "MTF631-1", "MTF734-1", "MTF732-1"). Cualquier otro
+    valor (NaN, None, número, string sin dígitos o cuyo primer dígito no
+    sea '6' ni '7') → False.
+
+    Mismo criterio de "primer dígito numérico" que `_tiene_armado_7`,
+    duplicado aquí para no depender del orden de definición dentro del
+    módulo.
+    """
+    if not isinstance(armado, str):
+        return False
+    for ch in armado:
+        if ch.isdigit():
+            return ch in ("6", "7")
+    return False  # sin dígitos
+
 
 def ajustar_fuerza_por_tipo_conductor(
     tipo_conductor: pd.Series,
     fuerza_viento: pd.Series,
+    armado1: pd.Series = None,
+    armado2: pd.Series = None,
 ) -> pd.Series:
     """
-    Ajusta la fuerza del viento de cada poste según el tipo de conductor.
+    Ajusta la fuerza del viento (o el tiro) de cada poste según el tipo de
+    conductor.
 
-    Regla:
+    Regla principal:
       - Si el 'Tipo Conductor' corresponde a una red COMPACTA (prefijo
-        "SM...", ver `_es_red_compacta`), la fuerza se deja tal cual.
+        "SM...", ver `_es_red_compacta`), la fuerza se deja tal cual
+        (factor 1).
       - Si el 'Tipo Conductor' corresponde a una red NORMAL, la fuerza se
         multiplica por 3.
-      - Si el 'Tipo Conductor' está vacío/"-"/0/NaN (no hay conductor), la
-        fuerza también se multiplica por 3.
+
+    Regla de respaldo (cuando 'Tipo Conductor' está vacío/"-"/0/NaN, es
+    decir, no se pudo determinar si la red es compacta o normal):
+      - Si se proporcionan armado1 y/o armado2, se usa el armado del poste
+        (el primero de los dos que sea un string válido) para decidir:
+          - Si el armado tiene tipo "MTF6XX-X" o "MTF7XX-X" (primer dígito
+            numérico '6' o '7') → factor 1 (no se multiplica).
+          - En cualquier otro caso (incluyendo armado también vacío/NaN)
+            → factor 3.
+      - Si no se proporcionan armado1 ni armado2, se conserva el
+        comportamiento anterior: factor 3 cuando el tipo de conductor está
+        vacío (evita romper llamadas existentes que no pasen armados).
 
     Parámetros
     ----------
@@ -5589,20 +5621,54 @@ def ajustar_fuerza_por_tipo_conductor(
         Serie de texto con el 'Tipo Conductor' de cada poste, alineada por
         índice con `fuerza_viento` (mismo orden que en la exportación).
     fuerza_viento : pd.Series
-        Serie con la fuerza del viento de cada poste, alineada por índice
-        con `tipo_conductor`.
+        Serie con la fuerza del viento (o el tiro) de cada poste, alineada
+        por índice con `tipo_conductor`.
+    armado1, armado2 : pd.Series, opcional
+        Armados del poste (p.ej. prim1/prim2 o sec1/sec2, según el
+        circuito que se esté ajustando), usados como respaldo únicamente
+        cuando 'Tipo Conductor' no permite determinar si la red es
+        compacta o normal. Deben estar alineados por índice con
+        `tipo_conductor` / `fuerza_viento`.
 
     Devuelve
     --------
     pd.Series
-        Fuerza del viento ajustada, con el mismo índice que `fuerza_viento`.
+        Fuerza (o tiro) ajustada, con el mismo índice que `fuerza_viento`.
     """
+    tipo_conductor = tipo_conductor.reset_index(drop=True)
+    fuerza_viento_r = fuerza_viento.reset_index(drop=True)
+
+    def _tipo_conductor_valido(v) -> bool:
+        if v is None:
+            return False
+        if isinstance(v, (int, float)) and (np.isnan(v) if isinstance(v, float) else v == 0):
+            return False
+        s = str(v).strip()
+        return not (s == "" or s.lower() in _VALORES_VACIOS_CONDUCTOR_FM)
+
+    tipo_valido = tipo_conductor.apply(_tipo_conductor_valido)
     es_compacta = tipo_conductor.apply(_es_red_compacta)
-    factor = es_compacta.map({True: 1, False: 3})
 
-    return fuerza_viento * factor
+    if armado1 is not None or armado2 is not None:
+        n = len(tipo_conductor)
+        a1 = armado1.reset_index(drop=True) if armado1 is not None else pd.Series([None] * n)
+        a2 = armado2.reset_index(drop=True) if armado2 is not None else pd.Series([None] * n)
 
+        factor = pd.Series(1.0, index=range(n))
+        for i in range(n):
+            if tipo_valido.iloc[i]:
+                factor.iloc[i] = 1.0 if es_compacta.iloc[i] else 3.0
+            else:
+                armado_6_o_7 = _tiene_armado_6_o_7(a1.iloc[i]) or _tiene_armado_6_o_7(a2.iloc[i])
+                factor.iloc[i] = 1.0 if armado_6_o_7 else 3.0
+    else:
+        # Comportamiento anterior: sin armados de respaldo, tipo inválido → factor 3
+        factor = es_compacta.map({True: 1.0, False: 3.0})
 
+    factor.index = fuerza_viento_r.index
+    resultado = fuerza_viento_r * factor
+    resultado.index = fuerza_viento.index
+    return resultado
 # ─────────────────────────────────────────────────────────────────────────────
 # numero_perforaciones  (corregido)
 # ─────────────────────────────────────────────────────────────────────────────
