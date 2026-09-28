@@ -308,6 +308,11 @@ def cargar_catalogo(ruta: str,
             col_a_armado[col] = str(crudo_codigo).strip()
 
         n_armados_hoja = 0
+        # Armados ya cargados desde hojas ANTERIORES: se ignoran en esta hoja
+        # ("gana la primera"). Antes se sumaban los multiplicadores de todas
+        # las hojas donde aparecía el mismo armado (p.ej. SPT002 en las 4
+        # hojas AFINIA -> 4 tubos de gres por poste en vez de 1).
+        armados_previos = set(catalogo.materiales.keys())
         # Filas de materiales: a partir de la fila siguiente a los códigos.
         for r in range(f_cod + 1, crudo.shape[0]):
             nombre = crudo.iloc[r, c_elem]
@@ -362,7 +367,7 @@ def cargar_catalogo(ruta: str,
                 if mult == 0:
                     continue
                 armado_norm = normalizar_codigo_armado(armado_orig)
-                if armado_norm == "":
+                if armado_norm == "" or armado_norm in armados_previos:
                     continue
                 catalogo.armados.setdefault(armado_norm, armado_orig)
                 fila_mat = catalogo.materiales.setdefault(armado_norm, {})
