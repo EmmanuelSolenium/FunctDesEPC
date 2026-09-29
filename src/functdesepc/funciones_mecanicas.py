@@ -8778,12 +8778,13 @@ def obtener_fh_retenida(
             continue
 
         # ---------------- Sin derivaciones ----------------
+        idx_match = angulo_b.index[mask][0]
         tp = tipo_poste.iloc[i]
-        angulo = angulo_b.iloc[i]
-        tad = tiro_ad.iloc[i]
-        tat = tiro_at.iloc[i]
-        fvad = f_viento_ad.iloc[i]
-        fvat = f_viento_at.iloc[i]
+        angulo = angulo_b.loc[idx_match]
+        tad = tiro_ad.loc[idx_match]
+        tat = tiro_at.loc[idx_match]
+        fvad = f_viento_ad.loc[idx_match]
+        fvat = f_viento_at.loc[idx_match]
 
         if tp == "FL":
             resultado.iloc[i] = tad if tad != 0 else tat
