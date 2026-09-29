@@ -8716,7 +8716,8 @@ def obtener_fh_retenida(
     Sin derivaciones (poste no se repite en postes_export):
         - FL:  fh = tad si tad != 0, sino tat
         - ANC con ángulo vacío (0/None/NaN/"-"):  fh = 0.5 + max(tat, tad)
-        - ANG:  fh = (fvat+fvad)*cos(d/2) + 2*tad*sin(d/2)
+        - AL con ángulo vacío (0/None/NaN/"-"):  fh = NaN (alineado, sin retenida)
+        - ANG, o AL con ángulo numérico != 0:  fh = (fvat+fvad)*cos(d/2) + 2*tad*sin(d/2)
         - ANC con ángulo numérico != 0:
               fh = (fvat+fvad)*cos(d/2) + sqrt( (tad-tat)^2*cos²(d/2) + (tad+tat)^2*sin²(d/2) )
 
@@ -8792,11 +8793,15 @@ def obtener_fh_retenida(
             resultado.iloc[i] = 0.5 * max(tat, tad)
             continue
 
+        if tp == "AL" and _angulo_es_vacio(angulo):
+            resultado.iloc[i] = np.nan
+            continue
+
         d = np.deg2rad(float(angulo))
         sen_d2 = np.sin(d / 2)
         cos_d2 = np.cos(d / 2)
 
-        if tp == "ANG":
+        if tp == "ANG" or tp == "AL":
             resultado.iloc[i] = (fvat + fvad) * cos_d2 + 2 * tad * sen_d2
             continue
 
