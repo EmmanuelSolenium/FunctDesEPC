@@ -45,9 +45,10 @@ $ArchivosApp = @(
 )
 # Solo van al repo (documentacion / herramientas), no al actualizador.
 $ArchivosRepo = @("README.md", "LEEME.txt", ".env.ejemplo", "publicar.ps1")
-# Raiz del paquete (ejecutable firmado + DLLs de Python embebido).
+# Raiz del paquete (ejecutable firmado + DLLs de Python embebido). Los runtime de
+# Visual C++ (vcruntime140*, msvcp140) van aqui para PCs sin VC++ Redistributable.
 $ArchivosRaizZip = @("UPME AutoCarga.exe", "python3.dll", "python313.dll", "python313._pth",
-                     "vcruntime140.dll", "vcruntime140_1.dll", "LEEME.txt", ".env.ejemplo")
+                     "vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll", "LEEME.txt", ".env.ejemplo")
 
 # --- 0. Validaciones -------------------------------------------------------
 if ($Version -notmatch '^\d+\.\d+\.\d+$') { throw "Version invalida '$Version' (use X.Y.Z)." }

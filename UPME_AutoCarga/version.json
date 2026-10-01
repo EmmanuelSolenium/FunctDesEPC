@@ -1,8 +1,8 @@
 {
-    "version":  "1.0.1",
-    "notas":  "El ZIP de instalacion se reparte por Google Drive; GitHub solo para actualizaciones.",
+    "version":  "1.0.2",
+    "notas":  "Incluye msvcp140.dll para PCs sin Visual C++ instalado.",
     "fecha":  "2026-10-01",
-    "paquete_minimo":  "1.0.1",
+    "paquete_minimo":  "1.0.2",
     "url_paquete":  "",
     "archivos":  {
                      "iniciar.py":  "9e9192e4befb07d61458685a8475f1143ca9391f825f2c6a20416934034bdde6",
