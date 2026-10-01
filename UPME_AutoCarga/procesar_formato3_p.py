@@ -6,8 +6,9 @@ Reglas:
   - Filas de F3 cuyo Odoo ID no aparezca ni en PEPC (Código Odoo) ni en BOM (ID)
     se eliminan.
   - Asignación directa: filas del BOM que cumplen ASIGNACIONES_DIRECTAS
-    (TC/TCS/TP/TPS de INPEL, XLPE 500 KCMIL/240 mm de SONEPAR, Panel Jinko)
-    reciben directamente el Odoo ID del Papá (PROV-0042/0043/0061/0010).
+    (Reconectador Entec/Celsa, TC/TCS/TP/TPS de INPEL, XLPE 500 KCMIL/240 mm
+    de SONEPAR, Panel Jinko) reciben directamente el Odoo ID del Papá
+    (PROV-0038/0042/0043/0061/0010).
   - Si coincide con BOM: Cantidad <- CANTIDAD de BOM.
   - Si coincide con PEPC: Valor total en COP (Sin incluir IVA) <- PRECIO TOTAL
     (convertido desde USD a COP usando la TRM tomada de D7 cuando MONEDA == USD).
@@ -232,6 +233,8 @@ IVA_RATE = 0.19
 # del Papá, sin importar el ID que traían. Se aplica después de completar el BOM.
 ASIGNACIONES_DIRECTAS = [
     # (patrones del MATERIAL,                               proveedor, Odoo ID del Papá)
+    # Reconectador Y (Entec o Celsa), en cualquier orden y aunque haya saltos de línea.
+    ([r"^(?=[\s\S]*reconectador)(?=[\s\S]*\b(entec|celsa)\b)"], None, "PROV-0038"),
     ([r"\btcs?\b", r"transformador(es)?\s+de\s+corriente"], "INPEL",   "PROV-0042"),
     ([r"\btps?\b", r"transformador(es)?\s+de\s+potencia"],  "INPEL",   "PROV-0043"),
     ([r"xlpe\s+500\s*kcmil", r"\b240\s*mm"],                "SONEPAR", "PROV-0061"),

@@ -27,12 +27,15 @@ param(
     [switch]$SinCommit,
     [switch]$SinPush,
     [string]$UrlPaquete,
-    [string]$Repo = (Join-Path $PSScriptRoot "..\FunctDesEPC")
+    [string]$Repo
 )
 $ErrorActionPreference = "Stop"
 
 $CarpetaRepo = "UPME_AutoCarga"
 $Dev = $PSScriptRoot
+# El valor por defecto se calcula aqui y no en param(): con -File en
+# PowerShell 5.1, $PSScriptRoot llega vacio dentro de param().
+if (-not $Repo) { $Repo = Join-Path $Dev "..\FunctDesEPC" }
 $Destino = Join-Path $Repo $CarpetaRepo
 $Utf8 = New-Object System.Text.UTF8Encoding($false)
 
