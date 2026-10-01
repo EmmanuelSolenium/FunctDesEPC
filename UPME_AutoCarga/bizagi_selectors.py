@@ -49,12 +49,15 @@ SELECTORS = {
     "form_adicionar_texts": ["Adicionar", "Adicionar equipo", "Agregar equipo"],
     "form_adicionar_label_texts": ["Nombre del Elemento", "Nombre"],
 
-    # Fragmentos de URL usados para detectar respuestas de red relevantes (AJUSTAR tras inspeccionar
-    # con DevTools -> pestaña Network las peticiones reales que dispara Bizagi al guardar/adjuntar).
-    # Ver sección 6 de este plan para instrucciones de cómo obtenerlos.
+    # Fragmentos de URL usados para detectar respuestas de red relevantes. Confirmados en vivo
+    # (Bizagi 27.0.10, 2026-10-01) guardando un equipo y subiendo un PDF:
+    # - Guardar equipo: POST /Rest/Handlers/Render con h_action=SAVERELATION en el cuerpo
+    #   (form-urlencoded). Esa misma URL la usan otras peticiones (refrescos del formulario,
+    #   selección de dropdowns), por eso se filtra también por la acción del cuerpo.
+    # - Subir PDF: POST /Rest/Handlers/Render/Upload?h_action=ADDFILE
     "network_hints": {
-        "save_case": "SaveCase",       # placeholder, confirmar con DevTools
-        "upload_file": "UploadFile",   # placeholder, confirmar con DevTools
-        "add_case_relation": "AddCaseRelation",  # placeholder, confirmar con DevTools
+        "save_case": "/Rest/Handlers/Render",
+        "save_case_action": "SAVERELATION",
+        "upload_file": "/Rest/Handlers/Render/Upload",
     },
 }

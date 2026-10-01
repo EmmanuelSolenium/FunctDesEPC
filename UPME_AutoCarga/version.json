@@ -1,6 +1,6 @@
 {
-    "version":  "1.0.2",
-    "notas":  "Incluye msvcp140.dll para PCs sin Visual C++ instalado.",
+    "version":  "1.0.3",
+    "notas":  "Formato 3: asignacion directa BOM -\u003e Papa (TC/TP de INPEL, XLPE 500 KCMIL/240 mm de SONEPAR, Panel Jinko). Bizagi: deteccion de guardado por SAVERELATION y carga mas rapida.",
     "fecha":  "2026-10-01",
     "paquete_minimo":  "1.0.2",
     "url_paquete":  "",
@@ -9,9 +9,9 @@
                      "actualizador.py":  "3e295e13d94d0854e9a8a6ccf2c3dbf9f89cfb150676f38f947c83846560ba3b",
                      "config_usuario.py":  "f68829d943672984efd0cdb668e4afc9c0ea7cf57072f04a92babee695a3eade",
                      "upme_autocarga_gui.py":  "865768a2e4abc1e9347749a8f63d33687cc206f37f8f011013f923e5ddf0816b",
-                     "upme_autocarga_corregido.py":  "643423cd0664cc7f89f3c8bdc6a8fb8e7468c522a7e5fd30e553e2ff8afffb1b",
-                     "procesar_formato3_p.py":  "605831e8d53f9cfad167b471184e27b8769444fda38638db91fbf4e384d803de",
-                     "bizagi_selectors.py":  "9644a861927a5934966f9ddc6446ca55f6741580b66e7ed07a9665c474fdfaef",
+                     "upme_autocarga_corregido.py":  "6b8496be2b3ba64c831de33f25371d72b7d6343bf804163ad0e4ccb8769a35a1",
+                     "procesar_formato3_p.py":  "833768f59304895139539825f109eeab08e962393908fea55ffa90c9e0dbb0d8",
+                     "bizagi_selectors.py":  "7588c90f62932ea1327fa9eb0a32d212aa0a6a76eb5e926ea187bbf74e881aa3",
                      "El_Papá.xlsx":  "f79283c8150f8f4bf05d074add9c4daee6a712764d9b63c8aa3933392cdd0428"
                  }
 }

@@ -4,7 +4,10 @@ con PEPC y BOM por Odoo ID.
 
 Reglas:
   - Filas de F3 cuyo Odoo ID no aparezca ni en PEPC (Código Odoo) ni en BOM (ID)
-    se eliminan. 
+    se eliminan.
+  - Asignación directa: filas del BOM que cumplen ASIGNACIONES_DIRECTAS
+    (TC/TCS/TP/TPS de INPEL, XLPE 500 KCMIL/240 mm de SONEPAR, Panel Jinko)
+    reciben directamente el Odoo ID del Papá (PROV-0042/0043/0061/0010).
   - Si coincide con BOM: Cantidad <- CANTIDAD de BOM.
   - Si coincide con PEPC: Valor total en COP (Sin incluir IVA) <- PRECIO TOTAL
     (convertido desde USD a COP usando la TRM tomada de D7 cuando MONEDA == USD).
@@ -223,6 +226,18 @@ IDS_INVALIDOS = {
 
 IVA_RATE = 0.19
 
+# Asignación directa BOM → Papá: las filas del BOM cuyo MATERIAL cumpla alguno
+# de los patrones (regex, sin distinguir mayúsculas ni tildes) y cuyo PROVEEDOR
+# contenga el proveedor indicado (None = cualquier proveedor) reciben el Odoo ID
+# del Papá, sin importar el ID que traían. Se aplica después de completar el BOM.
+ASIGNACIONES_DIRECTAS = [
+    # (patrones del MATERIAL,                               proveedor, Odoo ID del Papá)
+    ([r"\btcs?\b", r"transformador(es)?\s+de\s+corriente"], "INPEL",   "PROV-0042"),
+    ([r"\btps?\b", r"transformador(es)?\s+de\s+potencia"],  "INPEL",   "PROV-0043"),
+    ([r"xlpe\s+500\s*kcmil", r"\b240\s*mm"],                "SONEPAR", "PROV-0061"),
+    ([r"panel\s+jinko"],                                    None,      "PROV-0010"),
+]
+
 # Columnas del Excel de precios auxiliares
 COL_AUX_ID     = "Odoo ID"
 COL_AUX_PRECIO = "Precio"
@@ -340,6 +355,54 @@ def mismo_proveedor(prov_a, prov_b, umbral: float = 80) -> bool:
     if a in b or b in a:
         return True
     return fuzz.ratio(a, b) >= umbral
+
+
+def aplicar_asignaciones_directas(df_bom: pd.DataFrame) -> pd.DataFrame:
+    """Fuerza el Odoo ID de las filas del BOM que cumplen alguna regla de
+    ASIGNACIONES_DIRECTAS (la primera regla que coincida gana), para que
+    crucen directamente con el ítem correspondiente del Papá."""
+    import unicodedata
+
+    def _sin_tildes(s: str) -> str:
+        return unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode()
+
+    try:
+        col_mat = encontrar_columna(df_bom, "MATERIAL")
+    except KeyError:
+        print("\n⚠ BOM sin columna MATERIAL — se omiten las asignaciones directas.")
+        return df_bom
+
+    if COL_BOM_ID not in df_bom.columns:
+        df_bom[COL_BOM_ID] = None
+    df_bom[COL_BOM_ID] = df_bom[COL_BOM_ID].astype(object)
+
+    reglas = [([re.compile(p, re.IGNORECASE) for p in patrones],
+               _normalizar_proveedor(prov) if prov else None, id_papa)
+              for patrones, prov, id_papa in ASIGNACIONES_DIRECTAS]
+
+    asignadas = []
+    for idx, row in df_bom.iterrows():
+        mat = _sin_tildes(str(row[col_mat])) if pd.notna(row[col_mat]) else ""
+        if not mat.strip():
+            continue
+        prov_bom = _normalizar_proveedor(row.get(COL_BOM_PROVEEDOR))
+        for patrones, prov_req, id_papa in reglas:
+            if not any(p.search(mat) for p in patrones):
+                continue
+            if prov_req and prov_req not in prov_bom:
+                continue
+            asignadas.append((str(row[col_mat]).strip()[:70], row.get(COL_BOM_PROVEEDOR),
+                              row[COL_BOM_ID], id_papa))
+            df_bom.at[idx, COL_BOM_ID] = id_papa
+            break
+
+    if asignadas:
+        print(f"\nAsignación directa BOM → Papá: {len(asignadas)} fila(s) del BOM con Odoo ID forzado:")
+        print(pd.DataFrame(asignadas, columns=["MATERIAL", "PROVEEDOR", "ID anterior", "ID asignado"])
+              .to_string(index=False))
+    else:
+        print("\nAsignación directa BOM → Papá: ninguna fila del BOM cumplió las reglas.")
+    return df_bom
 
 
 def limpiar_id(valor) -> str | None:
@@ -2231,6 +2294,9 @@ def run_procesamiento(
                 if idx < len(df_bom):
                     df_bom.at[df_bom.index[idx], COL_BOM_ID] = id_
             print(f"\nIDs inyectados en DataFrame del BOM original.")
+
+    # ── Paso 3d: asignación directa BOM → Papá (gana sobre el ID del BOM) ─
+    df_bom = aplicar_asignaciones_directas(df_bom)
 
     # ── Paso 4: obtener TRM ────────────────────────────────────────────
     # Orden de prioridad:

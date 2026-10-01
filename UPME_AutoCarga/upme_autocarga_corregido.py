@@ -26,6 +26,11 @@ URL = "https://automatizacion-upme.bizagi.com/"
 USUARIO = os.environ.get("BIZAGI_USER_NEW", "")
 PASSWORD = os.environ.get("BIZAGI_PASSWORD_NEW", "")
 DEFAULT_RADICADO = "FNCE_202613962"
+# Pausa que Playwright agrega a CADA acción (clic, tecla, fill...). Con 120 ms un
+# solo campo de texto (~35 acciones) tardaba 4-5 s. Las esperas que Bizagi sí
+# necesita ya están explícitas en el código, así que por defecto va en 0.
+# Si la carga se vuelve inestable, subirlo en el .env: BIZAGI_SLOW_MO_MS=120
+SLOW_MO_MS = int(os.environ.get("BIZAGI_SLOW_MO_MS", "0") or 0)
 
 
 PDF_DIR = os.path.join(BASE_DIR, "Fichastecnicas")
@@ -384,8 +389,19 @@ def click_guardar_esperando_respuesta(page, log=print, timeout_ms: int = 15000):
     from bizagi_selectors import SELECTORS
 
     hint = SELECTORS["network_hints"]["save_case"]
+    action = SELECTORS["network_hints"]["save_case_action"]
+
+    def es_guardado(r):
+        # La URL de Render es compartida; el guardado se distingue por h_action en el cuerpo.
+        if hint not in r.url:
+            return False
+        try:
+            return action in (r.request.post_data or "")
+        except Exception:
+            return False
+
     try:
-        with page.expect_response(lambda r: hint in r.url, timeout=timeout_ms) as resp_info:
+        with page.expect_response(es_guardado, timeout=timeout_ms) as resp_info:
             click_guardar(page)
         resp = resp_info.value
         if resp.status >= 400:
@@ -399,8 +415,8 @@ def click_guardar_esperando_respuesta(page, log=print, timeout_ms: int = 15000):
         except Exception:
             page.wait_for_timeout(2500)  # último recurso, mucho más corto que los 4000ms originales
 
-    # El hint de red aún no está confirmado, así que la prueba real de que se
-    # guardó es que el formulario se cierre. Si sigue abierto, Bizagi rechazó
+    # Un 200 de SAVERELATION no garantiza que Bizagi aceptara el registro, así que
+    # la prueba real de que se guardó es que el formulario se cierre. Si sigue abierto, Bizagi rechazó
     # el guardado (campo obligatorio, validación, adjunto pendiente...).
     try:
         page.locator(FORM_EQUIPO_MARKER).first.wait_for(state="hidden", timeout=15000)
@@ -478,15 +494,6 @@ def fill_field_by_xpath(page, render_xpath: str, value: str, is_dropdown=False):
             # Inputs normales (texto/numero)
             field = container.locator("input:not([type='hidden']), textarea").first
             field.click(force=True)
-            
-            # Método más riguroso para limpiar inputs numéricos con máscaras en Bizagi
-            field.press("End")
-            for _ in range(25):
-                field.press("Backspace")
-            
-            field.fill("")
-            field.press("Control+A")
-            field.press("Delete")
 
             # Escribir simulando teclado real, dependiendo del tipo de campo
             # Si es campo numérico/monetario, usamos press carácter por carácter para las máscaras
@@ -496,6 +503,17 @@ def fill_field_by_xpath(page, render_xpath: str, value: str, is_dropdown=False):
             # para poder recortarla en texto plano sin tocar el margen que necesita la máscara
             # numérica.
             if is_numeric:
+                # Método más riguroso para limpiar inputs numéricos con máscaras en Bizagi.
+                # Solo aquí: en texto plano fill() ya reemplaza el contenido, y esta limpieza
+                # (~30 acciones) era la mayor parte del tiempo por campo.
+                field.press("End")
+                for _ in range(25):
+                    field.press("Backspace")
+
+                field.fill("")
+                field.press("Control+A")
+                field.press("Delete")
+
                 page.wait_for_timeout(150)
 
                 # NO usar fill(): estos campos tienen una máscara JS de Bizagi que reformatea
@@ -1159,7 +1177,7 @@ def run_automation(excel_path: str, sheet_name: str, radicado: str, start_idx: i
     # Chromium de Playwright; si no esta descargado, usar Edge o Chrome del PC.
     for channel in (None, "msedge", "chrome"):
         try:
-            browser = playwright_ctx.chromium.launch(headless=False, slow_mo=120, channel=channel)
+            browser = playwright_ctx.chromium.launch(headless=False, slow_mo=SLOW_MO_MS, channel=channel)
             break
         except Exception as e:
             log(f"No se pudo abrir navegador ({channel or 'chromium'}): {e}")
