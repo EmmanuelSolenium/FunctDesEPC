@@ -2,8 +2,8 @@ UPME AutoCarga - Instalación
 ============================
 
 1. INSTALAR (una sola vez)
-   - Descargue UPME_AutoCarga_vX.Y.Z.zip desde:
-     https://github.com/EmmanuelSolenium/FunctDesEPC/releases
+   - Descargue UPME_AutoCarga_vX.Y.Z.zip de la carpeta de Google Drive que
+     le compartieron.
    - Clic derecho sobre el ZIP > Propiedades > marque "Desbloquear" > Aceptar.
      (Si no aparece esa casilla, continúe.)
    - Clic derecho > "Extraer todo..." en una carpeta PROPIA de su PC, por ejemplo:
@@ -26,5 +26,6 @@ UPME AutoCarga - Instalación
 4. ACTUALIZACIONES
    Al abrir, el programa revisa si hay una versión nueva y le pregunta si
    desea actualizar (tarda segundos). Si alguna vez dice que requiere el
-   paquete completo, descargue el ZIP nuevo y repita el paso 1 (sus
+   paquete completo, descargue el ZIP nuevo de la carpeta de Drive y repita
+   el paso 1 en la misma carpeta, reemplazando los archivos (sus
    credenciales y preferencias se conservan).

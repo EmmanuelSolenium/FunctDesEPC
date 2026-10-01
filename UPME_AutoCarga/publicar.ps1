@@ -1,13 +1,19 @@
 # ==========================================================================
-#  Publica una nueva version de UPME AutoCarga en GitHub.
+#  Publica una nueva version de UPME AutoCarga.
+#  - El ZIP de instalacion se reparte por Google Drive.
+#  - GitHub solo sirve las actualizaciones de codigo (version.json + archivos).
 #
 #  Solo codigo (los usuarios se actualizan solos al abrir el programa):
 #     .\publicar.ps1 -Version 1.0.1 -Notas "Corrige X"
 #
 #  Paquete completo (cambio en _runtime: librerias nuevas, Python, etc.).
-#  Ademas genera dist\UPME_AutoCarga_v<version>.zip para subir como Release:
+#  Genera dist\UPME_AutoCarga_v<version>.zip y, antes de publicar en GitHub,
+#  espera a que usted lo suba a la carpeta de Drive:
 #     .\publicar.ps1 -Version 1.1.0 -Notas "Nueva libreria" -PaqueteCompleto
 #
+#  -UrlPaquete : enlace de la carpeta de Drive donde esta el ZIP. Se recuerda
+#                entre versiones (queda en version.json); el programa lo abre
+#                cuando un usuario necesita el paquete completo.
 #  -SinCommit : solo prepara los archivos en el repo (para revisarlos).
 #  -SinPush   : hace commit pero no lo sube.
 #
@@ -20,11 +26,11 @@ param(
     [switch]$PaqueteCompleto,
     [switch]$SinCommit,
     [switch]$SinPush,
+    [string]$UrlPaquete,
     [string]$Repo = (Join-Path $PSScriptRoot "..\FunctDesEPC")
 )
 $ErrorActionPreference = "Stop"
 
-$RepoGitHub = "EmmanuelSolenium/FunctDesEPC"
 $CarpetaRepo = "UPME_AutoCarga"
 $Dev = $PSScriptRoot
 $Destino = Join-Path $Repo $CarpetaRepo
@@ -74,19 +80,16 @@ $hashes = [ordered]@{}
 foreach ($f in $ArchivosApp) {
     $hashes[$f] = (Get-FileHash -LiteralPath (Join-Path $Dev $f) -Algorithm SHA256).Hash.ToLower()
 }
-if ($PaqueteCompleto -or -not $anterior) {
-    $paqueteMinimo = $Version
-    $urlPaquete = "https://github.com/$RepoGitHub/releases/download/upme-v$Version/UPME_AutoCarga_v$Version.zip"
-} else {
-    $paqueteMinimo = $anterior.paquete_minimo
-    $urlPaquete = $anterior.url_paquete
-}
+$esPaquete = $PaqueteCompleto -or -not $anterior
+$paqueteMinimo = if ($esPaquete) { $Version } else { $anterior.paquete_minimo }
+if (-not $UrlPaquete -and $anterior) { $UrlPaquete = $anterior.url_paquete }
+if (-not $UrlPaquete) { $UrlPaquete = "" }
 $info = [ordered]@{
     version        = $Version
     notas          = $Notas
     fecha          = (Get-Date -Format "yyyy-MM-dd")
     paquete_minimo = $paqueteMinimo
-    url_paquete    = $urlPaquete
+    url_paquete    = $UrlPaquete
     archivos       = $hashes
 }
 $json = $info | ConvertTo-Json -Depth 5
@@ -96,7 +99,7 @@ Write-Host "version.json -> $Version (paquete minimo $paqueteMinimo)"
 
 # --- 3. ZIP del paquete completo ------------------------------------------
 $zip = $null
-if ($PaqueteCompleto -or -not $anterior) {
+if ($esPaquete) {
     $dist = Join-Path $Dev "dist"
     $stage = Join-Path $dist "UPME AutoCarga"
     if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
@@ -132,6 +135,14 @@ if ($PaqueteCompleto -or -not $anterior) {
 
 # --- 4. Commit y push -----------------------------------------------------
 if ($SinCommit) { Write-Host "Archivos listos en $Destino (sin commit)."; return }
+if ($zip -and $anterior) {
+    # Al publicar, los usuarios con paquete viejo seran enviados a Drive:
+    # el ZIP tiene que estar alli antes.
+    Write-Host ""
+    Write-Host "Suba $zip a la carpeta de Drive"
+    if ($UrlPaquete) { Write-Host "  $UrlPaquete" }
+    Read-Host "y presione Enter para publicar en GitHub (Ctrl+C para cancelar)" | Out-Null
+}
 git -C $Repo add -- $CarpetaRepo
 git -C $Repo commit -m "UPME AutoCarga v$Version" -m $Notas
 if ($LASTEXITCODE) { throw "git commit fallo" }
@@ -139,16 +150,5 @@ if ($SinPush) { Write-Host "Commit hecho (sin push)."; return }
 git -C $Repo push
 if ($LASTEXITCODE) { throw "git push fallo" }
 
-# --- 5. Release (solo paquete completo) -----------------------------------
-if ($zip) {
-    if (Get-Command gh -ErrorAction SilentlyContinue) {
-        gh release create "upme-v$Version" $zip -R $RepoGitHub -t "UPME AutoCarga v$Version" -n $Notas
-    } else {
-        Write-Host ""
-        Write-Host "SUBA EL ZIP AHORA (los usuarios con paquete viejo seran enviados a este enlace):"
-        Write-Host "  1. Abra https://github.com/$RepoGitHub/releases/new"
-        Write-Host "  2. Tag: upme-v$Version   Titulo: UPME AutoCarga v$Version"
-        Write-Host "  3. Adjunte $zip y publique."
-    }
-}
+if ($zip -and -not $anterior) { Write-Host "Suba $zip a la carpeta de Drive para repartirlo." }
 Write-Host "Listo: v$Version publicada."

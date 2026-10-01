@@ -7,7 +7,8 @@ Si hay una versión mayor:
   - Normal: descarga solo los archivos listados, verifica su SHA-256 y los
     reemplaza; luego reinicia el programa.
   - Si la nueva versión exige un paquete más nuevo que el instalado
-    (_runtime/paquete.txt < "paquete_minimo"), abre la página del ZIP nuevo.
+    (_runtime/paquete.txt < "paquete_minimo"), abre la carpeta de Drive del
+    ZIP nuevo ("url_paquete"). El ZIP no se distribuye por GitHub.
 Cualquier fallo de red se ignora: el programa abre con la versión actual.
 Para desactivarlo (desarrollo): variable de entorno UPME_SIN_ACTUALIZAR=1.
 """
@@ -136,12 +137,21 @@ def verificar(parent=None):
     detalle = f"\n\nCambios:\n{notas}" if notas else ""
 
     if _version_tuple(remoto.get("paquete_minimo", "0")) > _version_tuple(version_paquete_local()):
-        url = remoto.get("url_paquete") or f"https://github.com/{REPO}/releases"
+        url = remoto.get("url_paquete")  # carpeta de Drive con el ZIP
+        if not url:
+            messagebox.showinfo(
+                "Actualización disponible",
+                f"Hay una nueva versión {v_nueva} (tienes {local.get('version')}).{detalle}\n\n"
+                "Esta versión requiere instalar el paquete completo (ZIP) de nuevo.\n"
+                "Pídale el ZIP nuevo al responsable del programa.",
+                parent=parent,
+            )
+            return
         if messagebox.askyesno(
             "Actualización disponible",
             f"Hay una nueva versión {v_nueva} (tienes {local.get('version')}).{detalle}\n\n"
-            "Esta versión requiere descargar el paquete completo (ZIP) de nuevo.\n"
-            "¿Abrir la página de descarga?",
+            "Esta versión requiere instalar el paquete completo (ZIP) de nuevo.\n"
+            "¿Abrir la carpeta de Drive para descargarlo?",
             parent=parent,
         ):
             import webbrowser
