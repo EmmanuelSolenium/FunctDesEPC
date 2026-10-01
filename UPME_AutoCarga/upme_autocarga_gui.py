@@ -64,7 +64,7 @@ class UpmeGUI(tk.Tk):
         self.sheet_var = tk.StringVar()
         self.radicado_var = tk.StringVar(value=core.DEFAULT_RADICADO)
         self.start_idx_var = tk.StringVar(value="1")
-        self.pdf_dir_var = tk.StringVar(value=core.PDF_DIR)
+        self.pdf_dir_var = tk.StringVar(value="")
         self.maestro_var = tk.StringVar(value=core.MAESTRO_DEFAULT)
         self.usuario_var = tk.StringVar(value=core.USUARIO)
         self.password_var = tk.StringVar(value=core.PASSWORD)
@@ -297,6 +297,9 @@ class UpmeGUI(tk.Tk):
             messagebox.showwarning("Falta información", "El ítem inicial debe ser un número entero >= 1.")
             return None
         pdf_dir = self.pdf_dir_var.get().strip()
+        if not pdf_dir or not os.path.isdir(pdf_dir):
+            messagebox.showwarning("Falta información", "Selecciona la carpeta de fichas técnicas (PDF).")
+            return None
         maestro_path = self.maestro_var.get().strip()
         if not maestro_path or not os.path.isfile(maestro_path):
             messagebox.showwarning("Falta información", "Selecciona el Excel maestro de Odoo ID (El_Papá.xlsx).")
@@ -651,8 +654,6 @@ def main():
     cfg = config_usuario.leer_config()
     if cfg.get("pdf_dir") and os.path.isdir(cfg["pdf_dir"]):
         app.pdf_dir_var.set(cfg["pdf_dir"])
-    elif os.path.isdir(core.PDF_DIR):
-        app.pdf_dir_var.set(core.PDF_DIR)
     if cfg.get("maestro") and os.path.isfile(cfg["maestro"]):
         app.maestro_var.set(cfg["maestro"])
     app.mainloop()
