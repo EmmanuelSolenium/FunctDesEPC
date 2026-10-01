@@ -9592,3 +9592,234 @@ def calcular_fhr(
 
 
 
+
+
+# ==========================================================================
+# VERSIONES CORREGIDAS (_v2) — bug de indexación posicional en la rama
+# "sin derivaciones" + vacío normativo de "AL" en calcular_fhr.
+# Los originales (calcular_ftvc, calcular_fhr) se dejan intactos arriba.
+# ==========================================================================
+
+def calcular_ftvc_v2(
+    postes_export,
+    postes_orden,
+    tiro_at,
+    tiro_ad,
+    f_viento_at,
+    f_viento_ad,
+    angulo_b,
+    tipo_poste,
+):
+    """
+    Versión corregida de calcular_ftvc.
+
+    CORRECCIÓN: en la rama "SIN DERIVACIONES", la versión original leía
+    tipo_poste/angulo_b/tiro_at/tiro_ad/f_viento_at/f_viento_ad con
+    tipo_poste.iloc[i], usando como posición "i" el índice de
+    postes_orden (único, orden final de salida). Pero estas series están
+    indexadas como postes_export (orden de exportación RedLin, con
+    repeticiones) — un orden distinto. Resultado: casi todos los postes
+    leían los datos de OTRO poste.
+
+    Esta versión usa el mismo mecanismo ya correcto de la rama CON
+    DERIVACIONES (y de calcular_flmc): localizar la fila real del poste
+    vía mask = postes_export == poste y leer con .loc[idx_match].
+    El resto de la lógica (fórmulas, reglas por tipo_poste) es idéntico
+    a calcular_ftvc.
+
+    Parámetros y retorno: idénticos a calcular_ftvc.
+    """
+    resultado = pd.Series(np.nan, index=postes_orden.index)
+
+    for i, poste in enumerate(postes_orden):
+        mask = postes_export == poste
+        if not mask.any():
+            continue
+        n_rep = mask.sum()
+
+        # ============================================================
+        # CON DERIVACIONES (poste repetido) — sin cambios
+        # ============================================================
+        if n_rep > 1:
+            delta = np.deg2rad(angulo_b.loc[mask].astype(float))
+            theta = np.pi - delta
+            ta_poste = tiro_at.loc[mask]
+            td_poste = tiro_ad.loc[mask]
+            fvat_poste = f_viento_at.loc[mask].copy()
+            fvad_poste = f_viento_ad.loc[mask].copy()
+
+            # ---- normalización del viento (solo si hay ad. y at.) ----
+            for idx in delta.index:
+                if fvat_poste.loc[idx] > 0 and fvad_poste.loc[idx] > 0:
+                    fvat_poste.loc[idx] /= np.cos(delta.loc[idx] / 2)
+                    fvad_poste.loc[idx] /= np.cos(delta.loc[idx] / 2)
+
+            # ---- vector resultante de tensiones ----
+            T_res = np.array([0.0, 0.0])
+            for idx in delta.index:
+                th = theta.loc[idx]
+                dt = delta.loc[idx]
+                ta_i = ta_poste.loc[idx]
+                td_i = td_poste.loc[idx]
+
+                if ta_i > 0 and td_i > 0:
+                    tx = ta_i * np.cos(0) + td_i * np.cos(th)
+                    ty = ta_i * np.sin(0) + td_i * np.sin(th)
+                else:
+                    T = ta_i if ta_i > 0 else td_i
+                    tx = T * np.cos(th) if dt != 0 else T * np.cos(dt)
+                    ty = T * np.sin(th) if dt != 0 else T * np.sin(dt)
+
+                T_res += np.array([tx, ty])
+
+            Tres = np.linalg.norm(T_res)
+            fvat_sum = fvat_poste.sum()
+            fvad_sum = fvad_poste.sum()
+
+            resultado.iloc[i] = Tres + fvat_sum + fvad_sum
+            continue
+
+        # ============================================================
+        # SIN DERIVACIONES — CORREGIDO: .loc[idx_match] en vez de .iloc[i]
+        # ============================================================
+        idx_match = postes_export.index[mask][0]
+        tp = tipo_poste.loc[idx_match]
+        angulo = angulo_b.loc[idx_match]
+        tad = tiro_ad.loc[idx_match]
+        tat = tiro_at.loc[idx_match]
+        fvad = f_viento_ad.loc[idx_match]
+        fvat = f_viento_at.loc[idx_match]
+
+        if tp == "FL":
+            resultado.iloc[i] = fvad if fvad != 0 else fvat
+            continue
+
+        if tp == "AL":
+            resultado.iloc[i] = fvat + fvad
+            continue
+
+        if tp in ("ANC", "ANG") and _angulo_es_vacio(angulo):
+            resultado.iloc[i] = fvat + fvad
+            continue
+
+        if tp in ("ANC", "ANG"):
+            d = np.deg2rad(float(angulo))
+            sen_d2 = np.sin(d / 2)
+            cos_d2 = np.cos(d / 2)
+            resultado.iloc[i] = (fvat + fvad) * cos_d2 + np.sqrt(
+                (tad - tat) ** 2 * cos_d2 ** 2 + (tad + tat) ** 2 * sen_d2 ** 2
+            )
+            continue
+
+        # tipo_poste no reconocido: se deja NaN
+        continue
+
+    return resultado
+
+
+def calcular_fhr_v2(
+    tabla,
+    postes_export,      # serie CON repetición (post_exp), para detectar derivaciones
+    postes_orden,        # mec["Numero de apoyo"]: postes únicos, alineados posicionalmente con ftvc, flmc, etc.
+    ftvc,
+    flmc,
+    ftvp,
+    ftve,
+    flee,
+    ftec,
+    tipo_poste,          # alineado POSICIONALMENTE con postes_orden (mismo orden, sin repetición): "FL","AL","ANG","ANC"
+    angulo_poste,        # alineado POSICIONALMENTE con postes_orden: ángulo de deflexión δ (grados)
+    col_fhr="FHR"
+):
+    """
+    Versión corregida de calcular_fhr.
+
+    CORRECCIÓN (normativa): Regla 3 ahora cubre "AL" para CUALQUIER
+    ángulo (antes solo aplicaba con |ángulo| >= 2°, dejando "AL" con
+    |ángulo| < 2° sin ninguna regla → NaN). Esto es consistente con
+    calcular_flmc, que ya excluye "AL" de su cálculo (FLMC = None para
+    AL: se asume que una alineación no tiene componente longitudinal
+    relevante por desequilibrio de tiros).
+
+    IMPORTANTE: esta función sigue esperando, por contrato, que
+    tipo_poste y angulo_poste vengan alineados POSICIONALMENTE con
+    postes_orden (mismo orden, sin repetición) — igual que la versión
+    original. El bug de alineación real estaba en qué se le pasaba desde
+    el notebook (tipo_poste_exp, alineado con postes_export en vez de
+    con postes_orden). La corrección de ESE bug va en el notebook:
+    pasar aquí tipo_poste_mec (construido desde mec["Armado"], ya
+    correctamente alineado con mec["Numero de apoyo"]) en vez de
+    tipo_poste_exp.
+
+    FTEC (esfuerzo transversal por equipos) se suma siempre junto a FTVP
+    en el término transversal, en los tres casos.
+
+    Prioridad de reglas (la 1 pasa por encima de 2 y 3):
+    1. Si el poste tiene repeticiones (derivaciones) en postes_export:
+         FHR = sqrt( (FTVC + FTVE + FTVP + FTEC)^2 + (FLEE)^2 )
+    2. Si NO tiene repeticiones y es FL o ANC con |ángulo| < 2°:
+         FHR = sqrt( (FTVC + FTVP + FTEC + FTVE)^2 + (FLMC + FLEE)^2 )
+    3. Si NO tiene repeticiones y es AL (CUALQUIER ángulo), o ANG/ANC
+       con |ángulo| >= 2°:
+         FHR = sqrt( (FTVC + FTVE + FTVP + FTEC)^2 + (FLEE)^2 )
+
+    Parámetros y retorno: idénticos a calcular_fhr.
+    """
+
+    postes_orden = pd.Series(postes_orden).reset_index(drop=True)
+    ftvc = pd.Series(ftvc).reset_index(drop=True)
+    flmc = pd.Series(flmc).reset_index(drop=True)
+    ftvp = pd.Series(ftvp).reset_index(drop=True)
+    ftve = pd.Series(ftve).reset_index(drop=True)
+    flee = pd.Series(flee).reset_index(drop=True)
+    ftec = pd.Series(ftec).reset_index(drop=True)
+    tipo_poste = pd.Series(tipo_poste).reset_index(drop=True)
+    angulo_poste = pd.Series(angulo_poste).reset_index(drop=True)
+
+    resultados = {}
+
+    for i, poste in enumerate(postes_orden):
+
+        mask = postes_export == poste
+        n_rep = mask.sum()
+        if n_rep == 0:
+            continue
+
+        ftvc_p = ftvc.iloc[i]
+        flmc_p = flmc.iloc[i]
+        ftvp_p = ftvp.iloc[i]
+        ftve_p = ftve.iloc[i]
+        flee_p = flee.iloc[i]
+        ftec_p = ftec.iloc[i]
+
+        # ============================================================
+        # REGLA 1: POSTE CON REPETICIONES (derivaciones) — prioridad máxima
+        # ============================================================
+        if n_rep > 1:
+            fhr = np.sqrt((ftvc_p + ftve_p + ftvp_p + ftec_p) ** 2 + (flee_p) ** 2)
+
+        else:
+            tipo = tipo_poste.iloc[i]
+            ang = abs(float(angulo_poste.iloc[i]))
+
+            # ============================================================
+            # REGLA 2: FL o ANC con |ángulo| < 2°
+            # ============================================================
+            if tipo in ("FL", "ANC") and ang < 2:
+                fhr = np.sqrt((ftvc_p + ftvp_p + ftec_p + ftve_p) ** 2 + (flmc_p + flee_p) ** 2)
+
+            # ============================================================
+            # REGLA 3: AL (CUALQUIER ángulo), o ANG/ANC con |ángulo| >= 2°
+            # ============================================================
+            elif tipo == "AL" or (tipo in ("ANG", "ANC") and ang >= 2):
+                fhr = np.sqrt((ftvc_p + ftve_p + ftvp_p + ftec_p) ** 2 + (flee_p) ** 2)
+
+            else:
+                fhr = np.nan
+
+        resultados[poste] = fhr
+
+    fhr_series = pd.Series(resultados)
+    tabla[col_fhr] = tabla["Numero de apoyo"].map(fhr_series)
+
+    return tabla
