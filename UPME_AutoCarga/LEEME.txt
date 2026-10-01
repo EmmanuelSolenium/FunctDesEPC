@@ -1,0 +1,30 @@
+UPME AutoCarga - Instalación
+============================
+
+1. INSTALAR (una sola vez)
+   - Descargue UPME_AutoCarga_vX.Y.Z.zip desde:
+     https://github.com/EmmanuelSolenium/FunctDesEPC/releases
+   - Clic derecho sobre el ZIP > Propiedades > marque "Desbloquear" > Aceptar.
+     (Si no aparece esa casilla, continúe.)
+   - Clic derecho > "Extraer todo..." en una carpeta PROPIA de su PC, por ejemplo:
+         C:\Users\<su usuario>\UPME AutoCarga
+     NO lo extraiga dentro de Google Drive/OneDrive ni en "Archivos de programa".
+   - Abra "UPME AutoCarga.exe". La primera vez le ofrecerá crear un acceso
+     directo en el escritorio.
+
+2. CREDENCIALES DE BIZAGI
+   Las credenciales NO vienen en el paquete. Elija una opción en la ventana:
+   - "Importar credenciales..." : seleccione el archivo .env que le compartieron.
+   - O escriba usuario y contraseña y pulse "Guardar en este PC".
+   Se guardan solo en su PC, en %APPDATA%\UPME AutoCarga\.env
+   ("Olvidar" las borra). Vea .env.ejemplo para el formato del archivo.
+
+3. FICHAS TÉCNICAS
+   Use "Examinar..." para elegir la carpeta compartida de fichas técnicas (PDF).
+   El programa recuerda la última carpeta usada.
+
+4. ACTUALIZACIONES
+   Al abrir, el programa revisa si hay una versión nueva y le pregunta si
+   desea actualizar (tarda segundos). Si alguna vez dice que requiere el
+   paquete completo, descargue el ZIP nuevo y repita el paso 1 (sus
+   credenciales y preferencias se conservan).
