@@ -255,6 +255,16 @@ class FormularioNoCerrado(RuntimeError):
     """Guardar no cerró el formulario (validación de Bizagi o guardado incompleto)."""
 
 
+def combos_vacios_en_validacion(mensaje: str) -> list:
+    """Combos reintentables que el mensaje de validación de Bizagi reporta como vacíos.
+    Ese mensaje es validación del lado del cliente: el guardado no llegó a Bizagi, así
+    que se puede corregir el campo y volver a Guardar sin riesgo de duplicar el equipo."""
+    m = (mensaje or "").lower()
+    if "vac" not in m:
+        return []
+    return [k for k in COMBOS_REINTENTABLES if f"campo {k}" in m]
+
+
 def formulario_equipo_abierto(page) -> bool:
     try:
         return page.locator(FORM_EQUIPO_MARKER).first.is_visible()
@@ -482,9 +492,16 @@ def fill_field_by_xpath(page, render_xpath: str, value: str, is_dropdown=False):
                 option = page.locator("div.ui-select-dropdown li[role='option']").filter(has_text=value).first
 
             if option.count() > 0:
+                # Con listas largas la opción puede quedar fuera de la zona visible del
+                # listbox; con force=True el clic caía en otra parte y el combo quedaba vacío.
+                try:
+                    option.scroll_into_view_if_needed(timeout=2000)
+                except Exception:
+                    pass
                 option.click(force=True)
             else:
                 # Fallback: presionar Enter si la opción no se detecta claramente
+                print(f"     ⚠️ Opción '{value}' no encontrada en la lista; usando Enter.")
                 page.keyboard.press("Enter")
 
             page.wait_for_timeout(700) # margen sobre los ~600ms reales de los Render tras seleccionar
@@ -803,6 +820,14 @@ def get_col(row: dict, *names):
 
 COLS_NOMBRE = ("Nombre del Elemento/Equipo/Maquinaria", "Nombre del Elemento", "Nombre del elemento", "Nombre Elemento", "Nombre")
 COLS_UNIDAD = ("Unidad de Medida", "Unidad", "Unidad medida")
+
+# Combos obligatorios que Bizagi puede rechazar como vacíos aunque se hayan llenado
+# (la selección de la opción no siempre "pega"): etiqueta en el mensaje de validación
+# -> (data-render-xpath, columnas del Excel).
+COMBOS_REINTENTABLES = {
+    "nombre del elemento": ("kpElementoFNCE", COLS_NOMBRE),
+    "unidad de medida": ("kp_INCUnidadMedidad", COLS_UNIDAD),
+}
 COLS_IVA = ("Valor IVA en COP", "Valor IVA", "IVA", "Valor del IVA")
 COLS_VALOR_SIN_IVA = ("Valor total en COP (Sin incluir IVA)", "Valor total en COP\n(Sin incluir IVA)", "Valor total en COP",
                       "Valor total (Sin IVA)", "Valor sin IVA", "Valor total sin IVA")
@@ -916,6 +941,28 @@ def armar_archivos_a_subir(row_dict, pdf_dir, maestro_odoo, log=print) -> tuple:
     return [], estado, False
 
 
+def guardar_con_reintento_de_combos(page, row_dict, item_num, log=print, max_reintentos: int = 2):
+    """
+    Guarda el equipo. Si Bizagi lo rechaza porque un combo obligatorio quedó vacío
+    (Nombre del elemento / Unidad de medida), vuelve a seleccionarlo en el mismo
+    formulario (los adjuntos ya subidos se conservan) y guarda de nuevo.
+    """
+    for reintento in range(max_reintentos + 1):
+        try:
+            click_guardar_esperando_respuesta(page, log)
+            return
+        except FormularioNoCerrado as e:
+            vacios = combos_vacios_en_validacion(str(e))
+            if not vacios or reintento == max_reintentos or not formulario_equipo_abierto(page):
+                raise
+            for k in vacios:
+                xpath, cols = COMBOS_REINTENTABLES[k]
+                valor = s(get_col(row_dict, *cols))
+                log(f"     ⚠️ Ítem {item_num}: Bizagi dejó vacío '{k}'. "
+                    f"Reseleccionando '{valor}' (reintento {reintento + 1}/{max_reintentos})...")
+                fill_field_by_xpath(page, xpath, valor, is_dropdown=True)
+
+
 def procesar_item_con_reintentos(page, row_dict, i, item_num, pdf_dir, maestro_odoo,
                                   log=print, max_intentos: int = 2):
     """
@@ -945,7 +992,7 @@ def procesar_item_con_reintentos(page, row_dict, i, item_num, pdf_dir, maestro_o
             else:
                 log("     ℹ️ No se encontraron PDFs para este elemento.")
 
-            click_guardar_esperando_respuesta(page, log)
+            guardar_con_reintento_de_combos(page, row_dict, item_num, log)
 
             if not adjunto_ok:
                 return "Guardado sin adjunto", "Fallo al adjuntar soporte técnico", estado_soporte, lleva_certificado
