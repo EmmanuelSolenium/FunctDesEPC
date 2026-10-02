@@ -3,6 +3,8 @@ import sys
 import re
 import math
 import json
+import difflib
+import unicodedata
 import pandas as pd
 from playwright.sync_api import sync_playwright
 from dotenv import load_dotenv
@@ -437,6 +439,34 @@ def click_guardar_esperando_respuesta(page, log=print, timeout_ms: int = 15000):
         )
 
 
+OPCIONES_COMBO = "div.ui-select-dropdown.open li[role='option']"
+
+
+def _normalizar_opcion(texto: str) -> str:
+    """Minúsculas, sin tildes y con espacios colapsados, para comparar opciones."""
+    t = unicodedata.normalize("NFKD", str(texto or "")).encode("ascii", "ignore").decode()
+    return re.sub(r"\s+", " ", t).strip().lower()
+
+
+def elegir_opcion_combo(value: str, opciones: list, umbral: float = 0.9):
+    """
+    Índice de la opción del combo que corresponde a value, o None.
+    Primero igualdad normalizada; si no hay, la más parecida por encima del umbral.
+    Necesario porque las listas de Bizagi tienen erratas propias (p. ej.
+    "apantallemiento" en vez de "apantallamiento" en la opción de DPS).
+    """
+    objetivo = _normalizar_opcion(value)
+    normalizadas = [_normalizar_opcion(o) for o in opciones]
+    if objetivo in normalizadas:
+        return normalizadas.index(objetivo)
+    mejor, mejor_ratio = None, umbral
+    for k, n in enumerate(normalizadas):
+        ratio = difflib.SequenceMatcher(None, objetivo, n).ratio()
+        if ratio >= mejor_ratio:
+            mejor, mejor_ratio = k, ratio
+    return mejor
+
+
 def fill_field_by_xpath(page, render_xpath: str, value: str, is_dropdown=False):
     """
     Encuentra un campo mediante el atributo 'data-render-xpath' nativo de Bizagi.
@@ -472,6 +502,27 @@ def fill_field_by_xpath(page, render_xpath: str, value: str, is_dropdown=False):
             dropdown_input = container.locator("input.ui-selectmenu-value, input[role='combobox']").first
             dropdown_input.click(force=True)
             page.wait_for_timeout(100) # margen sobre los <30ms reales de apertura del widget
+
+            # Igual que un usuario (verificado con diagnostico_combo.py): abrir la lista y
+            # hacer clic en la opción, sin escribir. La opción se elige aquí comparando
+            # textos normalizados, tolerando erratas de la lista de Bizagi.
+            opciones = page.locator(OPCIONES_COMBO)
+            try:
+                opciones.first.wait_for(state="attached", timeout=2000)
+                textos = opciones.all_inner_texts()
+            except Exception:
+                textos = []
+            k = elegir_opcion_combo(value, textos)
+            if k is not None:
+                if _normalizar_opcion(textos[k]) != _normalizar_opcion(value):
+                    print(f"     ℹ️ '{value}' no está igual en Bizagi; se elige la opción '{textos[k].strip()}'.")
+                option = opciones.nth(k)
+                option.scroll_into_view_if_needed(timeout=2000)
+                option.click()
+                page.wait_for_timeout(700) # margen sobre los ~600ms reales de los Render tras seleccionar
+                page.wait_for_timeout(final_wait)
+                return
+            print(f"     ⚠️ No hay opción parecida a '{value}' entre {len(textos)} opciones; probando con tecleo.")
 
             # Escribir para que el typeahead resalte la opción (no filtra nada vía red, pero
             # sigue siendo necesario un tecleo real para que Bizagi actualice el value/estado

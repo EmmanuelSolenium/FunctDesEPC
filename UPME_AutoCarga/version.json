@@ -1,6 +1,6 @@
 {
-    "version":  "1.0.9",
-    "notas":  "Reintenta seleccionar Nombre del elemento / Unidad de medida cuando Bizagi los rechaza como vacios al guardar",
+    "version":  "1.0.10",
+    "notas":  "Combo Nombre del elemento: elige la opcion abriendo la lista y comparando textos normalizados (tolera erratas de Bizagi como \u0027apantallemiento\u0027)",
     "fecha":  "2026-10-02",
     "paquete_minimo":  "1.0.2",
     "url_paquete":  "",
@@ -9,7 +9,7 @@
                      "actualizador.py":  "3e295e13d94d0854e9a8a6ccf2c3dbf9f89cfb150676f38f947c83846560ba3b",
                      "config_usuario.py":  "f36d2e9fd15aad88263ec994f6f4a8518177f65a03e7bd8af9692c562b82eb3f",
                      "upme_autocarga_gui.py":  "fd2dd536bba7a88e54879fcc42f9918b2cd6b587b8158cfd6df1a4c11072eca4",
-                     "upme_autocarga_corregido.py":  "fa2737c66329ec05425ff9c84f173561a2f0e2d32ac18bb01f716ae250c2be66",
+                     "upme_autocarga_corregido.py":  "ae771f277a5888126553c1f218b57ebf0b2afdd434b6b5575395f16c27f6e4c7",
                      "procesar_formato3_p.py":  "7a022bb4822ee116767af3c352d572b10786916d5fb68d457145a200bbc31504",
                      "bizagi_selectors.py":  "7588c90f62932ea1327fa9eb0a32d212aa0a6a76eb5e926ea187bbf74e881aa3",
                      "El_Papá.xlsx":  "77c22b4d17b23291a34954c0dae753942b11a7b3d334b7e8674552dcd54b8d40"
