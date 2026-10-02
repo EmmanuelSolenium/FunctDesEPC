@@ -327,7 +327,7 @@ class UpmeGUI(tk.Tk):
         values = self._validate_inputs()
         if values is None:
             return
-        config_usuario.guardar_config(pdf_dir=values[4], maestro=values[7])
+        config_usuario.guardar_config(maestro=values[7])
         self.clear_log()
         self.start_btn.configure(state="disabled")
         self.status_var.set("Ejecutando automatización... revisa el navegador que se abrirá.")
@@ -652,8 +652,8 @@ class UpmeGUI(tk.Tk):
 def main():
     app = UpmeGUI()
     cfg = config_usuario.leer_config()
-    if cfg.get("pdf_dir") and os.path.isdir(cfg["pdf_dir"]):
-        app.pdf_dir_var.set(cfg["pdf_dir"])
+    # La carpeta de fichas técnicas NO se precarga: el usuario debe elegirla en
+    # cada sesión para no cargar por error las fichas de otro proyecto.
     if cfg.get("maestro") and os.path.isfile(cfg["maestro"]):
         app.maestro_var.set(cfg["maestro"])
     app.mainloop()

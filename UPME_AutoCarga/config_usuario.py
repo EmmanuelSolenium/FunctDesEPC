@@ -4,7 +4,7 @@ Datos propios de cada usuario/PC, guardados FUERA de la carpeta del programa
 para que nunca viajen dentro del ZIP ni del repositorio:
 
   - .env          credenciales de Bizagi (importadas o guardadas desde la GUI)
-  - config.json   preferencias (última carpeta de fichas, maestro, etc.)
+  - config.json   preferencias (maestro, etc.)
 """
 import json
 import os

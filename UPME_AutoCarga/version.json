@@ -1,14 +1,14 @@
 {
-    "version":  "1.0.6",
-    "notas":  "Tuberia IMC (P01072, P01076, P01078): fichas separadas por marca Kubiec / Colmena",
+    "version":  "1.0.7",
+    "notas":  "La carpeta de fichas tecnicas ya no se precarga: el usuario debe elegirla",
     "fecha":  "2026-10-02",
     "paquete_minimo":  "1.0.2",
     "url_paquete":  "",
     "archivos":  {
                      "iniciar.py":  "31435f06483e6237b6deda12e8e7f25920042a4fbf8a69adb6ad9bd38f49110b",
                      "actualizador.py":  "3e295e13d94d0854e9a8a6ccf2c3dbf9f89cfb150676f38f947c83846560ba3b",
-                     "config_usuario.py":  "f68829d943672984efd0cdb668e4afc9c0ea7cf57072f04a92babee695a3eade",
-                     "upme_autocarga_gui.py":  "d18a9ad772f149bbc3c0a78ad6960a473e91ef0e430cb2ee792118a248e763a4",
+                     "config_usuario.py":  "f36d2e9fd15aad88263ec994f6f4a8518177f65a03e7bd8af9692c562b82eb3f",
+                     "upme_autocarga_gui.py":  "de00545c233aa6cfc45f233c8a3137065cd9c3cf6401f118e6ebe2e45bf3a8ea",
                      "upme_autocarga_corregido.py":  "5d89cc8266a6d2d25d7002f5a0d11b9516d665806c755a385f88da72f8d493fb",
                      "procesar_formato3_p.py":  "7a022bb4822ee116767af3c352d572b10786916d5fb68d457145a200bbc31504",
                      "bizagi_selectors.py":  "7588c90f62932ea1327fa9eb0a32d212aa0a6a76eb5e926ea187bbf74e881aa3",

@@ -21,7 +21,7 @@ UPME AutoCarga - Instalación
 
 3. FICHAS TÉCNICAS
    Use "Examinar..." para elegir la carpeta compartida de fichas técnicas (PDF).
-   El programa recuerda la última carpeta usada.
+   Debe elegirla cada vez: el programa no la precarga.
 
 4. ACTUALIZACIONES
    Al abrir, el programa revisa si hay una versión nueva y le pregunta si
