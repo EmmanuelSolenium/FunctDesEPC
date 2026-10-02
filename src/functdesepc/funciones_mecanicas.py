@@ -9734,12 +9734,18 @@ def calcular_fhr_v2(
     """
     Versión corregida de calcular_fhr.
 
-    CORRECCIÓN (normativa): Regla 3 ahora cubre "AL" para CUALQUIER
-    ángulo (antes solo aplicaba con |ángulo| >= 2°, dejando "AL" con
-    |ángulo| < 2° sin ninguna regla → NaN). Esto es consistente con
-    calcular_flmc, que ya excluye "AL" de su cálculo (FLMC = None para
-    AL: se asume que una alineación no tiene componente longitudinal
-    relevante por desequilibrio de tiros).
+    CORRECCIÓN (normativa): Regla 3 ahora cubre "AL" y "ANG" para
+    CUALQUIER ángulo (antes solo aplicaba con |ángulo| >= 2°, dejando
+    "AL"/"ANG" con |ángulo| < 2° sin ninguna regla → NaN; esto se
+    detectó en postes ANG con reconectador y β=0°, p. ej. EPP 018 y
+    EPP 019). Es consistente con calcular_flmc, que ya excluye "AL" de
+    su cálculo (FLMC = None para AL: se asume que una alineación no
+    tiene componente longitudinal relevante por desequilibrio de
+    tiros); se extiende el mismo criterio a "ANG" porque un ANG con
+    ángulo pequeño/nulo es geométricamente equivalente a una
+    alineación recta. "ANC" conserva su comportamiento original: solo
+    entra por Regla 3 con |ángulo| >= 2° (con |ángulo| < 2° cae en
+    Regla 2, que sí seguía vigente para ANC).
 
     IMPORTANTE: esta función sigue esperando, por contrato, que
     tipo_poste y angulo_poste vengan alineados POSICIONALMENTE con
@@ -9759,7 +9765,7 @@ def calcular_fhr_v2(
          FHR = sqrt( (FTVC + FTVE + FTVP + FTEC)^2 + (FLEE)^2 )
     2. Si NO tiene repeticiones y es FL o ANC con |ángulo| < 2°:
          FHR = sqrt( (FTVC + FTVP + FTEC + FTVE)^2 + (FLMC + FLEE)^2 )
-    3. Si NO tiene repeticiones y es AL (CUALQUIER ángulo), o ANG/ANC
+    3. Si NO tiene repeticiones y es AL o ANG (CUALQUIER ángulo), o ANC
        con |ángulo| >= 2°:
          FHR = sqrt( (FTVC + FTVE + FTVP + FTEC)^2 + (FLEE)^2 )
 
@@ -9809,9 +9815,9 @@ def calcular_fhr_v2(
                 fhr = np.sqrt((ftvc_p + ftvp_p + ftec_p + ftve_p) ** 2 + (flmc_p + flee_p) ** 2)
 
             # ============================================================
-            # REGLA 3: AL (CUALQUIER ángulo), o ANG/ANC con |ángulo| >= 2°
+            # REGLA 3: AL o ANG (CUALQUIER ángulo), o ANC con |ángulo| >= 2°
             # ============================================================
-            elif tipo == "AL" or (tipo in ("ANG", "ANC") and ang >= 2):
+            elif tipo in ("AL", "ANG") or (tipo == "ANC" and ang >= 2):
                 fhr = np.sqrt((ftvc_p + ftve_p + ftvp_p + ftec_p) ** 2 + (flee_p) ** 2)
 
             else:
