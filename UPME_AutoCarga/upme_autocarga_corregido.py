@@ -25,7 +25,6 @@ load_dotenv(os.path.join(BASE_DIR, ".env"))
 URL = "https://automatizacion-upme.bizagi.com/"
 USUARIO = os.environ.get("BIZAGI_USER_NEW", "")
 PASSWORD = os.environ.get("BIZAGI_PASSWORD_NEW", "")
-DEFAULT_RADICADO = "FNCE_202613962"
 # Pausa que Playwright agrega a CADA acción (clic, tecla, fill...). Con 120 ms un
 # solo campo de texto (~35 acciones) tardaba 4-5 s. Las esperas que Bizagi sí
 # necesita ya están explícitas en el código, así que por defecto va en 0.
@@ -1369,9 +1368,10 @@ def get_interactive_config():
     print(f"-> Pestaña seleccionada: {sheet_name}")
 
     # 3. Solicitar Radicado
-    radicado = input(f"\nIngresa el RADICADO [Default: {DEFAULT_RADICADO}]: ").strip()
-    if not radicado:
-        radicado = DEFAULT_RADICADO
+    # Sin valor por defecto: un radicado equivocado carga los equipos en otro caso.
+    radicado = ""
+    while not radicado:
+        radicado = input("\nIngresa el RADICADO: ").strip()
     print(f"-> Radicado: {radicado}")
 
     # 4. Solicitar Start Item Index

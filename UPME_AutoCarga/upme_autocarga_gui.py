@@ -62,7 +62,7 @@ class UpmeGUI(tk.Tk):
 
         self.excel_path_var = tk.StringVar()
         self.sheet_var = tk.StringVar()
-        self.radicado_var = tk.StringVar(value=core.DEFAULT_RADICADO)
+        self.radicado_var = tk.StringVar(value="")
         self.start_idx_var = tk.StringVar(value="1")
         self.pdf_dir_var = tk.StringVar(value="")
         self.maestro_var = tk.StringVar(value=core.MAESTRO_DEFAULT)
@@ -288,7 +288,10 @@ class UpmeGUI(tk.Tk):
         if not sheet:
             messagebox.showwarning("Falta información", "Selecciona la pestaña del Excel.")
             return None
-        radicado = self.radicado_var.get().strip() or core.DEFAULT_RADICADO
+        radicado = self.radicado_var.get().strip()
+        if not radicado:
+            messagebox.showwarning("Falta información", "Escribe el radicado del caso en Bizagi.")
+            return None
         try:
             start_idx = int(self.start_idx_var.get())
             if start_idx < 1:
