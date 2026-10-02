@@ -674,6 +674,29 @@ def find_archivos_por_odoo(odoo_id: str, pdf_dir: str) -> tuple:
     return certificados, soportes
 
 
+# ---------------- FICHAS SEPARADAS POR MARCA ---------------- #
+# La tubería IMC de estos Odoo ID se compra a dos marcas con fichas distintas.
+# preparar_por_odoo.py etiqueta sus PDFs con la marca después del código
+# (P01072_L049_KUBIEC_<nombre>.pdf, P01072_L050_COLMENA_<nombre>.pdf) y cada
+# fila sube solo las fichas de su marca, leída de las columnas Marca/Fabricante.
+ODOO_IDS_POR_MARCA = {"P01072", "P01076", "P01078"}
+CODIGO_MARCA = {"L049": "KUBIEC", "L050": "COLMENA"}
+MARCAS_SEPARADAS = sorted(set(CODIGO_MARCA.values()))
+
+
+def detectar_marca(row: dict) -> str | None:
+    """'KUBIEC' o 'COLMENA' si aparece (solo una de ellas) en Marca o Fabricante; si no, None."""
+    texto = f"{s(get_col(row, 'Marca'))} {s(get_col(row, 'Fabricante'))}".upper()
+    encontradas = [m for m in MARCAS_SEPARADAS if m in texto]
+    return encontradas[0] if len(encontradas) == 1 else None
+
+
+def marca_de_archivo(ruta: str) -> str | None:
+    """Marca etiquetada en el nombre (P01072_L049_KUBIEC_x.pdf -> 'KUBIEC'), o None si no tiene."""
+    partes = os.path.basename(ruta).upper().split("_")
+    return partes[2] if len(partes) > 3 and partes[2] in MARCAS_SEPARADAS else None
+
+
 def _primer_pdf_fallback(pdf_dir: str) -> str | None:
     """Primer PDF, orden alfabético, del primer nivel de pdf_dir (o None si no hay ninguno).
     Ignora los certificados, que nunca deben usarse como placeholder de soporte."""
@@ -841,6 +864,7 @@ ESTADO_SOPORTE_TEXTOS = {
     "sin_odoo": "⚠️ Placeholder - la fila no tiene Odoo ID",
     "odoo_no_en_maestro": "⚠️ Placeholder - Odoo ID no está en el maestro",
     "odoo_sin_archivos": "⚠️ Placeholder - Odoo ID sin archivos locales",
+    "marca_no_identificada": "⚠️ Marca no identificada (Kubiec/Colmena) - se subieron las fichas de todas las marcas",
 }
 
 
@@ -854,15 +878,29 @@ def armar_archivos_a_subir(row_dict, pdf_dir, maestro_odoo, log=print) -> tuple:
     odoo_id = normalizar_odoo_id(get_col(row_dict, "Odoo ID", "Odoo", "ID Odoo"))
     certificados, soportes = find_archivos_por_odoo(odoo_id, pdf_dir)
 
+    estado_ok = "match_odoo"
+    if odoo_id in ODOO_IDS_POR_MARCA:
+        marca = detectar_marca(row_dict)
+        if marca:
+            def _de_su_marca(rutas):
+                return [r for r in rutas if marca_de_archivo(r) in (None, marca)]
+            certificados, soportes = _de_su_marca(certificados), _de_su_marca(soportes)
+            if not (certificados or soportes):
+                log(f"⚠️ FICHAS POR MARCA: no hay archivos de '{marca}' para '{odoo_id}'.")
+        else:
+            estado_ok = "marca_no_identificada"
+            log(f"⚠️ MARCA NO IDENTIFICADA: la fila de '{odoo_id}' no dice {' ni '.join(MARCAS_SEPARADAS)} "
+                f"en Marca/Fabricante. Se suben las fichas de todas las marcas — revisar manualmente.")
+
     esperado = maestro_odoo.get(odoo_id, {}) if odoo_id else {}
     if esperado.get("certificados") and not certificados:
         log(f"⚠️ CERTIFICADO NO ENCONTRADO: el maestro indica {', '.join(esperado['certificados'])} para "
             f"'{odoo_id}' pero no hay archivos locales. No se adjuntará certificado para este ítem.")
 
     if soportes:
-        return certificados + soportes, "match_odoo", bool(certificados)
+        return certificados + soportes, estado_ok, bool(certificados)
     if certificados:
-        return certificados, "solo_certificado", True
+        return certificados, "solo_certificado" if estado_ok == "match_odoo" else estado_ok, True
 
     if not odoo_id:
         estado, motivo = "sin_odoo", "la fila no tiene Odoo ID"

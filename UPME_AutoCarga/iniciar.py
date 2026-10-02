@@ -1,10 +1,10 @@
 """
 Punto de entrada de "UPME AutoCarga.exe" (lo lanza _runtime/sitecustomize.py).
 
-1. La primera vez en cada instalación precarga los binarios de _runtime para
-   que Smart App Control termine de evaluarlos (ver _precargar_binarios).
-2. Busca actualizaciones en GitHub antes de importar el resto del programa,
+1. Busca actualizaciones en GitHub antes de importar el resto del programa,
    así una actualización puede corregir incluso errores de los otros módulos.
+2. La primera vez en cada instalación precarga los binarios de _runtime para
+   que Smart App Control termine de evaluarlos (ver _precargar_binarios).
 3. La primera vez ofrece crear un acceso directo en el escritorio.
 4. Abre la interfaz. Como pythonw no tiene consola, cualquier error de
    arranque se muestra en una ventana.
@@ -32,15 +32,23 @@ def _intentar_cargar(rutas):
     k32 = ctypes.WinDLL("kernel32", use_last_error=True)
     k32.LoadLibraryExW.restype = ctypes.c_void_p
     k32.FreeLibrary.argtypes = [ctypes.c_void_p]
+    # SEM_FAILCRITICALERRORS: sin esto, cada bloqueo abre la ventana de Windows
+    # "...no está diseñado para ejecutarse en Windows... 0xc0e90002" y el
+    # usuario tiene que cerrarla a mano; así el reintento ocurre en silencio.
+    anterior = ctypes.c_uint()
+    k32.SetThreadErrorMode(0x0001, ctypes.byref(anterior))
     bloqueadas = []
-    for ruta in rutas:
-        # 0x1100 = SEARCH_DLL_LOAD_DIR | SEARCH_DEFAULT_DIRS. Si falta una
-        # dependencia (error 126) no importa: la verificación de firma ya ocurrió.
-        h = k32.LoadLibraryExW(ruta, None, 0x1100)
-        if h:
-            k32.FreeLibrary(h)
-        elif ctypes.get_last_error() == ERROR_BLOQUEO_SAC:
-            bloqueadas.append(ruta)
+    try:
+        for ruta in rutas:
+            # 0x1100 = SEARCH_DLL_LOAD_DIR | SEARCH_DEFAULT_DIRS. Si falta una
+            # dependencia (error 126) no importa: la verificación de firma ya ocurrió.
+            h = k32.LoadLibraryExW(ruta, None, 0x1100)
+            if h:
+                k32.FreeLibrary(h)
+            elif ctypes.get_last_error() == ERROR_BLOQUEO_SAC:
+                bloqueadas.append(ruta)
+    finally:
+        k32.SetThreadErrorMode(anterior.value, None)
     return bloqueadas
 
 
@@ -114,9 +122,11 @@ def main():
     root = tk.Tk()
     root.withdraw()
     try:
+        # Primero la actualización (solo usa la librería estándar, firmada):
+        # así una corrección llega aunque Windows esté bloqueando binarios.
+        actualizador.verificar(parent=root)
         if not _precargar_binarios(root):
             return
-        actualizador.verificar(parent=root)
         _ofrecer_acceso_directo(root)
         import upme_autocarga_gui
     except Exception:
