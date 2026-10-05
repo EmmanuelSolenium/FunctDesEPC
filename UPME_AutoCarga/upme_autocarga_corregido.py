@@ -776,6 +776,47 @@ def _primer_pdf_fallback(pdf_dir: str) -> str | None:
     return os.path.join(pdf_dir, pdfs[0])
 
 
+def _timeout_subida_ms(path: str) -> int:
+    """Tiempo máximo para la subida de un PDF: 30 s base + 10 s por MB, tope 3 min."""
+    try:
+        mb = os.path.getsize(path) / 1_048_576
+    except OSError:
+        mb = 0
+    return int(min(180_000, 30_000 + mb * 10_000))
+
+
+def _esperar_cierre_modal_subida(btn_subir, timeout_ms: int) -> bool:
+    """True cuando el botón 'Subir' desaparece (Bizagi terminó y cerró el modal de adjuntos)."""
+    try:
+        btn_subir.wait_for(state="hidden", timeout=timeout_ms)
+        return True
+    except Exception:
+        return False
+
+
+def cerrar_modal_subida(page):
+    """Cierra el modal de adjuntos si quedó abierto, para que no tape el botón Guardar."""
+    from bizagi_selectors import SELECTORS
+
+    btn = page.locator(SELECTORS["attach_upload_button_fallback_css"]).first
+    for cerrar in [
+        page.locator(".ui-dialog:has-text('Subir') .ui-dialog-titlebar-close"),
+        page.locator(".ui-dialog:has-text('Subir') button:has-text('Cancelar')"),
+    ]:
+        try:
+            if cerrar.count() > 0 and cerrar.first.is_visible():
+                cerrar.first.click(timeout=3000)
+                if _esperar_cierre_modal_subida(btn, 3000):
+                    return
+        except Exception:
+            pass
+    try:
+        page.keyboard.press("Escape")
+    except Exception:
+        pass
+    _esperar_cierre_modal_subida(btn, 3000)
+
+
 def attach_files_to_equipment(page, file_paths: list, log=print) -> bool:
     """
     Sube múltiples archivos navegando la interfaz de Bizagi:
@@ -822,20 +863,29 @@ def attach_files_to_equipment(page, file_paths: list, log=print) -> bool:
                 btn_subir.wait_for(state="visible", timeout=6000)
 
             hint = SELECTORS["network_hints"]["upload_file"]
+            # Un PDF pesado puede tardar bastante en subir; con un timeout corto se
+            # pulsaba Guardar con la subida en curso y el modal de adjuntos abierto,
+            # y Bizagi no guardaba (el formulario no se cerraba).
+            timeout_subida = _timeout_subida_ms(path)
             try:
-                with page.expect_response(lambda r: hint in r.url, timeout=10000) as resp_info:
+                with page.expect_response(lambda r: hint in r.url, timeout=timeout_subida) as resp_info:
                     btn_subir.click(force=True)
                 resp = resp_info.value
                 if resp.status >= 400:
                     raise RuntimeError(f"status {resp.status}")
                 log("     ✅ Subida confirmada por red.")
+                _esperar_cierre_modal_subida(btn_subir, 10000)
             except Exception as e_net:
-                log(f"     ⚠️ No se confirmó la subida por red ({e_net}). Verificando con espera de respaldo.")
-                page.wait_for_timeout(2000)  # fallback corto, no los 3500ms originales
+                log(f"     ⚠️ No se confirmó la subida por red ({e_net}). Esperando a que termine...")
+                if not _esperar_cierre_modal_subida(btn_subir, 30000):
+                    cerrar_modal_subida(page)
+                    raise RuntimeError("la subida no terminó; se cerró la ventana de adjuntos")
 
         except Exception as e:
             log(f"     ⚠️ Error adjuntando archivo ({os.path.basename(path)}): {e}")
             all_ok = False
+            if page.locator(SELECTORS["attach_upload_button_fallback_css"]).first.is_visible():
+                cerrar_modal_subida(page)
 
     return all_ok
 
