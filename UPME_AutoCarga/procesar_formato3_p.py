@@ -1639,7 +1639,7 @@ def completar_codigo_odoo(
 
     # Paso 2: abrir original preservando formato/estructura
     shutil.copy(path_pepc_objetivo, path_salida_pepc)
-    wb = load_workbook(path_salida_pepc)
+    wb = load_workbook(path_salida_pepc, data_only=True)  # sin parsear fórmulas (p.ej. '=#REF!' rompe openpyxl); los datos se reescriben como valores
     ws = wb["PEPC"]
     n_comb = _descombinar_verticales(ws, primera_datos)
     if n_comb:
@@ -1882,7 +1882,7 @@ def completar_proveedor_bom(
 
     # Paso 2: copiar preservando formato
     shutil.copy(path_bom_objetivo, path_salida_bom)
-    wb = load_workbook(path_salida_bom)
+    wb = load_workbook(path_salida_bom, data_only=True)  # sin parsear fórmulas (p.ej. '=#REF!' rompe openpyxl); los datos se reescriben como valores
     ws = wb["BOM"]
     n_comb = _descombinar_verticales(ws, primera_datos)
     if n_comb:
@@ -2105,7 +2105,7 @@ def completar_id_bom(
     # archivo, no hace falta copiar)
     if Path(path_bom_objetivo).resolve() != Path(path_salida_bom).resolve():
         shutil.copy(path_bom_objetivo, path_salida_bom)
-    wb = load_workbook(path_salida_bom)
+    wb = load_workbook(path_salida_bom, data_only=True)  # sin parsear fórmulas (p.ej. '=#REF!' rompe openpyxl); los datos se reescriben como valores
     ws = wb["BOM"]
     n_comb = _descombinar_verticales(ws, primera_datos)
     if n_comb:

@@ -1,7 +1,7 @@
 {
-    "version":  "1.0.11",
-    "notas":  "Adjuntos: espera a que termine la subida de PDFs pesados antes de Guardar (evita 'El formulario no se cerró tras Guardar')",
-    "fecha":  "2026-10-05",
+    "version":  "1.0.12",
+    "notas":  "Corrige error \u0027=#REF!\u0027 al guardar PEPC/BOM completados (openpyxl ya no parsea formulas rotas)",
+    "fecha":  "2026-10-07",
     "paquete_minimo":  "1.0.2",
     "url_paquete":  "",
     "archivos":  {
@@ -10,7 +10,7 @@
                      "config_usuario.py":  "f36d2e9fd15aad88263ec994f6f4a8518177f65a03e7bd8af9692c562b82eb3f",
                      "upme_autocarga_gui.py":  "fd2dd536bba7a88e54879fcc42f9918b2cd6b587b8158cfd6df1a4c11072eca4",
                      "upme_autocarga_corregido.py":  "b3e0a063eb88fc36249df19a0920abe2fcea9520c8792ba46d0b01028d4b1fbc",
-                     "procesar_formato3_p.py":  "7a022bb4822ee116767af3c352d572b10786916d5fb68d457145a200bbc31504",
+                     "procesar_formato3_p.py":  "81f80f69e8766a88c20a9da4f784ee5aeb7f6c822eb82c2f5feab62a13cd1125",
                      "bizagi_selectors.py":  "7588c90f62932ea1327fa9eb0a32d212aa0a6a76eb5e926ea187bbf74e881aa3",
                      "El_Papá.xlsx":  "77c22b4d17b23291a34954c0dae753942b11a7b3d334b7e8674552dcd54b8d40"
                  }
