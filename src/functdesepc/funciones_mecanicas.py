@@ -9829,3 +9829,304 @@ def calcular_fhr_v2(
     tabla[col_fhr] = tabla["Numero de apoyo"].map(fhr_series)
 
     return tabla
+
+
+# ==============================================================================
+# FUNCIONES PARA DESAGREGACIÓN DE ESFUERZOS MECÁNICOS (MTF-73#-# Y PRIMARIO/SECUNDARIO)
+# ==============================================================================
+
+def es_armado_mtf73(codigo):
+    """
+    Determina si un código de armado corresponde a la familia MTF-73#-#
+    (autosoportado doble circuito trifásico).
+    Soporta variantes como 'MTF731-1', 'MTF-732-1', 'MTF 733-1', 'MTF735-1 (PROY)', etc.
+    """
+    if not isinstance(codigo, str) or pd.isna(codigo):
+        return False
+    return bool(re.search(r'MTF\s*-?\s*73\d', codigo, re.IGNORECASE))
+
+
+def es_armado_valido(codigo):
+    """
+    Determina si un código de armado es válido (no nulo, no vacío, no guión '-').
+    """
+    if codigo is None or pd.isna(codigo):
+        return False
+    s = str(codigo).strip()
+    return s not in {"", "-", "0", "nan", "None"}
+
+
+def calcular_fhr_fila(ftvc, flmc, ftvp, ftve, flee, ftec, tipo_poste, angulo, tiene_rep):
+    """
+    Calcula FHR para una fila individual siguiendo las mismas reglas normativas
+    de calcular_fhr_v2:
+      1. Si tiene repeticiones (derivaciones):
+         FHR = sqrt((FTVC + FTVE + FTVP + FTEC)^2 + (FLEE)^2)
+      2. Si no tiene repeticiones y es FL o ANC con |angulo| < 2°:
+         FHR = sqrt((FTVC + FTVP + FTEC + FTVE)^2 + (FLMC + FLEE)^2)
+      3. En los demás casos (AL, ANG o ANC con |angulo| >= 2°):
+         FHR = sqrt((FTVC + FTVE + FTVP + FTEC)^2 + (FLEE)^2)
+    """
+    ftvc = 0.0 if (ftvc is None or pd.isna(ftvc)) else float(ftvc)
+    flmc = 0.0 if (flmc is None or pd.isna(flmc)) else float(flmc)
+    ftvp = 0.0 if (ftvp is None or pd.isna(ftvp)) else float(ftvp)
+    ftve = 0.0 if (ftve is None or pd.isna(ftve)) else float(ftve)
+    flee = 0.0 if (flee is None or pd.isna(flee)) else float(flee)
+    ftec = 0.0 if (ftec is None or pd.isna(ftec)) else float(ftec)
+
+    if tiene_rep:
+        return float(np.sqrt((ftvc + ftve + ftvp + ftec) ** 2 + (flee) ** 2))
+
+    ang = abs(float(angulo)) if (angulo is not None and not pd.isna(angulo)) else 0.0
+    if tipo_poste in ("FL", "ANC") and ang < 2:
+        return float(np.sqrt((ftvc + ftvp + ftec + ftve) ** 2 + (flmc + flee) ** 2))
+    else:
+        return float(np.sqrt((ftvc + ftve + ftvp + ftec) ** 2 + (flee) ** 2))
+
+
+def construir_tabla_mec_multiples_filas(
+    mec_base,
+    post_exp,
+    FTVC_prim_daN,
+    FLMC_prim_daN,
+    Fvc_prim_daN,
+    FTEC_prim_daN,
+    Fl_prim_daN,
+    Mr_prim_daN,
+    FTVC_sec_daN,
+    FLMC_sec_daN,
+    Fvc_sec_daN,
+    FTEC_sec_daN,
+    Fl_sec_daN,
+    Mr_sec_daN,
+    tipo_poste_prim_mec,
+    tipo_poste_sec_mec,
+):
+    """
+    Genera el DataFrame desagregado para la hoja MEC (y tablas derivadas de apoyo/esfuerzos):
+    - Si el poste tiene Primario y Secundario (máxima prioridad):
+      Calcula y presenta esfuerzos primarios y secundarios por aparte en filas distintas.
+    - Si el armado (primario o secundario) es de la forma MTF-73#-#:
+      Se divide en 2 filas:
+        * Fila 1 (Cto 1): mismos esfuerzos pero FTVC y FLMC a la mitad. FHR y CS calculados.
+        * Fila 2 (Cto 2): únicamente FTVC y FLMC a la mitad del valor original,
+          todos los demás esfuerzos en 0, recalculando FHR y CS.
+    - Si el poste solo tiene 1 fila final, conserva su nombre original (ej. 'EPP 01').
+      Si tiene múltiples filas (2, 3 o 4), añade sufijos alfabéticos 'a', 'b', 'c', 'd'
+      (ej. 'EPP 04a', 'EPP 04b' o 'EPP 08a', 'EPP 08b', 'EPP 08c').
+    """
+    import string
+    letras = list(string.ascii_lowercase)
+    filas_mec = []
+
+    FTVP_daN = mec_base['FTVP']
+    FTVE_daN = mec_base['FTVE']
+    FLEE_daN = mec_base['FLEE']
+    Fve_daN = mec_base['Fve'].fillna(0.0)
+
+    for i, poste in enumerate(mec_base["Numero de apoyo"]):
+        arm_prim = mec_base.at[i, "Armado"]
+        arm_sec = mec_base.at[i, "Armado Secundario"]
+
+        tiene_sec = es_armado_valido(arm_sec)
+        prim_mtf73 = es_armado_mtf73(arm_prim)
+        sec_mtf73 = es_armado_mtf73(arm_sec) if tiene_sec else False
+
+        plan_filas = []
+        if tiene_sec:
+            if prim_mtf73:
+                plan_filas.append(("primario", False, True))
+                plan_filas.append(("primario", True, True))
+            else:
+                plan_filas.append(("primario", False, False))
+
+            if sec_mtf73:
+                plan_filas.append(("secundario", False, True))
+                plan_filas.append(("secundario", True, True))
+            else:
+                plan_filas.append(("secundario", False, False))
+        else:
+            if prim_mtf73:
+                plan_filas.append(("primario", False, True))
+                plan_filas.append(("primario", True, True))
+            else:
+                plan_filas.append(("primario", False, False))
+
+        n_filas = len(plan_filas)
+        poste_l_cr = mec_base.at[i, "Poste L-CR"]
+        ang_b = mec_base.at[i, "b"]
+        vano_ant = mec_base.at[i, "Vano anterior"]
+        cr_val = mec_base.at[i, "C.R."]
+        evu_val = mec_base.at[i, "E.V.U."]
+        mut_val = mec_base.at[i, "Mut"]
+        n_rep_poste = (post_exp == poste).sum() > 1
+
+        for k, (bloque, es_cto2, es_mtf) in enumerate(plan_filas):
+            num_apoyo = f"{poste}{letras[k]}" if n_filas > 1 else poste
+            fila = {}
+            fila["Numero de apoyo"] = num_apoyo
+            fila["Poste L-CR"] = poste_l_cr
+            fila["b"] = ang_b
+
+            if bloque == "primario":
+                fila["Armado"] = arm_prim
+                fila["Armado Secundario"] = None
+                tp = tipo_poste_prim_mec.iloc[i]
+
+                if es_cto2:
+                    fila["FTVP"] = 0.0
+                    fila["FTVC"] = (FTVC_prim_daN.iloc[i] / 2.0) if not pd.isna(FTVC_prim_daN.iloc[i]) else 0.0
+                    fila["FTVE"] = 0.0
+                    fila["FTEC"] = 0.0
+                    fila["FLEE"] = 0.0
+                    flmc_orig = FLMC_prim_daN.iloc[i]
+                    fila["FLMC"] = (flmc_orig / 2.0) if (flmc_orig is not None and not pd.isna(flmc_orig)) else None
+                    fila["Fvc"] = 0.0
+                    fila["Fve"] = 0.0
+                    fila["Fva"] = 0.0
+
+                    fhr = calcular_fhr_fila(fila["FTVC"], fila["FLMC"], 0.0, 0.0, 0.0, 0.0, tp, ang_b, n_rep_poste)
+                    fila["FHR"] = fhr
+                    fila["C.R."] = cr_val
+                    fila["C.S."] = (cr_val / fhr) if (fhr > 0 and not pd.isna(fhr)) else None
+                    fila["FVR"] = 0.0
+                    fila["E.V.U."] = evu_val
+                    fila["C.S. (1.2)"] = None
+                    fila["Fl"] = 0.0
+                    fila["CR"] = cr_val
+                    fila["C.S. (1.5)"] = None
+                    fila["Mr"] = 0.0
+                    fila["Mut"] = mut_val
+                    fila["Cs (1.5)"] = None
+                    fila["Fv"] = 0.0
+                    fila["E.V.U..1"] = evu_val
+                    fila["C.S. (1.2).1"] = None
+                    fila["FVR.1"] = 0.0
+                    fila["E.V.U..2"] = evu_val
+                    fila["CS (1.2)"] = None
+                else:
+                    fila["FTVP"] = FTVP_daN.iloc[i]
+                    factor = 2.0 if es_mtf else 1.0
+                    fila["FTVC"] = (FTVC_prim_daN.iloc[i] / factor) if not pd.isna(FTVC_prim_daN.iloc[i]) else 0.0
+                    fila["FTVE"] = FTVE_daN.iloc[i]
+                    fila["FTEC"] = FTEC_prim_daN.iloc[i]
+                    fila["FLEE"] = FLEE_daN.iloc[i]
+                    flmc_orig = FLMC_prim_daN.iloc[i]
+                    fila["FLMC"] = (flmc_orig / factor) if (flmc_orig is not None and not pd.isna(flmc_orig)) else None
+                    fila["Fvc"] = Fvc_prim_daN.iloc[i]
+                    fila["Fve"] = Fve_daN.iloc[i]
+                    fila["Fva"] = 0.0
+
+                    fhr = calcular_fhr_fila(fila["FTVC"], fila["FLMC"], fila["FTVP"], fila["FTVE"], fila["FLEE"], fila["FTEC"], tp, ang_b, n_rep_poste)
+                    fila["FHR"] = fhr
+                    fila["C.R."] = cr_val
+                    fila["C.S."] = (cr_val / fhr) if (fhr > 0 and not pd.isna(fhr)) else None
+                    fvr = fila["Fve"] + fila["Fvc"]
+                    fila["FVR"] = fvr
+                    fila["E.V.U."] = evu_val
+                    fila["C.S. (1.2)"] = (evu_val / fvr) if (fvr > 0 and not pd.isna(fvr)) else None
+
+                    fl_val = Fl_prim_daN.iloc[i]
+                    fila["Fl"] = fl_val
+                    fila["CR"] = cr_val
+                    fila["C.S. (1.5)"] = (cr_val / fl_val) if (fl_val > 0 and not pd.isna(fl_val)) else None
+
+                    mr_val = Mr_prim_daN.iloc[i]
+                    fila["Mr"] = mr_val
+                    fila["Mut"] = mut_val
+                    fila["Cs (1.5)"] = (mut_val / mr_val) if (mr_val > 0 and not pd.isna(mr_val)) else None
+
+                    fila["Fv"] = fvr
+                    fila["E.V.U..1"] = evu_val
+                    fila["C.S. (1.2).1"] = fila["C.S. (1.2)"]
+                    fila["FVR.1"] = fila["Fve"]
+                    fila["E.V.U..2"] = evu_val
+                    fila["CS (1.2)"] = (evu_val / fila["Fve"]) if (fila["Fve"] > 0 and not pd.isna(fila["Fve"])) else None
+
+            else:
+                fila["Armado"] = None
+                fila["Armado Secundario"] = arm_sec
+                tp = tipo_poste_sec_mec.iloc[i]
+
+                if es_cto2:
+                    fila["FTVP"] = 0.0
+                    fila["FTVC"] = (FTVC_sec_daN.iloc[i] / 2.0) if not pd.isna(FTVC_sec_daN.iloc[i]) else 0.0
+                    fila["FTVE"] = 0.0
+                    fila["FTEC"] = 0.0
+                    fila["FLEE"] = 0.0
+                    flmc_orig = FLMC_sec_daN.iloc[i]
+                    fila["FLMC"] = (flmc_orig / 2.0) if (flmc_orig is not None and not pd.isna(flmc_orig)) else None
+                    fila["Fvc"] = 0.0
+                    fila["Fve"] = 0.0
+                    fila["Fva"] = 0.0
+
+                    fhr = calcular_fhr_fila(fila["FTVC"], fila["FLMC"], 0.0, 0.0, 0.0, 0.0, tp, ang_b, n_rep_poste)
+                    fila["FHR"] = fhr
+                    fila["C.R."] = cr_val
+                    fila["C.S."] = (cr_val / fhr) if (fhr > 0 and not pd.isna(fhr)) else None
+                    fila["FVR"] = 0.0
+                    fila["E.V.U."] = evu_val
+                    fila["C.S. (1.2)"] = None
+                    fila["Fl"] = 0.0
+                    fila["CR"] = cr_val
+                    fila["C.S. (1.5)"] = None
+                    fila["Mr"] = 0.0
+                    fila["Mut"] = mut_val
+                    fila["Cs (1.5)"] = None
+                    fila["Fv"] = 0.0
+                    fila["E.V.U..1"] = evu_val
+                    fila["C.S. (1.2).1"] = None
+                    fila["FVR.1"] = 0.0
+                    fila["E.V.U..2"] = evu_val
+                    fila["CS (1.2)"] = None
+                else:
+                    fila["FTVP"] = 0.0
+                    factor = 2.0 if es_mtf else 1.0
+                    fila["FTVC"] = (FTVC_sec_daN.iloc[i] / factor) if not pd.isna(FTVC_sec_daN.iloc[i]) else 0.0
+                    fila["FTVE"] = 0.0
+                    fila["FTEC"] = FTEC_sec_daN.iloc[i]
+                    fila["FLEE"] = 0.0
+                    flmc_orig = FLMC_sec_daN.iloc[i]
+                    fila["FLMC"] = (flmc_orig / factor) if (flmc_orig is not None and not pd.isna(flmc_orig)) else None
+                    fila["Fvc"] = Fvc_sec_daN.iloc[i]
+                    fila["Fve"] = 0.0
+                    fila["Fva"] = 0.0
+
+                    fhr = calcular_fhr_fila(fila["FTVC"], fila["FLMC"], 0.0, 0.0, 0.0, fila["FTEC"], tp, ang_b, n_rep_poste)
+                    fila["FHR"] = fhr
+                    fila["C.R."] = cr_val
+                    fila["C.S."] = (cr_val / fhr) if (fhr > 0 and not pd.isna(fhr)) else None
+                    fvr = fila["Fvc"]
+                    fila["FVR"] = fvr
+                    fila["E.V.U."] = evu_val
+                    fila["C.S. (1.2)"] = (evu_val / fvr) if (fvr > 0 and not pd.isna(fvr)) else None
+
+                    fl_val = Fl_sec_daN.iloc[i]
+                    fila["Fl"] = fl_val
+                    fila["CR"] = cr_val
+                    fila["C.S. (1.5)"] = (cr_val / fl_val) if (fl_val > 0 and not pd.isna(fl_val)) else None
+
+                    mr_val = Mr_sec_daN.iloc[i]
+                    fila["Mr"] = mr_val
+                    fila["Mut"] = mut_val
+                    fila["Cs (1.5)"] = (mut_val / mr_val) if (mr_val > 0 and not pd.isna(mr_val)) else None
+
+                    fila["Fv"] = fvr
+                    fila["E.V.U..1"] = evu_val
+                    fila["C.S. (1.2).1"] = fila["C.S. (1.2)"]
+                    fila["FVR.1"] = 0.0
+                    fila["E.V.U..2"] = evu_val
+                    fila["CS (1.2)"] = None
+
+            fila["Vano anterior"] = vano_ant
+            filas_mec.append(fila)
+
+    cols_orden = [
+        "Numero de apoyo", "Poste L-CR", "b", "Armado", "Armado Secundario", "Vano anterior",
+        "FTVP", "FTVC", "FTVE", "FTEC", "FLEE", "FLMC", "Fvc", "Fve", "Fva",
+        "FHR", "C.R.", "C.S.", "FVR", "E.V.U.", "C.S. (1.2)",
+        "Fl", "CR", "C.S. (1.5)", "Mr", "Mut", "Cs (1.5)",
+        "Fv", "E.V.U..1", "C.S. (1.2).1", "FVR.1", "E.V.U..2", "CS (1.2)"
+    ]
+
+    return pd.DataFrame(filas_mec)[cols_orden]
